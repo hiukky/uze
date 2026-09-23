@@ -1,0 +1,1333 @@
+{
+  "set": "nerd",
+  "terminals": {
+    "alacritty": {
+      "cases": [
+        {
+          "build": "plain",
+          "failing": {},
+          "family": "Caskaydia Cove",
+          "icon_size": 0.702,
+          "passes": true,
+          "spread": 0.095
+        },
+        {
+          "build": "mono",
+          "failing": {},
+          "family": "Caskaydia Cove",
+          "icon_size": 0.5,
+          "passes": true,
+          "spread": 0.118
+        },
+        {
+          "build": "propo",
+          "failing": {},
+          "family": "Caskaydia Cove",
+          "icon_size": 0.702,
+          "passes": true,
+          "spread": 0.095
+        },
+        {
+          "build": "plain",
+          "failing": {},
+          "family": "Fira Code",
+          "icon_size": 0.646,
+          "passes": true,
+          "spread": 0.095
+        },
+        {
+          "build": "mono",
+          "failing": {},
+          "family": "Fira Code",
+          "icon_size": 0.485,
+          "passes": true,
+          "spread": 0.146
+        },
+        {
+          "build": "propo",
+          "failing": {},
+          "family": "Fira Code",
+          "icon_size": 0.646,
+          "passes": true,
+          "spread": 0.095
+        },
+        {
+          "build": "plain",
+          "failing": {},
+          "family": "Hack",
+          "icon_size": 0.687,
+          "passes": true,
+          "spread": 0.095
+        },
+        {
+          "build": "mono",
+          "failing": {},
+          "family": "Hack",
+          "icon_size": 0.5,
+          "passes": true,
+          "spread": 0.118
+        },
+        {
+          "build": "propo",
+          "failing": {},
+          "family": "Hack",
+          "icon_size": 0.687,
+          "passes": true,
+          "spread": 0.095
+        },
+        {
+          "build": "plain",
+          "failing": {},
+          "family": "Iosevka",
+          "icon_size": 0.661,
+          "passes": true,
+          "spread": 0.111
+        },
+        {
+          "build": "mono",
+          "failing": {},
+          "family": "Iosevka",
+          "icon_size": 0.411,
+          "passes": true,
+          "spread": 0.143
+        },
+        {
+          "build": "propo",
+          "failing": {},
+          "family": "Iosevka",
+          "icon_size": 0.661,
+          "passes": true,
+          "spread": 0.111
+        },
+        {
+          "build": "plain",
+          "failing": {},
+          "family": "JetBrains Mono",
+          "icon_size": 0.624,
+          "passes": true,
+          "spread": 0.095
+        },
+        {
+          "build": "mono",
+          "failing": {},
+          "family": "JetBrains Mono",
+          "icon_size": 0.444,
+          "passes": true,
+          "spread": 0.146
+        },
+        {
+          "build": "propo",
+          "failing": {},
+          "family": "JetBrains Mono",
+          "icon_size": 0.624,
+          "passes": true,
+          "spread": 0.095
+        },
+        {
+          "build": "plain",
+          "failing": {},
+          "family": "Meslo LG M",
+          "icon_size": 0.608,
+          "passes": true,
+          "spread": 0.095
+        },
+        {
+          "build": "mono",
+          "failing": {},
+          "family": "Meslo LG M",
+          "icon_size": 0.445,
+          "passes": true,
+          "spread": 0.121
+        },
+        {
+          "build": "propo",
+          "failing": {},
+          "family": "Meslo LG M",
+          "icon_size": 0.608,
+          "passes": true,
+          "spread": 0.095
+        },
+        {
+          "build": "plain",
+          "failing": {},
+          "family": "Symbols",
+          "icon_size": 0.687,
+          "passes": true,
+          "spread": 0.095
+        },
+        {
+          "build": "mono",
+          "failing": {},
+          "family": "Symbols",
+          "icon_size": 0.827,
+          "passes": true,
+          "spread": 0.085
+        }
+      ],
+      "manual": false,
+      "version": "alacritty 0.15.1"
+    },
+    "foot": {
+      "cases": [
+        {
+          "build": "plain",
+          "failing": {},
+          "family": "Caskaydia Cove",
+          "icon_size": 0.702,
+          "passes": true,
+          "spread": 0.095
+        },
+        {
+          "build": "mono",
+          "failing": {},
+          "family": "Caskaydia Cove",
+          "icon_size": 0.5,
+          "passes": true,
+          "spread": 0.118
+        },
+        {
+          "build": "propo",
+          "failing": {},
+          "family": "Caskaydia Cove",
+          "icon_size": 0.702,
+          "passes": true,
+          "spread": 0.095
+        },
+        {
+          "build": "plain",
+          "failing": {},
+          "family": "Fira Code",
+          "icon_size": 0.646,
+          "passes": true,
+          "spread": 0.095
+        },
+        {
+          "build": "mono",
+          "failing": {},
+          "family": "Fira Code",
+          "icon_size": 0.485,
+          "passes": true,
+          "spread": 0.146
+        },
+        {
+          "build": "propo",
+          "failing": {},
+          "family": "Fira Code",
+          "icon_size": 0.646,
+          "passes": true,
+          "spread": 0.095
+        },
+        {
+          "build": "plain",
+          "failing": {},
+          "family": "Hack",
+          "icon_size": 0.687,
+          "passes": true,
+          "spread": 0.095
+        },
+        {
+          "build": "mono",
+          "failing": {},
+          "family": "Hack",
+          "icon_size": 0.5,
+          "passes": true,
+          "spread": 0.118
+        },
+        {
+          "build": "propo",
+          "failing": {},
+          "family": "Hack",
+          "icon_size": 0.687,
+          "passes": true,
+          "spread": 0.095
+        },
+        {
+          "build": "plain",
+          "failing": {},
+          "family": "Iosevka",
+          "icon_size": 0.661,
+          "passes": true,
+          "spread": 0.111
+        },
+        {
+          "build": "mono",
+          "failing": {},
+          "family": "Iosevka",
+          "icon_size": 0.411,
+          "passes": true,
+          "spread": 0.143
+        },
+        {
+          "build": "propo",
+          "failing": {},
+          "family": "Iosevka",
+          "icon_size": 0.661,
+          "passes": true,
+          "spread": 0.111
+        },
+        {
+          "build": "plain",
+          "failing": {},
+          "family": "JetBrains Mono",
+          "icon_size": 0.624,
+          "passes": true,
+          "spread": 0.095
+        },
+        {
+          "build": "mono",
+          "failing": {},
+          "family": "JetBrains Mono",
+          "icon_size": 0.444,
+          "passes": true,
+          "spread": 0.146
+        },
+        {
+          "build": "propo",
+          "failing": {},
+          "family": "JetBrains Mono",
+          "icon_size": 0.624,
+          "passes": true,
+          "spread": 0.095
+        },
+        {
+          "build": "plain",
+          "failing": {},
+          "family": "Meslo LG M",
+          "icon_size": 0.608,
+          "passes": true,
+          "spread": 0.095
+        },
+        {
+          "build": "mono",
+          "failing": {},
+          "family": "Meslo LG M",
+          "icon_size": 0.445,
+          "passes": true,
+          "spread": 0.121
+        },
+        {
+          "build": "propo",
+          "failing": {},
+          "family": "Meslo LG M",
+          "icon_size": 0.608,
+          "passes": true,
+          "spread": 0.095
+        },
+        {
+          "build": "plain",
+          "failing": {},
+          "family": "Symbols",
+          "icon_size": 0.687,
+          "passes": true,
+          "spread": 0.095
+        },
+        {
+          "build": "mono",
+          "failing": {},
+          "family": "Symbols",
+          "icon_size": 0.827,
+          "passes": true,
+          "spread": 0.085
+        }
+      ],
+      "manual": false,
+      "version": "foot version: 1.21.0 +pgo +ime +graphemes -assertions"
+    },
+    "ghostty": {
+      "cases": [
+        {
+          "build": "plain",
+          "failing": {},
+          "family": "Caskaydia Cove",
+          "icon_size": 0.725,
+          "passes": true,
+          "spread": 0.111
+        },
+        {
+          "build": "mono",
+          "failing": {},
+          "family": "Caskaydia Cove",
+          "icon_size": 0.516,
+          "passes": true,
+          "spread": 0.118
+        },
+        {
+          "build": "propo",
+          "failing": {},
+          "family": "Caskaydia Cove",
+          "icon_size": 0.725,
+          "passes": true,
+          "spread": 0.111
+        },
+        {
+          "build": "plain",
+          "failing": {},
+          "family": "Fira Code",
+          "icon_size": 0.666,
+          "passes": true,
+          "spread": 0.091
+        },
+        {
+          "build": "mono",
+          "failing": {},
+          "family": "Fira Code",
+          "icon_size": 0.499,
+          "passes": true,
+          "spread": 0.146
+        },
+        {
+          "build": "propo",
+          "failing": {},
+          "family": "Fira Code",
+          "icon_size": 0.666,
+          "passes": true,
+          "spread": 0.091
+        },
+        {
+          "build": "plain",
+          "failing": {},
+          "family": "Hack",
+          "icon_size": 0.709,
+          "passes": true,
+          "spread": 0.091
+        },
+        {
+          "build": "mono",
+          "failing": {},
+          "family": "Hack",
+          "icon_size": 0.516,
+          "passes": true,
+          "spread": 0.118
+        },
+        {
+          "build": "propo",
+          "failing": {},
+          "family": "Hack",
+          "icon_size": 0.709,
+          "passes": true,
+          "spread": 0.091
+        },
+        {
+          "build": "plain",
+          "failing": {},
+          "family": "Iosevka",
+          "icon_size": 0.647,
+          "passes": true,
+          "spread": 0.095
+        },
+        {
+          "build": "mono",
+          "failing": {},
+          "family": "Iosevka",
+          "icon_size": 0.396,
+          "passes": true,
+          "spread": 0.102
+        },
+        {
+          "build": "propo",
+          "failing": {},
+          "family": "Iosevka",
+          "icon_size": 0.647,
+          "passes": true,
+          "spread": 0.095
+        },
+        {
+          "build": "plain",
+          "failing": {},
+          "family": "JetBrains Mono",
+          "icon_size": 0.611,
+          "passes": true,
+          "spread": 0.095
+        },
+        {
+          "build": "mono",
+          "failing": {},
+          "family": "JetBrains Mono",
+          "icon_size": 0.444,
+          "passes": true,
+          "spread": 0.118
+        },
+        {
+          "build": "propo",
+          "failing": {},
+          "family": "JetBrains Mono",
+          "icon_size": 0.611,
+          "passes": true,
+          "spread": 0.095
+        },
+        {
+          "build": "plain",
+          "failing": {},
+          "family": "Meslo LG M",
+          "icon_size": 0.594,
+          "passes": true,
+          "spread": 0.091
+        },
+        {
+          "build": "mono",
+          "failing": {},
+          "family": "Meslo LG M",
+          "icon_size": 0.432,
+          "passes": true,
+          "spread": 0.118
+        },
+        {
+          "build": "propo",
+          "failing": {},
+          "family": "Meslo LG M",
+          "icon_size": 0.594,
+          "passes": true,
+          "spread": 0.091
+        },
+        {
+          "build": "plain",
+          "failing": {},
+          "family": "Symbols",
+          "icon_size": 0.725,
+          "passes": true,
+          "spread": 0.14
+        },
+        {
+          "build": "mono",
+          "failing": {},
+          "family": "Symbols",
+          "icon_size": 0.725,
+          "passes": true,
+          "spread": 0.14
+        }
+      ],
+      "manual": false,
+      "version": "Ghostty 1.3.1-dev+0000000"
+    },
+    "kitty": {
+      "cases": [
+        {
+          "build": "plain",
+          "failing": {},
+          "family": "Caskaydia Cove",
+          "icon_size": 0.709,
+          "passes": true,
+          "spread": 0.095
+        },
+        {
+          "build": "mono",
+          "failing": {},
+          "family": "Caskaydia Cove",
+          "icon_size": 0.499,
+          "passes": true,
+          "spread": 0.129
+        },
+        {
+          "build": "propo",
+          "failing": {},
+          "family": "Caskaydia Cove",
+          "icon_size": 0.709,
+          "passes": true,
+          "spread": 0.095
+        },
+        {
+          "build": "plain",
+          "failing": {},
+          "family": "Fira Code",
+          "icon_size": 0.666,
+          "passes": true,
+          "spread": 0.115
+        },
+        {
+          "build": "mono",
+          "failing": {},
+          "family": "Fira Code",
+          "icon_size": 0.485,
+          "passes": true,
+          "spread": 0.157
+        },
+        {
+          "build": "propo",
+          "failing": {},
+          "family": "Fira Code",
+          "icon_size": 0.666,
+          "passes": true,
+          "spread": 0.115
+        },
+        {
+          "build": "plain",
+          "failing": {},
+          "family": "Hack",
+          "icon_size": 0.686,
+          "passes": true,
+          "spread": 0.115
+        },
+        {
+          "build": "mono",
+          "failing": {},
+          "family": "Hack",
+          "icon_size": 0.5,
+          "passes": true,
+          "spread": 0.125
+        },
+        {
+          "build": "propo",
+          "failing": {},
+          "family": "Hack",
+          "icon_size": 0.686,
+          "passes": true,
+          "spread": 0.115
+        },
+        {
+          "build": "plain",
+          "failing": {},
+          "family": "Iosevka",
+          "icon_size": 0.647,
+          "passes": true,
+          "spread": 0.095
+        },
+        {
+          "build": "mono",
+          "failing": {},
+          "family": "Iosevka",
+          "icon_size": 0.382,
+          "passes": true,
+          "spread": 0.116
+        },
+        {
+          "build": "propo",
+          "failing": {},
+          "family": "Iosevka",
+          "icon_size": 0.647,
+          "passes": true,
+          "spread": 0.095
+        },
+        {
+          "build": "plain",
+          "failing": {},
+          "family": "JetBrains Mono",
+          "icon_size": 0.611,
+          "passes": true,
+          "spread": 0.095
+        },
+        {
+          "build": "mono",
+          "failing": {},
+          "family": "JetBrains Mono",
+          "icon_size": 0.444,
+          "passes": true,
+          "spread": 0.118
+        },
+        {
+          "build": "propo",
+          "failing": {},
+          "family": "JetBrains Mono",
+          "icon_size": 0.687,
+          "passes": true,
+          "spread": 0.095
+        },
+        {
+          "build": "plain",
+          "failing": {},
+          "family": "Meslo LG M",
+          "icon_size": 0.594,
+          "passes": true,
+          "spread": 0.095
+        },
+        {
+          "build": "mono",
+          "failing": {},
+          "family": "Meslo LG M",
+          "icon_size": 0.432,
+          "passes": true,
+          "spread": 0.118
+        },
+        {
+          "build": "propo",
+          "failing": {},
+          "family": "Meslo LG M",
+          "icon_size": 0.687,
+          "passes": true,
+          "spread": 0.095
+        },
+        {
+          "build": "plain",
+          "failing": {},
+          "family": "Symbols",
+          "icon_size": 0.687,
+          "passes": true,
+          "spread": 0.095
+        },
+        {
+          "build": "mono",
+          "failing": {},
+          "family": "Symbols",
+          "icon_size": 0.796,
+          "passes": true,
+          "spread": 0.083
+        }
+      ],
+      "manual": false,
+      "version": "kitty 0.41.1 created by Kovid Goyal"
+    },
+    "konsole": {
+      "cases": [
+        {
+          "build": "plain",
+          "failing": {},
+          "family": "Caskaydia Cove",
+          "icon_size": 0.725,
+          "passes": true,
+          "spread": 0.095
+        },
+        {
+          "build": "mono",
+          "failing": {},
+          "family": "Caskaydia Cove",
+          "icon_size": 0.516,
+          "passes": true,
+          "spread": 0.118
+        },
+        {
+          "build": "propo",
+          "failing": {},
+          "family": "Caskaydia Cove",
+          "icon_size": 0.725,
+          "passes": true,
+          "spread": 0.095
+        },
+        {
+          "build": "plain",
+          "failing": {},
+          "family": "Fira Code",
+          "icon_size": 0.681,
+          "passes": true,
+          "spread": 0.095
+        },
+        {
+          "build": "mono",
+          "failing": {},
+          "family": "Fira Code",
+          "icon_size": 0.515,
+          "passes": true,
+          "spread": 0.148
+        },
+        {
+          "build": "propo",
+          "failing": {},
+          "family": "Fira Code",
+          "icon_size": 0.681,
+          "passes": true,
+          "spread": 0.095
+        },
+        {
+          "build": "plain",
+          "failing": {},
+          "family": "Hack",
+          "icon_size": 0.725,
+          "passes": true,
+          "spread": 0.095
+        },
+        {
+          "build": "mono",
+          "failing": {},
+          "family": "Hack",
+          "icon_size": 0.532,
+          "passes": true,
+          "spread": 0.121
+        },
+        {
+          "build": "propo",
+          "failing": {},
+          "family": "Hack",
+          "icon_size": 0.725,
+          "passes": true,
+          "spread": 0.095
+        },
+        {
+          "build": "plain",
+          "failing": {},
+          "family": "Iosevka",
+          "icon_size": 0.661,
+          "passes": true,
+          "spread": 0.111
+        },
+        {
+          "build": "mono",
+          "failing": {},
+          "family": "Iosevka",
+          "icon_size": 0.411,
+          "passes": true,
+          "spread": 0.143
+        },
+        {
+          "build": "propo",
+          "failing": {},
+          "family": "Iosevka",
+          "icon_size": 0.661,
+          "passes": true,
+          "spread": 0.111
+        },
+        {
+          "build": "plain",
+          "failing": {},
+          "family": "JetBrains Mono",
+          "icon_size": 0.624,
+          "passes": true,
+          "spread": 0.095
+        },
+        {
+          "build": "mono",
+          "failing": {},
+          "family": "JetBrains Mono",
+          "icon_size": 0.444,
+          "passes": true,
+          "spread": 0.146
+        },
+        {
+          "build": "propo",
+          "failing": {},
+          "family": "JetBrains Mono",
+          "icon_size": 0.624,
+          "passes": true,
+          "spread": 0.095
+        },
+        {
+          "build": "plain",
+          "failing": {},
+          "family": "Meslo LG M",
+          "icon_size": 0.608,
+          "passes": true,
+          "spread": 0.095
+        },
+        {
+          "build": "mono",
+          "failing": {},
+          "family": "Meslo LG M",
+          "icon_size": 0.445,
+          "passes": true,
+          "spread": 0.121
+        },
+        {
+          "build": "propo",
+          "failing": {},
+          "family": "Meslo LG M",
+          "icon_size": 0.608,
+          "passes": true,
+          "spread": 0.095
+        },
+        {
+          "build": "plain",
+          "failing": {},
+          "family": "Symbols",
+          "icon_size": 0.709,
+          "passes": true,
+          "spread": 0.095
+        },
+        {
+          "build": "mono",
+          "failing": {},
+          "family": "Symbols",
+          "icon_size": 0.854,
+          "passes": true,
+          "spread": 0.085
+        }
+      ],
+      "manual": false,
+      "version": "konsole 25.04.2"
+    },
+    "vte (xfce4-terminal)": {
+      "cases": [
+        {
+          "build": "plain",
+          "failing": {},
+          "family": "Caskaydia Cove",
+          "icon_size": 0.702,
+          "passes": true,
+          "spread": 0.095
+        },
+        {
+          "build": "mono",
+          "failing": {},
+          "family": "Caskaydia Cove",
+          "icon_size": 0.5,
+          "passes": true,
+          "spread": 0.118
+        },
+        {
+          "build": "propo",
+          "failing": {},
+          "family": "Caskaydia Cove",
+          "icon_size": 0.702,
+          "passes": true,
+          "spread": 0.095
+        },
+        {
+          "build": "plain",
+          "failing": {},
+          "family": "Fira Code",
+          "icon_size": 0.646,
+          "passes": true,
+          "spread": 0.095
+        },
+        {
+          "build": "mono",
+          "failing": {},
+          "family": "Fira Code",
+          "icon_size": 0.485,
+          "passes": true,
+          "spread": 0.146
+        },
+        {
+          "build": "propo",
+          "failing": {},
+          "family": "Fira Code",
+          "icon_size": 0.646,
+          "passes": true,
+          "spread": 0.095
+        },
+        {
+          "build": "plain",
+          "failing": {},
+          "family": "Hack",
+          "icon_size": 0.687,
+          "passes": true,
+          "spread": 0.095
+        },
+        {
+          "build": "mono",
+          "failing": {},
+          "family": "Hack",
+          "icon_size": 0.5,
+          "passes": true,
+          "spread": 0.118
+        },
+        {
+          "build": "propo",
+          "failing": {},
+          "family": "Hack",
+          "icon_size": 0.687,
+          "passes": true,
+          "spread": 0.095
+        },
+        {
+          "build": "plain",
+          "failing": {},
+          "family": "Iosevka",
+          "icon_size": 0.661,
+          "passes": true,
+          "spread": 0.111
+        },
+        {
+          "build": "mono",
+          "failing": {},
+          "family": "Iosevka",
+          "icon_size": 0.411,
+          "passes": true,
+          "spread": 0.143
+        },
+        {
+          "build": "propo",
+          "failing": {},
+          "family": "Iosevka",
+          "icon_size": 0.661,
+          "passes": true,
+          "spread": 0.111
+        },
+        {
+          "build": "plain",
+          "failing": {},
+          "family": "JetBrains Mono",
+          "icon_size": 0.624,
+          "passes": true,
+          "spread": 0.095
+        },
+        {
+          "build": "mono",
+          "failing": {},
+          "family": "JetBrains Mono",
+          "icon_size": 0.444,
+          "passes": true,
+          "spread": 0.146
+        },
+        {
+          "build": "propo",
+          "failing": {},
+          "family": "JetBrains Mono",
+          "icon_size": 0.624,
+          "passes": true,
+          "spread": 0.095
+        },
+        {
+          "build": "plain",
+          "failing": {},
+          "family": "Meslo LG M",
+          "icon_size": 0.608,
+          "passes": true,
+          "spread": 0.095
+        },
+        {
+          "build": "mono",
+          "failing": {},
+          "family": "Meslo LG M",
+          "icon_size": 0.445,
+          "passes": true,
+          "spread": 0.121
+        },
+        {
+          "build": "propo",
+          "failing": {},
+          "family": "Meslo LG M",
+          "icon_size": 0.608,
+          "passes": true,
+          "spread": 0.095
+        },
+        {
+          "build": "plain",
+          "failing": {},
+          "family": "Symbols",
+          "icon_size": 0.687,
+          "passes": true,
+          "spread": 0.095
+        },
+        {
+          "build": "mono",
+          "failing": {},
+          "family": "Symbols",
+          "icon_size": 0.827,
+          "passes": true,
+          "spread": 0.085
+        }
+      ],
+      "manual": false,
+      "version": "xfce4-terminal 1.1.4 (Xfce 4.20)"
+    },
+    "wezterm": {
+      "cases": [
+        {
+          "build": "plain",
+          "failing": {},
+          "family": "Caskaydia Cove",
+          "icon_size": 0.725,
+          "passes": true,
+          "spread": 0.095
+        },
+        {
+          "build": "mono",
+          "failing": {},
+          "family": "Caskaydia Cove",
+          "icon_size": 0.516,
+          "passes": true,
+          "spread": 0.118
+        },
+        {
+          "build": "propo",
+          "failing": {},
+          "family": "Caskaydia Cove",
+          "icon_size": 0.725,
+          "passes": true,
+          "spread": 0.095
+        },
+        {
+          "build": "plain",
+          "failing": {},
+          "family": "Fira Code",
+          "icon_size": 0.666,
+          "passes": true,
+          "spread": 0.095
+        },
+        {
+          "build": "mono",
+          "failing": {},
+          "family": "Fira Code",
+          "icon_size": 0.499,
+          "passes": true,
+          "spread": 0.146
+        },
+        {
+          "build": "propo",
+          "failing": {},
+          "family": "Fira Code",
+          "icon_size": 0.666,
+          "passes": true,
+          "spread": 0.095
+        },
+        {
+          "build": "plain",
+          "failing": {},
+          "family": "Hack",
+          "icon_size": 0.687,
+          "passes": true,
+          "spread": 0.095
+        },
+        {
+          "build": "mono",
+          "failing": {},
+          "family": "Hack",
+          "icon_size": 0.5,
+          "passes": true,
+          "spread": 0.118
+        },
+        {
+          "build": "propo",
+          "failing": {},
+          "family": "Hack",
+          "icon_size": 0.687,
+          "passes": true,
+          "spread": 0.095
+        },
+        {
+          "build": "plain",
+          "failing": {},
+          "family": "Iosevka",
+          "icon_size": 0.661,
+          "passes": true,
+          "spread": 0.111
+        },
+        {
+          "build": "mono",
+          "failing": {},
+          "family": "Iosevka",
+          "icon_size": 0.411,
+          "passes": true,
+          "spread": 0.143
+        },
+        {
+          "build": "propo",
+          "failing": {},
+          "family": "Iosevka",
+          "icon_size": 0.661,
+          "passes": true,
+          "spread": 0.111
+        },
+        {
+          "build": "plain",
+          "failing": {},
+          "family": "JetBrains Mono",
+          "icon_size": 0.624,
+          "passes": true,
+          "spread": 0.095
+        },
+        {
+          "build": "mono",
+          "failing": {},
+          "family": "JetBrains Mono",
+          "icon_size": 0.444,
+          "passes": true,
+          "spread": 0.146
+        },
+        {
+          "build": "propo",
+          "failing": {},
+          "family": "JetBrains Mono",
+          "icon_size": 0.624,
+          "passes": true,
+          "spread": 0.095
+        },
+        {
+          "build": "plain",
+          "failing": {},
+          "family": "Meslo LG M",
+          "icon_size": 0.608,
+          "passes": true,
+          "spread": 0.095
+        },
+        {
+          "build": "mono",
+          "failing": {},
+          "family": "Meslo LG M",
+          "icon_size": 0.445,
+          "passes": true,
+          "spread": 0.121
+        },
+        {
+          "build": "propo",
+          "failing": {},
+          "family": "Meslo LG M",
+          "icon_size": 0.608,
+          "passes": true,
+          "spread": 0.095
+        },
+        {
+          "build": "plain",
+          "failing": {},
+          "family": "Symbols",
+          "icon_size": 0.827,
+          "passes": true,
+          "spread": 0.101
+        },
+        {
+          "build": "mono",
+          "failing": {},
+          "family": "Symbols",
+          "icon_size": 0.827,
+          "passes": true,
+          "spread": 0.085
+        }
+      ],
+      "manual": false,
+      "version": "wezterm 20240203-110809-5046fc22"
+    },
+    "xterm": {
+      "cases": [
+        {
+          "build": "plain",
+          "failing": {},
+          "family": "Caskaydia Cove",
+          "icon_size": 0.702,
+          "passes": true,
+          "spread": 0.095
+        },
+        {
+          "build": "mono",
+          "failing": {},
+          "family": "Caskaydia Cove",
+          "icon_size": 0.5,
+          "passes": true,
+          "spread": 0.118
+        },
+        {
+          "build": "propo",
+          "failing": {},
+          "family": "Caskaydia Cove",
+          "icon_size": 0.702,
+          "passes": true,
+          "spread": 0.095
+        },
+        {
+          "build": "plain",
+          "failing": {},
+          "family": "Fira Code",
+          "icon_size": 0.646,
+          "passes": true,
+          "spread": 0.095
+        },
+        {
+          "build": "mono",
+          "failing": {},
+          "family": "Fira Code",
+          "icon_size": 0.485,
+          "passes": true,
+          "spread": 0.146
+        },
+        {
+          "build": "propo",
+          "failing": {},
+          "family": "Fira Code",
+          "icon_size": 0.646,
+          "passes": true,
+          "spread": 0.095
+        },
+        {
+          "build": "plain",
+          "failing": {},
+          "family": "Hack",
+          "icon_size": 0.687,
+          "passes": true,
+          "spread": 0.095
+        },
+        {
+          "build": "mono",
+          "failing": {},
+          "family": "Hack",
+          "icon_size": 0.5,
+          "passes": true,
+          "spread": 0.118
+        },
+        {
+          "build": "propo",
+          "failing": {},
+          "family": "Hack",
+          "icon_size": 0.687,
+          "passes": true,
+          "spread": 0.095
+        },
+        {
+          "build": "plain",
+          "failing": {},
+          "family": "Iosevka",
+          "icon_size": 0.661,
+          "passes": true,
+          "spread": 0.111
+        },
+        {
+          "build": "mono",
+          "failing": {},
+          "family": "Iosevka",
+          "icon_size": 0.411,
+          "passes": true,
+          "spread": 0.143
+        },
+        {
+          "build": "propo",
+          "failing": {},
+          "family": "Iosevka",
+          "icon_size": 0.661,
+          "passes": true,
+          "spread": 0.111
+        },
+        {
+          "build": "plain",
+          "failing": {},
+          "family": "JetBrains Mono",
+          "icon_size": 0.624,
+          "passes": true,
+          "spread": 0.095
+        },
+        {
+          "build": "mono",
+          "failing": {},
+          "family": "JetBrains Mono",
+          "icon_size": 0.444,
+          "passes": true,
+          "spread": 0.146
+        },
+        {
+          "build": "propo",
+          "failing": {},
+          "family": "JetBrains Mono",
+          "icon_size": 0.624,
+          "passes": true,
+          "spread": 0.095
+        },
+        {
+          "build": "plain",
+          "failing": {},
+          "family": "Meslo LG M",
+          "icon_size": 0.608,
+          "passes": true,
+          "spread": 0.095
+        },
+        {
+          "build": "mono",
+          "failing": {},
+          "family": "Meslo LG M",
+          "icon_size": 0.445,
+          "passes": true,
+          "spread": 0.121
+        },
+        {
+          "build": "propo",
+          "failing": {},
+          "family": "Meslo LG M",
+          "icon_size": 0.608,
+          "passes": true,
+          "spread": 0.095
+        },
+        {
+          "build": "plain",
+          "failing": {},
+          "family": "Symbols",
+          "icon_size": 0.572,
+          "passes": true,
+          "spread": 0.118
+        },
+        {
+          "build": "mono",
+          "failing": {},
+          "family": "Symbols",
+          "icon_size": 0.572,
+          "passes": true,
+          "spread": 0.118
+        }
+      ],
+      "manual": false,
+      "version": "XTerm(398)"
+    }
+  }
+}
