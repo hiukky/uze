@@ -1,0 +1,79 @@
+{
+  "release": "v3.5.1",
+  "base_url": "https://github.com/ryanoasis/nerd-fonts/releases/download/v3.5.1/",
+  "glyphnames": {
+    "url": "https://raw.githubusercontent.com/ryanoasis/nerd-fonts/v3.5.1/glyphnames.json",
+    "sha256": "d2fa6615a38eb527462cb71ff17aa44b1d6453d437ed263ab8d5b458393669e8"
+  },
+  "archives": [
+    {
+      "family": "JetBrains Mono",
+      "archive": "JetBrainsMono.tar.xz",
+      "sha256": "04d5e8f903693f9dd13e16f867e994834e681eb3c72c0d337a770dcda09010cf",
+      "builds": {
+        "plain": "JetBrainsMonoNerdFont-Regular.ttf",
+        "mono": "JetBrainsMonoNerdFontMono-Regular.ttf",
+        "propo": "JetBrainsMonoNerdFontPropo-Regular.ttf"
+      }
+    },
+    {
+      "family": "Fira Code",
+      "archive": "FiraCode.tar.xz",
+      "sha256": "68e3bd6164864b8b514605bc34e3a87ac401c8c48682fcce6478c70263340207",
+      "builds": {
+        "plain": "FiraCodeNerdFont-Regular.ttf",
+        "mono": "FiraCodeNerdFontMono-Regular.ttf",
+        "propo": "FiraCodeNerdFontPropo-Regular.ttf"
+      }
+    },
+    {
+      "family": "Hack",
+      "archive": "Hack.tar.xz",
+      "sha256": "cdd389472e10e2261520140ff1b382b4f8a226af5fd0b2735b975d31151d9c3c",
+      "builds": {
+        "plain": "HackNerdFont-Regular.ttf",
+        "mono": "HackNerdFontMono-Regular.ttf",
+        "propo": "HackNerdFontPropo-Regular.ttf"
+      }
+    },
+    {
+      "family": "Iosevka",
+      "archive": "Iosevka.tar.xz",
+      "sha256": "3b94ea1dc3955756762f977b7677bca671947dd56bc755a6f8465a8e83b5f257",
+      "builds": {
+        "plain": "IosevkaNerdFont-Regular.ttf",
+        "mono": "IosevkaNerdFontMono-Regular.ttf",
+        "propo": "IosevkaNerdFontPropo-Regular.ttf"
+      }
+    },
+    {
+      "family": "Caskaydia Cove",
+      "archive": "CascadiaCode.tar.xz",
+      "sha256": "ae598e9401e2846aa3ee364513715de0490b844a4b54f0768991f45f23aa8369",
+      "builds": {
+        "plain": "CaskaydiaCoveNerdFont-Regular.ttf",
+        "mono": "CaskaydiaCoveNerdFontMono-Regular.ttf",
+        "propo": "CaskaydiaCoveNerdFontPropo-Regular.ttf"
+      }
+    },
+    {
+      "family": "Meslo LG M",
+      "archive": "Meslo.tar.xz",
+      "sha256": "6b6624632dc6873dfb7681c3f818e7c01ab601ab707690b6440933bbe57e2b11",
+      "builds": {
+        "plain": "MesloLGMNerdFont-Regular.ttf",
+        "mono": "MesloLGMNerdFontMono-Regular.ttf",
+        "propo": "MesloLGMNerdFontPropo-Regular.ttf"
+      }
+    },
+    {
+      "family": "Symbols",
+      "archive": "NerdFontsSymbolsOnly.tar.xz",
+      "sha256": "01172f37db8543edb102e5cb5c64101c9f4686630804d49b419aa07b23a69996",
+      "builds": {
+        "plain": "SymbolsNerdFont-Regular.ttf",
+        "mono": "SymbolsNerdFontMono-Regular.ttf"
+      }
+    }
+  ]
+}

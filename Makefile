@@ -5,7 +5,7 @@ UZE_BIN ?= target/debug/uze
 RELEASE_BIN ?= target/release/uze
 INSTALL_ARGS ?= --force
 
-.PHONY: help build release install wsl-lab run test test-acceptance test-conformance test-installer harness-matrix check ci fmt lint deny msrv web audit secrets installer attributions attributions-check coverage version clean changelog release-notes lab-image lab-run lab-evidence lab-sandbox lab-experiment lab-matrix lab-replay python-fmt python-lint
+.PHONY: help build release install wsl-lab run test test-acceptance test-conformance test-installer harness-matrix check ci fmt lint deny msrv web audit secrets installer attributions attributions-check coverage version clean changelog release-notes lab-image lab-run lab-evidence lab-sandbox lab-experiment lab-matrix lab-replay rendering rendering-metrics rendering-replay rendering-sandbox rendering-catalog python-fmt python-lint
 
 help: ## Show the available local-development targets.
 	@awk 'BEGIN {FS = ":.*##"} /^[a-zA-Z0-9_.-]+:.*##/ { printf "  %-12s %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
@@ -193,3 +193,24 @@ lab-replay: ## Replay the most recent recorded TUI session (rendered correctly, 
 	fi; \
 	echo "replaying $$watch"; \
 	scriptreplay --timing "$${watch%.typescript}.timing" "$$watch"
+
+# ── Rendering Lab (conformance/rendering/) ───────────────────────────
+# Real terminals drawing `uze theme specimen` in every font of the pinned
+# Nerd Fonts catalog, measured from the pixels. TERMINAL=kitty and
+# FONT="Hack" narrow a run while iterating.
+
+rendering: ## Run the Rendering Lab's terminals (optional TERMINAL=, FONT=).
+	python3 conformance/rendering/lab.py --suite terminals $(if $(TERMINAL),--terminal $(TERMINAL),) $(if $(FONT),--font "$(FONT)",)
+
+rendering-metrics: ## Measure every glyph set against every font of the catalog, no terminal.
+	python3 conformance/rendering/lab.py --suite metrics
+
+rendering-replay: ## Re-analyze the last run's screenshots and check the verdicts reproduce.
+	python3 conformance/rendering/lab.py --no-build --suite replay
+
+rendering-sandbox: ## A shell in the Rendering Lab image.
+	python3 conformance/rendering/lab.py --sandbox
+
+rendering-catalog: ## Record the last run as the committed catalog and regenerate the docs from it.
+	python3 conformance/rendering/catalog.py write target/rendering-lab
+	python3 conformance/rendering/catalog.py docs

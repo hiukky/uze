@@ -334,6 +334,19 @@ need to).
   Debugging a failure: see the `conformance-debug` skill (fast `--sandbox`
   reproduction loop, seconds not minutes) before iterating against the full
   gate run.
+- `conformance/rendering/` — the Rendering Lab (Python), a second lab
+  beside the harness one: what fonts and real terminals make of UZE's
+  glyphs. `contract.py` states the four criteria (contained, whole, one
+  size, aligned) and names no terminal. `metrics.py` judges the outlines
+  of a pinned Nerd Fonts catalog (`fonts.json`, fetched by digest, never
+  committed). `terminals/<t>.py` says how each emulator is launched and
+  nothing else. `analyze.py` measures a screenshot of `uze theme
+  specimen`, whether the Lab took it or a person did. `generate_nerd.py`
+  is where `crates/uze-theme/themes/nerd.json` comes from: never edit the
+  JSON by hand. `evidence/catalog.json` is committed, and the appearance
+  page's terminal table is generated from it (`catalog.py docs`, checked
+  in `ci.yml`). Run with `make rendering` / `make rendering-metrics`, and
+  see its README.
 - `tests/` — domain-organized integration suites (one `main.rs` per
   domain: `cli/`, `memory/`, `packages/`, `workspace/`, `lifecycle/`,
   `projection/`, `integrations/`, `acceptance/`), shared test

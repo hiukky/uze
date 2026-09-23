@@ -1,0 +1,60 @@
+name: Rendering
+
+# The Rendering Lab: real terminal emulators drawing `uze theme specimen`
+# in every font of the pinned Nerd Fonts catalog, measured from the pixels.
+# See conformance/rendering/README.md.
+#
+# Called by `ci.yml` when a change reaches a glyph set, the UI, the theme
+# code or the Lab itself, and nightly on its own: a terminal or a font does
+# not change under us, since the image pins both, but the nightly is where
+# a pinned version is shown to still build and still agree with the
+# committed catalog.
+
+on:
+  workflow_call:
+  schedule:
+    - cron: "0 4 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: rendering-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  lab:
+    name: Rendering Lab
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Build the Lab image
+        run: docker build -f conformance/rendering/Dockerfile -t uze-rendering-lab .
+      # Fonts first: cheap, deterministic, and a set that fails it cannot
+      # pass a terminal. The generator check proves `nerd.json` is what its
+      # own generator makes of the pinned catalog.
+      - name: Font metrics
+        run: python3 conformance/rendering/lab.py --no-build --suite metrics --evidence /tmp/rendering
+      - name: The nerd set is what its generator produces
+        run: >-
+          docker run --rm --network none -v "$PWD/crates/uze-theme/themes:/themes:ro"
+          --entrypoint python3 uze-rendering-lab
+          /lab/generate_nerd.py --check --target /themes/nerd.json
+      - name: Terminals
+        run: python3 conformance/rendering/lab.py --no-build --suite terminals --evidence /tmp/rendering
+      - name: The verdicts reproduce from their screenshots
+        run: python3 conformance/rendering/lab.py --no-build --suite replay --evidence /tmp/rendering
+      # The committed catalog is what the docs say; a fresh run that
+      # disagrees with it is either a regression or a catalog to update.
+      - name: The catalog still holds
+        run: python3 conformance/rendering/catalog.py compare /tmp/rendering
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: rendering-evidence
+          path: /tmp/rendering/
+          retention-days: 90
+          if-no-files-found: ignore

@@ -73,6 +73,7 @@ jobs:
     timeout-minutes: 10
     outputs:
       lab: ${{ steps.filter.outputs.lab }}
+      rendering: ${{ steps.filter.outputs.rendering }}
       journeys: ${{ steps.filter.outputs.journeys }}
       platforms: ${{ steps.filter.outputs.platforms }}
     steps:
@@ -99,6 +100,7 @@ jobs:
           if [ "${EVENT}" != "pull_request" ]; then
             {
               echo "lab=true"
+              echo "rendering=true"
               echo "journeys=true"
               echo "platforms=[${linux},${macos}]"
             } >> "${GITHUB_OUTPUT}"
@@ -117,6 +119,9 @@ jobs:
           platform_surface='^(crates/uze-core/src/machine/|crates/uze-terminal/|crates/uze-git/|journeys/|src/shim\.rs$|Cargo\.lock$|\.cargo/config\.toml$|\.github/(workflows/(ci|journeys)\.yml$|actions/journeys/))|(^|/)Cargo\.toml$'
           # What is baked into the Lab image, or read by a vertical.
           lab_surface='^(src/|crates/|tests/_fixtures/|plugins/|conformance/|marketplace\.json$|Cargo\.lock$|\.github/workflows/(ci|conformance)\.yml$)|(^|/)Cargo\.toml$'
+          # What decides how a glyph is drawn, or how the Rendering Lab
+          # measures it.
+          rendering_surface='^(crates/uze-theme/|src/theme(\.rs$|/)|src/ui/|conformance/rendering/|\.github/workflows/(ci|rendering)\.yml$)'
           # What a journey drives, or what it drives it with.
           journeys_surface='^(src/|crates/|journeys/|Cargo\.lock$|\.github/(workflows/(ci|journeys)\.yml$|actions/journeys/))|(^|/)Cargo\.toml$'
 
@@ -125,6 +130,7 @@ jobs:
 
           {
             echo "lab=$(reaches "${lab_surface}" && echo true || echo false)"
+            echo "rendering=$(reaches "${rendering_surface}" && echo true || echo false)"
             echo "journeys=$(reaches "${journeys_surface}" && echo true || echo false)"
             echo "platforms=${platforms}"
           } >> "${GITHUB_OUTPUT}"
@@ -465,6 +471,11 @@ jobs:
       - run: python3 -m pip install --user pexpect
       - name: Conformance unit tests (no Docker, no harness)
         run: for t in conformance/tests/test_*.py; do python3 "$t" || exit 1; done
+      # The appearance page's catalog of terminals and fonts is generated
+      # from the Rendering Lab's committed evidence; a page that says more,
+      # or less, than the evidence does is refused here, with no image.
+      - name: Rendering catalog matches its evidence
+        run: python3 conformance/rendering/catalog.py docs --check
 
   # ── Stage 2 · Prove it against the real thing ───────────────────────
   #
@@ -495,6 +506,16 @@ jobs:
     needs: changes
     if: github.event_name != 'schedule' && needs.changes.outputs.lab == 'true'
     uses: ./.github/workflows/conformance.yml
+    permissions:
+      contents: read
+
+  # Its own image, like the Harness Lab's, and its own compile gate for
+  # the same reason: it builds `uze` from source.
+  rendering:
+    name: Rendering
+    needs: changes
+    if: github.event_name != 'schedule' && needs.changes.outputs.rendering == 'true'
+    uses: ./.github/workflows/rendering.yml
     permissions:
       contents: read
 
@@ -532,6 +553,7 @@ jobs:
       - python
       - journeys
       - conformance
+      - rendering
     steps:
       - name: Every job either passed or was not needed
         run: |
