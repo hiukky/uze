@@ -54,6 +54,9 @@ pub(crate) enum Intent {
     /// Draw every mark from this glyph set from now on. Independent of the
     /// theme in both directions — neither call reads the other's half.
     SelectGlyphSet(String),
+    /// Ring the bell for these finished agent turns from now on, in the
+    /// running workspace as much as on the next launch.
+    SelectChime(uze_application::Chime),
     /// Read the themes and the glyph sets the Appearance screen chooses
     /// from. Sent on arriving there rather than per frame, so the list
     /// cannot change under the cursor between two frames.
@@ -123,6 +126,7 @@ impl Intent {
             Self::PersistKeymap => "persist_keymap",
             Self::OpenThemePicker => "open_theme_picker",
             Self::SelectGlyphSet(_) => "select_glyph_set",
+            Self::SelectChime(_) => "select_chime",
             Self::LoadAppearance => "load_appearance",
             Self::SelectTheme(_) => "select_theme",
             Self::Refresh => "refresh",
@@ -228,6 +232,13 @@ pub(crate) fn dispatch(
         Intent::SelectGlyphSet(id) => match select_glyph_set(home, &id) {
             Ok(()) => {
                 model.status = Status::Success(format!("Drawing with the {id} glyphs"));
+                load_appearance(home, model);
+            }
+            Err(error) => model.status = Status::Error(error),
+        },
+        Intent::SelectChime(chime) => match select_chime(home, chime) {
+            Ok(()) => {
+                model.status = Status::Success(chime_outcome(chime).to_owned());
                 load_appearance(home, model);
             }
             Err(error) => model.status = Status::Error(error),
@@ -1072,7 +1083,31 @@ fn load_appearance(home: &UzeHome, model: &mut TuiModel) {
     if let Ok(sets) = application.themes().glyph_sets(uze_theme::glyph_sets()) {
         model.appearance_glyph_sets = sets;
     }
+    if let Ok(chime) = application.notifications().agent_finished() {
+        model.appearance_chime = chime;
+    }
     model.settle_appearance_selection();
+}
+
+/// Records the choice and puts it in force in this process — the
+/// workspace under the modal reads it at the next finished turn.
+fn select_chime(home: &UzeHome, chime: uze_application::Chime) -> std::result::Result<(), String> {
+    tui_application(home.clone())
+        .and_then(|app| app.notifications().set_agent_finished(chime))
+        .map_err(|error| error.to_string())?;
+    crate::ui::chime::set(chime);
+    if chime != uze_application::Chime::Silent {
+        crate::ui::chime::preview();
+    }
+    Ok(())
+}
+
+fn chime_outcome(chime: uze_application::Chime) -> &'static str {
+    match chime {
+        uze_application::Chime::Silent => "Finished agents stay silent",
+        uze_application::Chime::OutOfSight => "Ringing for agents that finish out of sight",
+        uze_application::Chime::Always => "Ringing whenever an agent finishes",
+    }
 }
 
 fn select_theme(home: &UzeHome, id: &str) -> std::result::Result<(), String> {

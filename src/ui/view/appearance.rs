@@ -33,6 +33,7 @@ use ratatui::{
 use super::super::hit::Hit;
 use super::super::model::{AppearanceRow, ResizablePanel, Route, TuiModel};
 use super::super::{content_area, render_screen_header};
+use crate::ui::chime;
 use crate::ui::theme::{self, Symbol, Token};
 use crate::ui::widget::{self, Scrollbar, Surface};
 
@@ -286,6 +287,15 @@ fn render_row(frame: &mut ratatui::Frame<'_>, rect: Rect, model: &TuiModel, inde
                 preview_spans(id, room),
             );
         }
+        AppearanceRow::Chime { chime, active } => render_card(
+            frame,
+            rect,
+            chime::label(*chime),
+            *active,
+            selected,
+            chime_tagline(*chime),
+            Vec::new(),
+        ),
         // Headings are bands of their own and never reach a card rect.
         AppearanceRow::Heading(_) => {}
     }
@@ -497,6 +507,25 @@ fn render_drawer(
                 "No. Enter to draw with it."
             }),
         ],
+        Some(AppearanceRow::Chime { chime, active }) => vec![
+            block("When an agent finishes"),
+            title(chime::label(chime).to_owned()),
+            prose(chime_note(chime)),
+            Line::from(""),
+            block("The sound"),
+            prose(
+                "The terminal's own bell, so your terminal decides what it \
+                 is — a tone, a flash, or nothing if its bell is off. Agents \
+                 finishing together ring once.",
+            ),
+            Line::from(""),
+            block("In force"),
+            prose(match (active, chime) {
+                (true, _) => "Yes.",
+                (false, uze_application::Chime::Silent) => "No. Enter to stop ringing.",
+                (false, _) => "No. Enter to choose it — it rings once so you hear it.",
+            }),
+        ],
         _ => vec![
             block("Appearance"),
             Line::from(""),
@@ -507,6 +536,32 @@ fn render_drawer(
         ],
     };
     frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: true }), inner);
+}
+
+fn chime_tagline(chime: uze_application::Chime) -> &'static str {
+    match chime {
+        uze_application::Chime::Silent => "never rings",
+        uze_application::Chime::OutOfSight => "a tab you are not on",
+        uze_application::Chime::Always => "every finished turn",
+    }
+}
+
+/// When each choice rings, said where someone is deciding between them.
+fn chime_note(chime: uze_application::Chime) -> &'static str {
+    match chime {
+        uze_application::Chime::Silent => {
+            "No sound. A tab whose agent finished out of sight still \
+             carries its check in the sidebar."
+        }
+        uze_application::Chime::OutOfSight => {
+            "Rings when an agent finishes in a tab you are not looking at \
+             — the one you would otherwise find out about late."
+        }
+        uze_application::Chime::Always => {
+            "Rings for every finished turn, the tab on screen included. \
+             For when you look away from the terminal, not just the tab."
+        }
+    }
 }
 
 /// What a set asks of the machine, which is the question the preview

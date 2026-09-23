@@ -52,6 +52,17 @@ impl UzeApplication {
     }
 }
 
+/// When this machine rings for a finished agent.
+pub struct Notifications<'a>(pub(super) &'a UzeApplication);
+
+impl UzeApplication {
+    /// The operator's choice of which finished turns make a sound. Only the
+    /// choice: ringing is the client's, which owns the terminal.
+    pub fn notifications(&self) -> Notifications<'_> {
+        Notifications(self)
+    }
+}
+
 /// Marketplaces this machine knows, and the plugins they publish.
 pub struct Marketplace<'a>(pub(super) &'a UzeApplication);
 

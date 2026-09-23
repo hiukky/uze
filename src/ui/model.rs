@@ -402,6 +402,14 @@ pub(crate) enum AppearanceRow {
         id: String,
         active: bool,
     },
+    /// Which finished agent turns ring the bell. Here rather than on a
+    /// screen of its own because it is one more thing about how this
+    /// machine's client presents itself, and a screen with one choice on
+    /// it is a screen nobody finds.
+    Chime {
+        chime: uze_application::Chime,
+        active: bool,
+    },
 }
 
 impl AppearanceRow {
@@ -562,6 +570,7 @@ pub(crate) struct TuiModel {
     pub(crate) appearance_selected: usize,
     pub(crate) appearance_themes: Vec<uze_application::application::ThemeSummary>,
     pub(crate) appearance_glyph_sets: Vec<uze_application::application::GlyphSetSummary>,
+    pub(crate) appearance_chime: uze_application::Chime,
     /// Each theme's own colours, by id — resolved once with the list rather
     /// than per frame, because resolving one reads files. A theme absent
     /// from here resolved to nothing drawable and shows no swatches, which
@@ -765,6 +774,7 @@ impl TuiModel {
             appearance_selected: 0,
             appearance_themes: Vec::new(),
             appearance_glyph_sets: Vec::new(),
+            appearance_chime: uze_application::Chime::default(),
             appearance_palettes: std::collections::BTreeMap::new(),
             appearance_read: false,
             keys_capture: false,
@@ -1323,6 +1333,15 @@ impl TuiModel {
                     active: set.active,
                 }),
         );
+        rows.push(AppearanceRow::Heading("When an agent finishes"));
+        rows.extend(
+            uze_application::Chime::ALL
+                .into_iter()
+                .map(|chime| AppearanceRow::Chime {
+                    chime,
+                    active: chime == self.appearance_chime,
+                }),
+        );
         rows
     }
 
@@ -1671,6 +1690,9 @@ impl TuiModel {
             Some(AppearanceRow::Theme { id, .. }) => crate::ui::worker::Intent::SelectTheme(id),
             Some(AppearanceRow::GlyphSet { id, .. }) => {
                 crate::ui::worker::Intent::SelectGlyphSet(id)
+            }
+            Some(AppearanceRow::Chime { chime, .. }) => {
+                crate::ui::worker::Intent::SelectChime(chime)
             }
             _ => crate::ui::worker::Intent::None,
         }

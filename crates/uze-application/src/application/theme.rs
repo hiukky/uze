@@ -7,9 +7,9 @@
 //! every token added later becomes a change to this crate.
 
 use serde::Serialize;
-use uze_core::{Result, theme_state};
+use uze_core::{Result, notification_state, notification_state::Chime, theme_state};
 
-use super::services::Themes;
+use super::services::{Notifications, Themes};
 
 /// A theme the operator can select.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -112,6 +112,20 @@ impl Themes<'_> {
     #[tracing::instrument(name = "themes.select_glyphs", skip_all, fields(id = %id), err)]
     pub fn select_glyphs(&self, id: &str) -> Result<()> {
         theme_state::set_glyphs(&self.0.home, id)
+    }
+}
+
+impl Notifications<'_> {
+    /// Which finished turns ring; [`Chime::Silent`] until the operator
+    /// chooses otherwise.
+    #[tracing::instrument(name = "notifications.agent_finished", skip_all, err)]
+    pub fn agent_finished(&self) -> Result<Chime> {
+        notification_state::agent_finished(&self.0.home)
+    }
+
+    #[tracing::instrument(name = "notifications.set_agent_finished", skip_all, fields(chime = ?chime), err)]
+    pub fn set_agent_finished(&self, chime: Chime) -> Result<()> {
+        notification_state::set_agent_finished(&self.0.home, chime)
     }
 }
 

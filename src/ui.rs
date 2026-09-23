@@ -44,6 +44,7 @@ use uze_application::{
 };
 
 mod agent_support;
+mod chime;
 pub mod extension_host;
 mod extension_view;
 mod hit;
@@ -104,6 +105,7 @@ pub fn run(home: UzeHome) -> Result<()> {
     // into it: from here on, every panic — this thread's or any of the
     // background reads' — leaves a terminal a message can be read on.
     report_panics_on_a_restored_terminal(terminal.keyboard());
+    chime::load(&home);
     // The client's shape as this user last left it — read once, here, and
     // handed to the attach, which writes every section of it back as it
     // changes (see `uze_application::ClientLayout`).
@@ -211,6 +213,15 @@ impl TerminalSession {
 
     pub(crate) fn draw(&mut self, render: impl FnOnce(&mut ratatui::Frame<'_>)) -> Result<()> {
         self.terminal.draw(render).map(|_| ()).map_err(io_error)
+    }
+
+    /// The terminal's own bell, through the handle the frames go through
+    /// so it cannot land inside one. What it sounds like — a tone, a
+    /// flash, nothing — is the terminal's setting, not ours.
+    pub(crate) fn ring(&mut self) {
+        use std::io::Write;
+        let backend = self.terminal.backend_mut();
+        let _ = backend.write_all(b"\x07").and_then(|()| backend.flush());
     }
 }
 

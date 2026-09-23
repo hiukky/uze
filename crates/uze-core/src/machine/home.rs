@@ -163,11 +163,14 @@ impl UzeHome {
         self.root.join("themes")
     }
 
-    /// Which theme is active. Machine-scoped, like every other appearance
-    /// choice: a project does not get to decide what the operator's
-    /// terminal looks like.
-    pub fn active_theme_path(&self) -> PathBuf {
-        self.state_dir().join("theme.json")
+    /// The operator's settings — theme, glyphs, notifications — one
+    /// section per concern (see `config`).
+    ///
+    /// At the root beside `keys.json` rather than under `state/`, for the
+    /// same reason: it is something someone chooses and may write by hand,
+    /// never something UZE can rebuild.
+    pub fn config_path(&self) -> PathBuf {
+        self.root.join("config.toml")
     }
 
     /// The operator's own last word on appearance, applied over whichever
@@ -450,7 +453,6 @@ mod tests {
             home.attachments_path(),
             home.profiles_path(),
             home.client_layout_path(),
-            home.active_theme_path(),
             home.provisioning_state_path(),
             home.binary_path(),
             home.tasks_path("abc"),

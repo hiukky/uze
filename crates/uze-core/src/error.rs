@@ -204,6 +204,13 @@ pub enum UzeError {
     /// go looking for a network problem.
     #[error("{0}")]
     UnusableTheme(String),
+    /// The operator's settings file does not parse. Refused rather than read
+    /// as empty, because reading on would undo every choice in it.
+    #[error("{path} is not valid TOML: {reason}")]
+    MalformedConfig {
+        path: std::path::PathBuf,
+        reason: String,
+    },
     /// `uze remove` is strictly project-scoped (no fallback to machine-level
     /// removal) — see ADR-019. Distinct from `PluginNotUsedByProject`: this
     /// is "there is no project here to remove anything from."

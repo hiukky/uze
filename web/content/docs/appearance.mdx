@@ -120,7 +120,17 @@ won" is a question you can answer rather than guess at.
 ```text
 ~/.uze/themes/<id>.json      a theme you wrote; the file's stem is its id
 ~/.uze/theme-overrides.json  your own last word, over whichever theme is on
-~/.uze/state/theme.json      the palette and the glyph set you chose
+~/.uze/config.toml           the palette and the glyph set you chose
+```
+
+`config.toml` is yours to edit by hand; `uze theme set`, `uze theme glyphs`
+and the Appearance screen write only their own keys and leave the rest of the
+file — comments included — as it was:
+
+```toml
+[appearance]
+theme = "tokyo-night"
+glyphs = "nerd"
 ```
 
 Five themes are built in and need no file:

@@ -5039,6 +5039,46 @@ fn choosing_a_glyph_set_is_a_different_intent_from_choosing_a_theme() {
     );
 }
 
+#[test]
+fn the_chime_is_chosen_on_the_appearance_screen_and_marks_the_one_in_force() {
+    use uze_application::Chime;
+    let mut model = TuiModel {
+        route: Route::Appearance,
+        focus: Focus::Content,
+        appearance_themes: vec![uze_application::application::ThemeSummary {
+            id: "dracula".to_owned(),
+            active: true,
+            path: None,
+        }],
+        appearance_chime: Chime::OutOfSight,
+        ..TuiModel::default()
+    };
+    model.settle_appearance_selection();
+
+    let chimes: Vec<(Chime, bool)> = model
+        .appearance_rows()
+        .into_iter()
+        .filter_map(|row| match row {
+            crate::ui::model::AppearanceRow::Chime { chime, active } => Some((chime, active)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        chimes,
+        vec![
+            (Chime::Silent, false),
+            (Chime::OutOfSight, true),
+            (Chime::Always, false),
+        ]
+    );
+
+    model.move_appearance_selection(3);
+    assert_eq!(
+        model.activate_appearance(),
+        crate::ui::worker::Intent::SelectChime(Chime::Always)
+    );
+}
+
 /// The list opens with a heading, so moving up from the first choice has
 /// nowhere to go: it stays put. It used to step past the heading forever,
 /// clamping back onto it at every step, and freeze the whole client.

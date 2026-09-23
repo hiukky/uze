@@ -62,6 +62,16 @@ pub mod client_layout;
 /// UZE-owned state under `UzeHome` that belongs to no portable concern.
 pub mod theme_state;
 
+/// Whether the workspace rings when an agent finishes. Root-level for the
+/// same reason [`theme_state`] is: an operator's choice under `UzeHome`
+/// that belongs to no portable concern.
+pub mod notification_state;
+
+/// The operator's `config.toml`, where [`theme_state`] and
+/// [`notification_state`] keep their sections. Knows files and sections,
+/// never what a setting means.
+pub mod config;
+
 // Flat public API. Each line also says which concern the module belongs to,
 // which is the second reason for keeping them: the crate root is where a
 // reader looks first.
