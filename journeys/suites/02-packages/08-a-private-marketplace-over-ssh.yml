@@ -143,14 +143,20 @@ scenes:
           nohup python3 {world}/forge/serve.py {world}/forge {world}/forge/port user:s3cret \
             >{world}/forge/serve.log 2>&1 </dev/null &
         say: a private forge, reachable only with credentials this machine's Git has none of
-      - wait: file
-        until: "{world}/forge/port"
-        timeout: 10
-      - shell: '{uze} market host work "http://127.0.0.1:$(cat {world}/forge/port)"'
+      - shell: |
+          for attempt in $(seq 1 100); do
+            [ -s {world}/forge/port ] && exit 0
+            sleep 0.2
+          done
+          echo "the forge never took a port:" >&2
+          cat {world}/forge/serve.log >&2
+          exit 1
+        say: wait for the forge, and say why when it does not come up
+      - shell: 'GIT_CONFIG_NOSYSTEM=1 {uze} market host work "http://127.0.0.1:$(cat {world}/forge/port)"'
         say: name the forge `work`
-      - shell: "SSH_AUTH_SOCK={world}/agent.sock {uze} market add work:team/plugins"
+      - shell: "GIT_CONFIG_NOSYSTEM=1 SSH_AUTH_SOCK={world}/agent.sock {uze} market add work:team/plugins"
         say: add the marketplace by its alias, with a key in the agent
-      - shell: "SSH_AUTH_SOCK={world}/agent.sock {uze} flow@demo"
+      - shell: "GIT_CONFIG_NOSYSTEM=1 SSH_AUTH_SOCK={world}/agent.sock {uze} flow@demo"
         say: add its plugin to the project
     then:
       - file: "{home}/.agents/skills/flow:commit/SKILL.md"

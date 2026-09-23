@@ -50,6 +50,9 @@ impl World {
             .set("XDG_CONFIG_HOME", operator.join("xdg"))
             .set("PATH", ssh.path())
             .remove("SSH_AUTH_SOCK")
+            // The runner's own system config — `osxkeychain` on macOS — is
+            // not this world's operator's.
+            .set("GIT_CONFIG_NOSYSTEM", "1")
             .remove("GIT_CONFIG_GLOBAL")
             .remove("GIT_CONFIG_SYSTEM")
             .remove("http_proxy")
@@ -317,6 +320,10 @@ fn no_transport_with_access_is_one_error_naming_each_and_records_nothing() {
     for label in ["https (anonymous)", "https (credentials)", "ssh"] {
         assert!(message.contains(label), "{label} missing from: {message}");
     }
+    assert!(
+        message.contains("Permission denied (publickey)"),
+        "each transport says what refused it, not Git's advice: {message}"
+    );
     assert!(
         world.application().marketplace().list().unwrap().len() == 1,
         "only the built-in marketplace is registered"

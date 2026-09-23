@@ -521,8 +521,10 @@ pub(super) fn run_as(
 /// Git reads them, across every scope and every `[include]`.
 ///
 /// Read from a directory that is no repository, so nothing local answers,
-/// and with the operator's environment minus `GIT_*`, so an override meant
-/// for some other Git does not decide what this one reads. A path under
+/// and with the operator's environment minus `GIT_*` — except the three
+/// that say which files their own Git reads (`GIT_CONFIG_NOSYSTEM`,
+/// `GIT_CONFIG_GLOBAL`, `GIT_CONFIG_SYSTEM`), because what is read here has
+/// to be what their Git would use. A path under
 /// `~/` is expanded here: the attempt it is handed to may have no `HOME`.
 ///
 /// Read once per process for each home it is asked under: a listing reads a
@@ -530,16 +532,20 @@ pub(super) fn run_as(
 /// `git config` spawn per read is what a budgeted command cannot pay.
 fn operator_config(pattern: &str) -> Vec<(String, String)> {
     type Settings = Vec<(String, String)>;
-    type Asked = (
-        String,
-        Option<std::ffi::OsString>,
-        Option<std::ffi::OsString>,
-    );
+    type Asked = (String, Vec<Option<std::ffi::OsString>>);
     static READ: std::sync::Mutex<Vec<(Asked, Settings)>> = std::sync::Mutex::new(Vec::new());
     let key = (
         pattern.to_owned(),
-        std::env::var_os("HOME"),
-        std::env::var_os("XDG_CONFIG_HOME"),
+        [
+            "HOME",
+            "XDG_CONFIG_HOME",
+            "GIT_CONFIG_NOSYSTEM",
+            "GIT_CONFIG_GLOBAL",
+            "GIT_CONFIG_SYSTEM",
+        ]
+        .iter()
+        .map(std::env::var_os)
+        .collect(),
     );
     if let Some((_, settings)) = READ
         .lock()
@@ -556,9 +562,15 @@ fn operator_config(pattern: &str) -> Vec<(String, String)> {
 }
 
 fn read_operator_config(pattern: &str) -> Vec<(String, String)> {
+    const WHICH_FILES: &[&str] = &[
+        "GIT_CONFIG_NOSYSTEM",
+        "GIT_CONFIG_GLOBAL",
+        "GIT_CONFIG_SYSTEM",
+    ];
     let mut command = Command::new("git");
     for (key, _) in std::env::vars_os() {
-        if key.to_string_lossy().starts_with("GIT_") {
+        let name = key.to_string_lossy();
+        if name.starts_with("GIT_") && !WHICH_FILES.contains(&name.as_ref()) {
             command.env_remove(key);
         }
     }
@@ -663,13 +675,29 @@ fn reason_of(error: &UzeError, transport: &Transport) -> String {
         UzeError::RepositoryAccessRefused { detail } => detail.clone(),
         other => other.to_string(),
     };
-    let line = message
-        .lines()
-        .rev()
-        .map(str::trim)
-        .find(|line| !line.is_empty())
+    // Git's own words, not its advice: the line that says what went wrong
+    // rather than "Please make sure you have the correct access rights" or
+    // "Cloning into …", which it prints around every failure alike.
+    let lines: Vec<&str> = message.lines().map(str::trim).collect();
+    let line = lines
+        .iter()
+        .find(|line| {
+            let lowered = line.to_lowercase();
+            [
+                "denied",
+                "fatal:",
+                "error:",
+                "timed out",
+                "could not resolve",
+            ]
+            .iter()
+            .any(|marker| lowered.contains(marker))
+        })
+        .or_else(|| lines.iter().rev().find(|line| !line.is_empty()))
+        .copied()
         .unwrap_or("failed");
-    let line = line.strip_prefix("fatal: ").unwrap_or(line).to_owned();
+    let line = line.rsplit_once("fatal: ").map_or(line, |(_, rest)| rest);
+    let line = line.to_owned();
     if line.to_lowercase().contains("host key verification failed")
         && let Some(host) = forge::host_of(&if transport.url.contains("://") {
             transport.url.clone()
@@ -797,6 +825,7 @@ mod tests {
         environment
             .set("HOME", &home)
             .set("XDG_CONFIG_HOME", home.join("xdg"))
+            .set("GIT_CONFIG_NOSYSTEM", "1")
             .remove("GIT_CONFIG_GLOBAL")
             .remove("GIT_CONFIG_SYSTEM");
 

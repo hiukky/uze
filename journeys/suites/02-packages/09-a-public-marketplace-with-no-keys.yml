@@ -128,15 +128,21 @@ scenes:
           nohup python3 {world}/forge/serve.py {world}/forge {world}/forge/port \
             >{world}/forge/serve.log 2>&1 </dev/null &
         say: a public forge
-      - wait: file
-        until: "{world}/forge/port"
-        timeout: 10
+      - shell: |
+          for attempt in $(seq 1 100); do
+            [ -s {world}/forge/port ] && exit 0
+            sleep 0.2
+          done
+          echo "the forge never took a port:" >&2
+          cat {world}/forge/serve.log >&2
+          exit 1
+        say: wait for the forge, and say why when it does not come up
       - shell: |
           set -e
           printf 'marketplaces:\n  demo:\n    git: http://127.0.0.1:%s/team/plugins.git\n    plugins:\n      - flow\n' \
             "$(cat {world}/forge/port)" > {project}/agents.yaml
         say: the project declares the marketplace with a `.git` suffix
-      - shell: "{uze} install"
+      - shell: "GIT_CONFIG_NOSYSTEM=1 {uze} install"
         say: install what agents.yaml declares, with no key anywhere
     then:
       - file: "{home}/.agents/skills/flow:commit/SKILL.md"
