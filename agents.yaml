@@ -26,8 +26,11 @@ worktrees:
 artifacts:
   path: docs/architecture
 
+# Named by URL, never by a path: a path is one machine's, and this file is
+# everyone's. Whoever develops the marketplace reads it from their own
+# checkout with `uze market link ai <checkout>`, which touches no file here.
 marketplaces:
   ai:
-    path: /home/hiukky/ai
+    git: https://github.com/hiukky/ai
     plugins:
       - git
