@@ -1391,6 +1391,9 @@ pub(super) enum WorkspaceHit {
     NewAgentMenu,
     /// One row of the open agent picker, by index into its `options`.
     PickAgent(usize),
+    /// The agent picker's only row when no harness is set up — opens the
+    /// modal on Integrations, where one is.
+    SetUpAgent,
     /// A space's header row in the sidebar — click selects it (switching
     /// which space's tabs the tab strip and pane show).
     SelectSpace(SpaceId),
@@ -1858,12 +1861,13 @@ fn agent_identities(home: &UzeHome) -> Vec<AgentIdentity> {
         .unwrap_or_default()
 }
 
-/// The harnesses the agent picker offers — one row per [`AgentIdentity`],
-/// `command` set to the program that identity says an agent of it is
-/// launched by.
+/// The harnesses the agent picker offers — one row per configured
+/// [`AgentIdentity`], `command` set to the program that identity says an
+/// agent of it is launched by.
 fn agent_options(home: &UzeHome) -> Vec<AgentOption> {
     agent_identities(home)
         .into_iter()
+        .filter(|identity| identity.configured)
         .map(|identity| AgentOption {
             display_name: identity.display_name.to_owned(),
             integration: identity.integration.to_owned(),

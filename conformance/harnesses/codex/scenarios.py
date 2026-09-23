@@ -78,8 +78,13 @@ def codex_container(cfg, prov_ip, final_cmd, plugins="flow mcp-plugin"):
 
 def drive_onboarding(child):
     """auth.json seed skips the login screen; the directory-trust prompt is
-    dismissed with Enter (default '1. Yes, continue') until the directory is
+    dismissed with Enter (its default first option) until the directory is
     trusted. Returns (raw, screen).
+
+    The prompt is recognised by either wording it has had: "Do you trust"
+    up to codex-cli 0.155, "Trust this folder?" from 0.156 on, which also
+    renamed the option to "Trust and continue". Missing it left every phase
+    that opens the TUI parked on the dialog.
 
     The composer line is chrome, not readiness. codex-cli 0.153.2 paints
     "Ask Codex to do anything" while the header still reads
@@ -105,7 +110,7 @@ def drive_onboarding(child):
         raw += chunk
         shown = common.render_screen(raw)
         squashed = shown.replace(" ", "")
-        if "Doyoutrust" in squashed:
+        if "Doyoutrust" in squashed or "Trustthisfolder?" in squashed:
             child.send("\r")
             continue
         if "directory:" in shown and "directory:loading" not in squashed:

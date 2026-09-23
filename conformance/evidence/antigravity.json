@@ -1,9 +1,9 @@
 {
  "harness": "antigravity",
- "harness_version": "1.2.7",
- "uze_version": "uze 0.0.0-alpha.6",
- "fixture_revision": "e4c38e6e6680cc0e",
- "recorded_at": "2026-09-20T13:40:25-0300",
+ "harness_version": "1.2.8",
+ "uze_version": "uze 0.0.0-alpha.8",
+ "fixture_revision": "fe88a9d528a24a68",
+ "recorded_at": "2026-09-22T22:03:51-0300",
  "gate": {
   "passed": 48,
   "total": 48,

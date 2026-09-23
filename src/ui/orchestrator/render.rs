@@ -312,9 +312,11 @@ pub(super) fn render_agent_picker(
         .map(|option| option.display_name.chars().count() as u16)
         .max()
         .unwrap_or(16)
-        .max("no harnesses found".len() as u16);
+        .max(NO_AGENT_SET_UP.len() as u16);
+    // Empty, it says so and offers the way out on a row of its own.
+    let rows = picker.options.len().max(2) as u16;
     let width = (content_width + 6).min(area.width);
-    let height = (picker.options.len().max(1) as u16 + 2).min(area.height);
+    let height = (rows + 2).min(area.height);
     let popup = Rect::new(
         anchor.x.min((area.x + area.width).saturating_sub(width)),
         (anchor.y + anchor.height).min((area.y + area.height).saturating_sub(height)),
@@ -333,11 +335,16 @@ pub(super) fn render_agent_picker(
     if picker.options.is_empty() {
         frame.render_widget(
             Paragraph::new(Span::styled(
-                "no harnesses found",
+                format!(" {NO_AGENT_SET_UP}"),
                 theme::fg(Token::TextMuted),
             )),
-            inner,
+            Rect::new(inner.x, inner.y, inner.width, 1),
         );
+        if inner.height > 1 {
+            let row = Rect::new(inner.x, inner.y + 1, inner.width, 1);
+            render_agent_picker_row(frame, row, SET_ONE_UP, true);
+            hits.push((row, WorkspaceHit::SetUpAgent));
+        }
         return;
     }
     for (index, option) in picker.options.iter().enumerate() {
@@ -345,29 +352,33 @@ pub(super) fn render_agent_picker(
             break;
         }
         let row = Rect::new(inner.x, inner.y + index as u16, inner.width, 1);
-        let selected = index == picker.selected;
-        // A filled bar for the selected row, not just bold text — a
-        // narrowly-scoped exception to this design's usual no-filled-
-        // surfaces rule, for one reason: a keyboard-navigable menu needs
-        // the affordance.
-        let (style, text) = if selected {
-            let style = Style::default()
-                .bg(theme::color(Token::Accent))
-                .fg(theme::color(Token::SurfaceBackground))
-                .add_modifier(Modifier::BOLD);
-            let text = format!(
-                " {:<width$}",
-                option.display_name,
-                width = inner.width.saturating_sub(1) as usize
-            );
-            (style, text)
-        } else {
-            let style = theme::fg(Token::TextInactive);
-            (style, format!(" {}", option.display_name))
-        };
-        frame.render_widget(Paragraph::new(Span::styled(text, style)), row);
+        render_agent_picker_row(frame, row, &option.display_name, index == picker.selected);
         hits.push((row, WorkspaceHit::PickAgent(index)));
     }
+}
+
+const NO_AGENT_SET_UP: &str = "no agent set up yet";
+const SET_ONE_UP: &str = "set one up";
+
+/// A filled bar for the selected row, not just bold text — a
+/// narrowly-scoped exception to this design's usual no-filled-surfaces
+/// rule, for one reason: a keyboard-navigable menu needs the affordance.
+fn render_agent_picker_row(frame: &mut ratatui::Frame<'_>, row: Rect, label: &str, selected: bool) {
+    let (style, text) = if selected {
+        let style = Style::default()
+            .bg(theme::color(Token::Accent))
+            .fg(theme::color(Token::SurfaceBackground))
+            .add_modifier(Modifier::BOLD);
+        let text = format!(
+            " {:<width$}",
+            label,
+            width = row.width.saturating_sub(1) as usize
+        );
+        (style, text)
+    } else {
+        (theme::fg(Token::TextInactive), format!(" {label}"))
+    };
+    frame.render_widget(Paragraph::new(Span::styled(text, style)), row);
 }
 
 /// The right-click action menu — one row per [`MenuAction`] in
@@ -3344,12 +3355,12 @@ fn render_notice_chip(
         ),
         Span::raw(" "),
         // The zone divider, in the same hue and on the same plain backdrop
-        // as the "/" that separates the tabs from the strip's own buttons.
+        // as every other hairline between the header's zones.
         // No filled chip behind any of this: a message is not a control,
         // and the raised surface is what made it read as one.
         Span::styled(
             theme::glyph(Symbol::TreeColumnDivider),
-            theme::fg(Token::TextMuted),
+            theme::fg(Token::TextFaint),
         ),
     ];
     // Never past the strip's left edge: what does not fit is this

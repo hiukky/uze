@@ -385,9 +385,10 @@ journey is are here because they govern the shape of the suite.
   `01-first-run`, `02-packages`, `03-context`, `04-workspace`,
   `05-delivery`, `06-recovery`, `07-upgrade`. The last one is the only
   chapter that runs a *second* binary — the previously released `uze`,
-  downloaded once and kept — because what it proves is two binaries
-  meeting on one disk, which no fixture can be wrong about in the way a
-  release can. It needs the network, so it is nightly. The numbers are reading order only — every
+  built once from its tag and kept, never downloaded, so a run is not
+  counted as somebody installing that release — because what it proves is
+  two binaries meeting on one disk, which no fixture can be wrong about in
+  the way a release can. It costs a build, so it is nightly. The numbers are reading order only — every
   journey builds its own world, so none depends on a lower number having run.
   A chapter appears when its first journey does.
 - **A scene continues the story; a file starts one over.** Joined by "and

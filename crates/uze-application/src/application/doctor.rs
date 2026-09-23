@@ -204,6 +204,17 @@ impl Health<'_> {
             .collect()
     }
 
+    /// Whether UZE has never run on this machine: its records do not
+    /// exist yet, because every command that reaches the application lays
+    /// them out. Asked of the records rather than of the harness registry,
+    /// which is a cache — deleting it must cost nothing, and a machine whose
+    /// cache was cleared, or that last ran a release keeping it elsewhere,
+    /// is not meeting UZE for the first time.
+    #[tracing::instrument(name = "health.first_run", skip_all)]
+    pub fn first_run(&self) -> bool {
+        !self.0.home.state_dir().exists()
+    }
+
     /// One harness's row of [`harnesses`](Self::harnesses), found by any name
     /// [`UzeApplication::integration_named`] accepts.
     #[tracing::instrument(name = "health.harness", skip_all, fields(name = %name), err)]

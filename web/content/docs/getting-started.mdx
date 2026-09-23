@@ -100,6 +100,12 @@ $ uze setup inspect claude       # one harness, in full
 Names accept the stable id (`claude-code`), an alias (`claude`, `agy`), or the
 label (`Claude Code`).
 
+The first time you run `uze` on a machine it asks the same question before
+anything else, with the harnesses it found already checked, then opens the
+workspace once setup is done. Calling it off still opens the workspace; the
+new-agent menu offers only harnesses that are set up, and sends you to
+**Integrations** when there are none.
+
 ## Add a plugin
 
 A plugin always comes from a marketplace — a Git repository holding a

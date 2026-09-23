@@ -55,6 +55,8 @@ impl Workspace<'_> {
                     display_name: integration.display_name(),
                     launch,
                     continuity_gap,
+                    configured: integration.status(&self.0.home)
+                        != uze_core::integration::IntegrationStatus::NotConfigured,
                 }
             })
             .collect()

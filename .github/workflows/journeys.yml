@@ -104,6 +104,15 @@ jobs:
       # `journeys/Dockerfile` and `make journey-docker` stay for local use —
       # running a journey on your own machine without letting it near your
       # own tmux, HOME or terminal.
+      # The previous release `07-upgrade` meets, built from its tag once and
+      # kept — built rather than downloaded, so a nightly is never counted
+      # as somebody installing that release. The directory holds one binary
+      # per tag, so an older entry is a fine start for a newer one.
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/uze-journeys/released-built
+          key: journeys-released-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('journeys/suites/07-upgrade/*.yml') }}
+          restore-keys: journeys-released-${{ runner.os }}-${{ runner.arch }}-
       - uses: ./.github/actions/journeys
         with:
           # Nightly runs everything, not just the gate tag, and records a cast.
