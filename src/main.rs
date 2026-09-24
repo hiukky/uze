@@ -680,6 +680,9 @@ fn run(cli: Cli) -> Result<()> {
         _ => uze::telemetry::Sink::Stderr,
     };
     let _telemetry = uze::telemetry::init(sink);
+    if !opens_the_tui {
+        progress::follow_steps(cli.verbose);
+    }
     let span = uze::telemetry::command_span(&leaf_command_of(&argv), &argv);
     // A `uze` started by a harness the shim launched — an agent running
     // `uze` inside it — continues the launch's trace.
@@ -1463,7 +1466,11 @@ fn run_plugin(app: &UzeApplication, action: PluginAction, verbose: bool) -> Resu
             emit(format, &report, render_inspection);
         }
         PluginAction::Remove { plugin, format } => {
-            let report = app.plugins().remove(&plugin)?;
+            let report = with_spinner(
+                &format!("Removing {plugin}..."),
+                &format!("Failed to remove {plugin}"),
+                || app.plugins().remove(&plugin),
+            )?;
             emit(format, &report, render_remove);
             if let RemovePluginReport::Blocked { report, plan } = &report {
                 return Err(blocked("removal", &report.package_id, plan));
@@ -2043,11 +2050,19 @@ fn run_shorthand(app: &UzeApplication, args: Vec<String>, verbose: bool) -> Resu
     let shorthand = ShorthandArgs::try_parse_from(std::iter::once("uze".to_owned()).chain(args))
         .unwrap_or_else(|error| error.exit());
 
+    if shorthand.verbose {
+        progress::follow_steps(true);
+    }
     let current_dir = cwd()?;
     let authority = trust_authority(shorthand.trust);
-    let report = app
-        .project()
-        .add(&plugin, &marketplace, &current_dir, authority.as_ref())?;
+    let report = with_spinner(
+        &format!("Adding {plugin}@{marketplace} to this project..."),
+        &format!("Failed to add {plugin}@{marketplace}"),
+        || {
+            app.project()
+                .add(&plugin, &marketplace, &current_dir, authority.as_ref())
+        },
+    )?;
 
     emit(shorthand.format, &report, |report| {
         format!(
@@ -2257,6 +2272,7 @@ fn with_spinner<T>(
 ) -> Result<T> {
     let spinner = progress::spinner(message);
     let outcome = operation();
+    progress::settle_steps(&spinner, outcome.is_ok());
     spinner.finish_and_clear();
     if let Err(error) = &outcome {
         progress::error(&format!("{failure}: {error}"));

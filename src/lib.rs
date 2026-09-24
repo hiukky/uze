@@ -3,6 +3,7 @@
 
 pub mod keymap;
 pub mod self_update;
+pub mod steps;
 /// Where a trace goes: the text log `UZE_LOG` switches on, the OTLP
 /// exporter the `telemetry` feature adds, and the `TRACEPARENT` handshake
 /// across the one process boundary UZE owns.

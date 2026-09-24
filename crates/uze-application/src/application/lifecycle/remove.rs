@@ -150,6 +150,11 @@ impl UzeApplication {
                     plan: PackageRemovalPlan::BlockedByInspection,
                 });
             };
+            tracing::info!(
+                target: uze_core::acquisition::git::STEP,
+                step = "detach",
+                harness = integration.id()
+            );
             if integration.detach_receipt(&reconciled.receipt)?.state != AttachmentState::Missing {
                 let report = self.reconcile(package_id);
                 let plan = plan_remove(&report);

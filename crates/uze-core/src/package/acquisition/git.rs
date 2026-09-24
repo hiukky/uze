@@ -48,6 +48,9 @@ const NETWORK_ENVIRONMENT: &[&str] = &[
     "GIT_SSL_CAPATH",
 ];
 
+/// Where an operation says what it is doing, for whoever shows a person.
+pub const STEP: &str = "uze::step";
+
 /// The operator's network settings, with their per-URL scopes.
 const NETWORK_KEYS: &str = r"^http\.(.+\.)?(proxy|sslcainfo|sslcapath)$";
 
@@ -647,10 +650,20 @@ pub(super) fn through<T>(
         let first = transports.remove(position);
         transports.insert(0, first);
     }
+    let identity = forge::canonical(url);
+    let shown = forge::shown(&identity);
+    let reach = |transport: &Transport| {
+        tracing::info!(
+            target: STEP,
+            step = "reach",
+            repository = %shown,
+            via = transport.label()
+        );
+    };
     if let [only] = transports.as_slice() {
+        reach(only);
         return attempt(only).map(|answer| (answer, only.clone()));
     }
-    let identity = forge::canonical(url);
     let mut failures = Vec::new();
     let mut https_unreachable: Option<&'static str> = None;
     let (mut unresolved, mut refused) = (0, 0);
@@ -661,6 +674,7 @@ pub(super) fn through<T>(
             unresolved += usize::from(why == UNRESOLVED);
             continue;
         }
+        reach(&transport);
         match attempt(&transport) {
             Ok(answer) => return Ok((answer, transport)),
             Err(error @ (UzeError::Write { .. } | UzeError::Read { .. })) => return Err(error),
@@ -673,11 +687,15 @@ pub(super) fn through<T>(
                 } else if over_https && cannot_connect(&error.to_string()) {
                     https_unreachable = Some("the host did not answer over HTTPS");
                 }
-                failures.push(format!(
-                    "  {}: {}",
-                    transport.label(),
-                    reason_of(&error, &transport)
-                ));
+                let reason = reason_of(&error, &transport);
+                tracing::info!(
+                    target: STEP,
+                    step = "reach_failed",
+                    repository = %shown,
+                    via = transport.label(),
+                    reason = %reason
+                );
+                failures.push(format!("  {}: {reason}", transport.label()));
             }
         }
     }

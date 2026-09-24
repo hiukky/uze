@@ -212,6 +212,7 @@ impl Project<'_> {
         // what the project meant, and the lock is what that meant resolved
         // to. Writing the lock alone would leave the manifest — the file a
         // person reads and edits — silently out of date.
+        tracing::info!(target: uze_core::acquisition::git::STEP, step = "lock");
         manifest::declare_plugin(
             &canonical,
             plugin,

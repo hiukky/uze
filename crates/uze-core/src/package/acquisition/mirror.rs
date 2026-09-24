@@ -294,6 +294,7 @@ fn prefetch(directory: &Path, commit: &str, subdirectory: Option<&str>) {
     if missing.is_empty() {
         return;
     }
+    tracing::info!(target: super::git::STEP, step = "download", files = missing.len());
     let mut arguments = vec![
         "-c",
         "fetch.negotiationAlgorithm=noop",

@@ -280,6 +280,7 @@ impl MarketplaceCatalogues {
     }
 
     fn manifest_at(&self, repository: &Path, commit: &str) -> Result<MarketplaceManifest> {
+        tracing::info!(target: uze_core::acquisition::git::STEP, step = "catalogue");
         let bytes = acquisition::mirror::read_file(repository, commit, MARKETPLACE_MANIFEST_NAME)?;
         acquisition::marketplace::parse_manifest(&bytes)
     }

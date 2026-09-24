@@ -58,6 +58,15 @@ pub fn canonical(url: &str) -> String {
     }
 }
 
+/// An identity as a person reads it: `github.com/hiukky/ai`, with no
+/// scheme; anything that is not a URL, as it is.
+pub fn shown(identity: &str) -> String {
+    identity
+        .split_once("://")
+        .map_or(identity, |(_, rest)| rest)
+        .to_owned()
+}
+
 /// Whether two identities name the same repository.
 ///
 /// Canonical forms that match are one repository. So is one directory

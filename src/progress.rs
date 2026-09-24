@@ -218,6 +218,181 @@ pub fn spinner(message: &str) -> ProgressBar {
     pb
 }
 
+/// Whether an attempt that failed — HTTPS before the SSH that answered — is
+/// printed too. Finished steps always are.
+static VERBOSE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// The step the spinner is showing, and when it began.
+static CURRENT: Mutex<Option<(String, std::time::Instant)>> = Mutex::new(None);
+
+/// Shows what an operation is doing on the spinner drawing now: every step
+/// the domain reports takes the spinner's line, and the one it replaces
+/// stays above it, checked, with how long it took — the account a
+/// thirteen-second command owes the person waiting on it. With `verbose`,
+/// an attempt that failed and was followed by another is printed as well.
+pub fn follow_steps(verbose: bool) {
+    VERBOSE.store(verbose, std::sync::atomic::Ordering::Relaxed);
+    uze::steps::listen(on_step);
+}
+
+fn on_step(step: &uze::steps::Step) {
+    let Some(bar) = DRAWING
+        .lock()
+        .ok()
+        .and_then(|drawing| drawing.clone())
+        .filter(|bar| !bar.is_finished())
+    else {
+        return;
+    };
+    let verbose = VERBOSE.load(std::sync::atomic::Ordering::Relaxed);
+    match describe(step) {
+        Some(Described::Now(line)) => {
+            settle(&bar, true);
+            bar.set_message(format!("{line}…"));
+            if let Ok(mut current) = CURRENT.lock() {
+                *current = Some((line, std::time::Instant::now()));
+            }
+        }
+        Some(Described::Failed(line)) => {
+            let began = CURRENT.lock().ok().and_then(|mut current| current.take());
+            if verbose {
+                let took = began.map(|(_, at)| at.elapsed()).unwrap_or_default();
+                say(
+                    &bar,
+                    &format!("{} {line} {}", error_icon(), label(took_to_say(took))),
+                );
+            }
+        }
+        None => {}
+    }
+}
+
+/// Prints the step still showing as finished — or as where the operation
+/// failed.
+pub fn settle_steps(bar: &ProgressBar, succeeded: bool) {
+    settle(bar, succeeded);
+}
+
+fn settle(bar: &ProgressBar, succeeded: bool) {
+    let Some((line, at)) = CURRENT.lock().ok().and_then(|mut current| current.take()) else {
+        return;
+    };
+    let icon = if succeeded {
+        success_icon()
+    } else {
+        error_icon()
+    };
+    say(
+        bar,
+        &format!("{icon} {line} {}", label(took_to_say(at.elapsed()))),
+    );
+}
+
+/// A line above the spinner, or on stderr when there is no terminal to
+/// draw one on — a CI log still gets the account.
+fn say(bar: &ProgressBar, line: &str) {
+    if bar.is_hidden() {
+        eprintln!("{line}");
+    } else {
+        bar.println(line);
+    }
+}
+
+#[cfg(test)]
+mod step_tests {
+    use super::*;
+    use uze::steps::Step;
+
+    #[test]
+    fn each_step_reads_as_what_it_does_to_what() {
+        let reach = Step::of(&[
+            ("step", "reach"),
+            ("repository", "github.com/hiukky/ai"),
+            ("via", "ssh"),
+        ]);
+        assert_eq!(
+            describe(&reach),
+            Some(Described::Now(
+                "Reaching github.com/hiukky/ai over SSH".to_owned()
+            ))
+        );
+        let failed = Step::of(&[
+            ("step", "reach_failed"),
+            ("repository", "github.com/hiukky/ai"),
+            ("via", "https (anonymous)"),
+            ("reason", "terminal prompts disabled"),
+        ]);
+        assert_eq!(
+            describe(&failed),
+            Some(Described::Failed(
+                "github.com/hiukky/ai over HTTPS: terminal prompts disabled".to_owned()
+            ))
+        );
+        let download = Step::of(&[("step", "download"), ("files", "5")]);
+        assert_eq!(
+            describe(&download),
+            Some(Described::Now("Downloading 5 files".to_owned()))
+        );
+        assert_eq!(describe(&Step::of(&[("step", "unheard-of")])), None);
+    }
+
+    #[test]
+    fn a_fast_step_reads_in_milliseconds_and_a_slow_one_in_seconds() {
+        assert_eq!(took_to_say(Duration::from_millis(310)), "310ms");
+        assert_eq!(took_to_say(Duration::from_millis(2140)), "2.1s");
+    }
+}
+
+/// `310ms` under a second, `2.1s` from there: a fast step reads as fast
+/// rather than as `0.0s`, and a slow one is not a wall of digits.
+fn took_to_say(took: Duration) -> String {
+    if took < Duration::from_secs(1) {
+        format!("{}ms", took.as_millis())
+    } else {
+        format!("{:.1}s", took.as_secs_f32())
+    }
+}
+
+#[derive(Debug, Eq, PartialEq)]
+enum Described {
+    /// What is happening now.
+    Now(String),
+    /// An attempt that did not work, and why; the operation goes on.
+    Failed(String),
+}
+
+/// The words for a step. Kept here, beside the spinner that shows them,
+/// because the domain reports what it does and never how to say it.
+fn describe(step: &uze::steps::Step) -> Option<Described> {
+    let field = |name: &str| step.get(name).unwrap_or_default().to_owned();
+    let over = |via: &str| match via {
+        "https (anonymous)" => "over HTTPS".to_owned(),
+        "https (credentials)" => "over HTTPS with your credentials".to_owned(),
+        "ssh" => "over SSH".to_owned(),
+        "local" => "on this machine".to_owned(),
+        other => format!("over {other}"),
+    };
+    Some(match step.get("step")? {
+        "reach" => Described::Now(format!(
+            "Reaching {} {}",
+            field("repository"),
+            over(&field("via"))
+        )),
+        "reach_failed" => Described::Failed(format!(
+            "{} {}: {}",
+            field("repository"),
+            over(&field("via")),
+            field("reason")
+        )),
+        "catalogue" => Described::Now("Reading the marketplace catalogue".to_owned()),
+        "download" => Described::Now(format!("Downloading {} files", field("files"))),
+        "deliver" => Described::Now(format!("Delivering to {}", field("harness"))),
+        "detach" => Described::Now(format!("Removing from {}", field("harness"))),
+        "lock" => Described::Now("Recording it in agents.yaml and agents.lock".to_owned()),
+        _ => return None,
+    })
+}
+
 /// Runs `question` with the terminal to itself.
 ///
 /// A spinner redraws its line on stderr every 120 ms, and so does the

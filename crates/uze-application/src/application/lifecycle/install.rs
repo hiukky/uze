@@ -141,6 +141,11 @@ impl Plugins<'_> {
             // Native delivery reads the view; attempting it against a view
             // that failed to publish would fail for a reason that has
             // nothing to do with this package.
+            tracing::info!(
+                target: uze_core::acquisition::git::STEP,
+                step = "deliver",
+                harness = integration.id()
+            );
             let native_delivery = if unpublished.contains(integration.id()) {
                 NativeDelivery::Skipped
             } else {
