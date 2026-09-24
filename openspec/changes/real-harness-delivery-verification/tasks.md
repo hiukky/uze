@@ -4,7 +4,9 @@
 - [ ] 1.2 Clean the test state: `uze remove hello -m` (any drift block, `uze doctor` names it); leftover `~/uze/boo-market`, `~/boo`, vendor entries
 - [ ] 1.3 The 4 Lab verticals with real harness binaries, synthetic world, zero internet: `python3 conformance/lab.py --harness <claude|codex|opencode|antigravity>` — skills, agents, MCP and removal, one named check per outcome
 - [ ] 1.4 Failures become fixes through the `--sandbox` loop, guided by the `conformance-debug` skill; `verdict.json` is the evidence
-- [ ] 1.5 Deferred from this session, in order: S1 (description as a double-quoted YAML scalar + check refusing a truncated block), detach residue (orphaned generated trees, `.git/uze-write.lock`), `update` output truncation, empty `Delivery` section on install
+- [ ] 1.5 NEW — codex: the delivered MCP declares `${PLUGIN_ROOT}` and codex does not resolve it (the same Error opencode/claude had); the codex integration translates the variable to the Store's real path (or codex's own grammar) in the generated `.mcp.json`
+- [ ] 1.6 NEW — antigravity: the MCP does not even appear listed in agy; verify the staging `~/.gemini/config/plugins/<name>/mcp_config.json` (the route is `agy plugin install` staging bytes — see `conformance/DECISIONS.md`)
+- [ ] 1.7 Deferred from this session, in order: S1 (description as a double-quoted YAML scalar + check refusing a truncated block), detach residue (orphaned generated trees, `.git/uze-write.lock`), `update` output truncation, empty `Delivery` section on install
 
 ## Notes
 
