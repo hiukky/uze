@@ -52,8 +52,15 @@ See proposal.md for motivation. Constraints that shape the approach:
 
 **Non-Goals:**
 
-- Publishing/remote push (Git the author runs), TUI wizardry, person-facing
-  wrappers, changes to what install delivers, any new external dependency.
+- Publishing/remote push (Git the author runs), TUI wizardry, changes to what
+  install delivers, any new external dependency.
+- **A person-facing surface for authoring, now or later.** The operator's
+  rule: the person's CLI carries only what a person performs by hand; what
+  is agent control lives under `uze agent`. Authoring a plugin is agent
+  work — a person who wants to browse marketplaces and their plugins uses
+  the existing `uze market` surface. The two-surface split this avoids is
+  the duplication the flatten change removes for the rest of the grammar;
+  authoring simply never grows the second half.
 
 ## Decisions
 
@@ -142,10 +149,12 @@ uze-core, Git via `uze-git`). No diagram under `docs/architecture/` changes.
 
 - **Agent-first authoring surface** — authoring lives under the hidden
   `uze agent` audience, its bytes in a directory the author names, and only
-  a registry record in `$UZE_HOME`; a scaffolded marketplace is born linked.
-  Hard to reverse once agents are taught it (the Skill and the `AGENTS.md`
-  region both encode it), and it fixes where authoring may *never* live
-  (no authored marketplace bytes under `$UZE_HOME`).
+  a registry record in `$UZE_HOME`; a scaffolded marketplace is born linked;
+  and the person-facing CLI never gains authoring verbs (the person's
+  surface is hand-work only; `uze market` answers browsing). Hard to reverse
+  once agents are taught it (the Skill and the `AGENTS.md` region both
+  encode it), and it fixes where authoring may *never* live: no authored
+  marketplace bytes under `$UZE_HOME`, and no person-facing alias, ever.
 
 ## Risks / Trade-offs
 
