@@ -220,6 +220,7 @@ pub fn scaffold_plugin(
     description: Option<&str>,
     hook: bool,
     mcp: bool,
+    agent: bool,
     instructions: bool,
 ) -> Result<PathBuf> {
     if !store::is_valid_package_name(name) {
@@ -300,6 +301,21 @@ pub fn scaffold_plugin(
         fs::write(&servers, include_str!("authoring/mcp.json")).map_err(|source| {
             UzeError::Write {
                 path: servers.clone(),
+                source,
+            }
+        })?;
+    }
+    if agent {
+        let file = plugin_root.join("agents").join(format!("{name}.md"));
+        fs::create_dir_all(file.parent().expect("the agents directory")).map_err(|source| {
+            UzeError::Write {
+                path: plugin_root.clone(),
+                source,
+            }
+        })?;
+        fs::write(&file, include_str!("authoring/agent.md.template")).map_err(|source| {
+            UzeError::Write {
+                path: file.clone(),
                 source,
             }
         })?;

@@ -30,11 +30,11 @@ fn scratch(label: &str) -> PathBuf {
 #[test]
 fn every_scaffold_passes_its_own_check() -> Result<()> {
     let _git_identity = git_identity();
-    for (hook, mcp, instructions) in [
-        (false, false, false),
-        (true, false, false),
-        (false, true, false),
-        (true, true, true),
+    for (hook, mcp, agent, instructions) in [
+        (false, false, false, false),
+        (true, false, false, false),
+        (false, true, false, false),
+        (true, true, true, true),
     ] {
         let label = format!("authoring-scaffold-{hook}{mcp}{instructions}");
         let root = scratch(&label);
@@ -45,6 +45,7 @@ fn every_scaffold_passes_its_own_check() -> Result<()> {
             Some("Says hello"),
             hook,
             mcp,
+            agent,
             instructions,
         )?;
 
@@ -93,7 +94,7 @@ fn authoring_scaffold_meets_the_budget() -> Result<()> {
     let root = scratch("authoring-scaffold-budget");
     let market = scaffold_marketplace("tools", None, &root.join("market"))?;
     let started = std::time::Instant::now();
-    scaffold_plugin(&market, "greet", None, false, false, false)?;
+    scaffold_plugin(&market, "greet", None, false, false, false, false)?;
     let elapsed = started.elapsed();
     assert!(
         elapsed < std::time::Duration::from_millis(200),
@@ -165,10 +166,10 @@ fn create_refuses_to_collide() -> Result<()> {
     );
 
     // An existing plugin is refused, never overwritten.
-    scaffold_plugin(&market, "greet", None, false, false, false)?;
-    assert!(scaffold_plugin(&market, "greet", None, false, false, false).is_err());
+    scaffold_plugin(&market, "greet", None, false, false, false, false)?;
+    assert!(scaffold_plugin(&market, "greet", None, false, false, false, false).is_err());
     // A name outside the charset is refused by the same rule an id is held to.
-    assert!(scaffold_plugin(&market, "-flag", None, false, false, false).is_err());
+    assert!(scaffold_plugin(&market, "-flag", None, false, false, false, false).is_err());
     fs::remove_dir_all(&root).expect("teardown");
     Ok(())
 }
@@ -178,7 +179,7 @@ fn check_reports_what_install_would_refuse() -> Result<()> {
     let _git_identity = git_identity();
     let root = scratch("authoring-check-fail");
     let market = scaffold_marketplace("tools", None, &root.join("market"))?;
-    let plugin = scaffold_plugin(&market, "greet", None, false, false, false)?;
+    let plugin = scaffold_plugin(&market, "greet", None, false, false, false, false)?;
 
     // A name the PackageId rule refuses is named before any install ran.
     fs::write(

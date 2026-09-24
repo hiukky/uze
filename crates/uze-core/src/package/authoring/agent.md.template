@@ -1,0 +1,10 @@
+# What this agent is for
+
+Replace this with one sentence a person can act on: when to start this
+agent and what it answers for.
+
+## How it works
+
+Describe the agent's loop: what it reads first, what it does, and what it
+must never do. Instructions here weigh against the work the agent is
+given, so keep them in the order a reader acts in.

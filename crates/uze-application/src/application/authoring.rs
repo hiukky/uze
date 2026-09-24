@@ -100,11 +100,19 @@ impl Project<'_> {
         description: Option<&str>,
         hook: bool,
         mcp: bool,
+        agent: bool,
         instructions: bool,
     ) -> Result<PluginCreated> {
         let checkout = self.marketplace_checkout(market)?;
-        let root =
-            authoring::scaffold_plugin(&checkout, name, description, hook, mcp, instructions)?;
+        let root = authoring::scaffold_plugin(
+            &checkout,
+            name,
+            description,
+            hook,
+            mcp,
+            agent,
+            instructions,
+        )?;
         Ok(PluginCreated {
             name: name.to_owned(),
             market: market.to_owned(),

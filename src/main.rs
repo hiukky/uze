@@ -273,6 +273,9 @@ enum AgentPluginAction {
         /// Also scaffold an mcp.json with one server stub
         #[arg(long)]
         mcp: bool,
+        /// Also scaffold an agents/<name>.md definition stub
+        #[arg(long)]
+        agent: bool,
         /// Also scaffold an instruction contribution
         #[arg(long)]
         instructions: bool,
@@ -3002,6 +3005,7 @@ fn run_agent_plugin(app: &UzeApplication, action: AgentPluginAction) -> Result<(
             description,
             hook,
             mcp,
+            agent,
             instructions,
             format,
         } => {
@@ -3015,6 +3019,7 @@ fn run_agent_plugin(app: &UzeApplication, action: AgentPluginAction) -> Result<(
                         description.as_deref(),
                         hook,
                         mcp,
+                        agent,
                         instructions,
                     )
                 },
