@@ -322,6 +322,12 @@ pub fn scaffold_plugin(
         // The stub the manifest's example key runs: the reference is real
         // from the moment the scaffold exists, and check stays honest.
         let server = plugin_root.join("scripts").join("example_server.py");
+        fs::create_dir_all(server.parent().expect("the scripts directory")).map_err(|source| {
+            UzeError::Write {
+                path: plugin_root.clone(),
+                source,
+            }
+        })?;
         fs::write(&server, include_str!("authoring/example_server.py")).map_err(|source| {
             UzeError::Write {
                 path: server.clone(),
