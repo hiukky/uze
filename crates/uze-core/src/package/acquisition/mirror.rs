@@ -76,7 +76,19 @@ pub fn ensure(fetch: &str, identity: &str, directory: &Path) -> Result<()> {
         };
         if forge::same_repository(&known, identity) || forge::same_repository(&known, fetch) {
             let transport = remembered.as_ref().map(|remembered| &remembered.transport);
-            let ((), answered) = through(fetch, transport, |transport| {
+            // `origin` is where a blobless mirror fetches a missing blob
+            // later, so it is pointed at each transport as it is tried — and
+            // put back when none answers, or the next pinned install would
+            // fetch from the last one tried with the access of another.
+            let origin = run(&["remote", "get-url", "origin"], Some(directory))
+                .map(|answer| answer.trim().to_owned())
+                .unwrap_or_default();
+            let refs = run(
+                &["for-each-ref", "--format=%(objectname) %(refname)"],
+                Some(directory),
+            )
+            .unwrap_or_default();
+            let answered = through(fetch, transport, |transport| {
                 run(
                     &["remote", "set-url", "origin", &transport.url],
                     Some(directory),
@@ -89,9 +101,23 @@ pub fn ensure(fetch: &str, identity: &str, directory: &Path) -> Result<()> {
                     &["fetch", "--prune", NO_BLOBS, "origin", "+refs/*:refs/*"],
                     Some(directory),
                 )?;
-                super::git::holds_a_commit(directory, transport)
-            })?;
-            return remember(directory, identity, answered);
+                let answered = super::git::holds_a_commit(directory, transport);
+                if answered.is_err() {
+                    // An answer with no refs at all — a login page served
+                    // with 200 — pruned every ref this mirror had.
+                    restore_refs(directory, &refs);
+                }
+                answered
+            });
+            return match answered {
+                Ok(((), answered)) => remember(directory, identity, answered),
+                Err(error) => {
+                    if !origin.is_empty() {
+                        let _ = run(&["remote", "set-url", "origin", &origin], Some(directory));
+                    }
+                    Err(error)
+                }
+            };
         }
         std::fs::remove_dir_all(directory).map_err(|source| UzeError::Write {
             path: directory.to_path_buf(),
@@ -127,6 +153,21 @@ pub fn ensure(fetch: &str, identity: &str, directory: &Path) -> Result<()> {
     remember(directory, identity, answered)
 }
 
+/// Puts back the refs `listing` (`<object> <ref>` per line) names.
+fn restore_refs(directory: &Path, listing: &str) {
+    for line in listing.lines() {
+        if let Some((object, reference)) = line.split_once(' ') {
+            let _ = run(&["update-ref", reference, object], Some(directory));
+        }
+    }
+}
+
+/// How each mirror was last reached, as this process last read or wrote
+/// it: a listing reads several manifests out of one mirror, and each read
+/// needs the answer.
+static REACHES: std::sync::Mutex<Vec<(std::path::PathBuf, Reach)>> =
+    std::sync::Mutex::new(Vec::new());
+
 fn remembered(directory: &Path) -> Option<Remembered> {
     serde_json::from_slice(&std::fs::read(directory.join(TRANSPORT_FILE)).ok()?).ok()
 }
@@ -137,6 +178,9 @@ fn remember(directory: &Path, identity: &str, transport: Transport) -> Result<()
         transport,
     })
     .expect("a transport is serializable");
+    if let Ok(mut reaches) = REACHES.lock() {
+        reaches.retain(|(known, _)| known != directory);
+    }
     std::fs::write(directory.join(TRANSPORT_FILE), payload).map_err(|source| UzeError::Write {
         path: directory.join(TRANSPORT_FILE),
         source,
@@ -146,7 +190,20 @@ fn remember(directory: &Path, identity: &str, transport: Transport) -> Result<()
 /// How a mirror is reached again for what it does not hold yet — a blob a
 /// checkout asks for — which is how it was last reached.
 fn reach_of(directory: &Path) -> Reach {
-    remembered(directory).map_or(Reach::LOCAL, |remembered| Reach::of(&remembered.transport))
+    if let Some(reach) = REACHES.lock().ok().and_then(|reaches| {
+        reaches
+            .iter()
+            .find(|(known, _)| known == directory)
+            .map(|(_, reach)| *reach)
+    }) {
+        return reach;
+    }
+    let reach =
+        remembered(directory).map_or(Reach::LOCAL, |remembered| Reach::of(&remembered.transport));
+    if let Ok(mut reaches) = REACHES.lock() {
+        reaches.push((directory.to_path_buf(), reach));
+    }
+    reach
 }
 
 /// Makes `directory` able to answer about `reference`, fetching only when

@@ -88,13 +88,15 @@ For an `https://` identity: anonymous HTTPS → HTTPS with the operator's
 credentials → SSH `git@<host>:<path>.git`. An identity recorded over SSH (D1's
 "as written") is fetched as written, once, with the operator's credentials.
 
-It stops at the first success. It also stops at a **DNS failure** — the host
-does not exist from here, so no other transport will find it — and reports the
-machine as offline. A connect or TLS failure is per transport, not per host:
-443 blocked with 22 open is common on a company network, and stopping there
-would break a `git@` lock that works today. Failures are classified from Git's
-stderr with the "cannot reach" phrases checked before the "refused" ones,
-because `ssh` prints "Could not read from remote repository" for both.
+It stops at the first success. When an HTTPS attempt cannot resolve or cannot
+connect to the host, the other HTTPS attempt is skipped — it would meet the
+same host and port — but SSH is still asked: 443 blocked with 22 open is
+common on a company network, and an `~/.ssh/config` `Host github-work` is a
+name only `ssh` can resolve (review: ending the ladder on a DNS failure broke
+every such alias). The machine is reported offline only when no transport
+resolved the host. A local write failure ends the ladder as itself; a
+failure that is neither access nor offline is reported as an acquisition
+failure, not blamed on credentials. SSH carries `ConnectTimeout=15`.
 
 The winner is remembered inside the mirror it reached (`transport.json`,
 beside the bare repository in the cache tier), so a private repository's next
@@ -108,6 +110,10 @@ poisoned entry can cost only order, never destination: the ladder has one host.
 Anonymous first, rather than "whatever worked for this host last time",
 because public/private is a property of the repository, not the host, and
 because a credential must not be offered to a request that did not need one.
+
+**A failed refresh changes nothing.** `origin` is pointed at each transport as
+it is tried and put back when none answers; refs a `--prune` removed on an
+empty answer are restored.
 
 **The mirror is judged by the identity it remembers.** The guard in
 `mirror.rs` compares the identity in `transport.json` — or, for a mirror
@@ -149,6 +155,14 @@ a host named in a checked-in `agents.yaml` could collect the operator's public
 keys and identify them. The failure says how to trust the host
 (`ssh -T git@<host>` once). OpenSSH finds `~/.ssh` through `getpwuid`, not
 `$HOME`, so `~/.ssh/config` applies in both environments.
+
+**Helpers never interact.** `credential.interactive=false` is pushed after the
+operator's own settings, and `GCM_INTERACTIVE=never` set: a host named in
+someone else's `agents.yaml` must not be able to open a browser login.
+
+**The operator's config is read outside any repository.** `git config` runs
+with `GIT_DIR` set to an empty directory, so a repository enclosing the
+temporary directory cannot contribute a `credential.helper=!…`.
 
 **Redirects do not carry credentials elsewhere.** The helper rung sets
 `http.followRedirects=false`, so a redirect to another host fails instead of

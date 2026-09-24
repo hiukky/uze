@@ -348,7 +348,7 @@ fn a_forge_answering_with_a_login_page_is_a_refusal_not_a_repository() {
 }
 
 #[test]
-fn an_offline_machine_tries_no_credential() {
+fn an_offline_machine_is_reported_offline_after_asking_ssh_once() {
     let mut world = World::new("access-offline");
     world.with_agent();
 
@@ -362,7 +362,84 @@ fn an_offline_machine_tries_no_credential() {
         matches!(error, UzeError::RepositoryOffline { .. }),
         "{error}"
     );
-    assert!(world.ssh.calls().is_empty(), "no other transport was tried");
+    assert_eq!(
+        world.ssh.calls().len(),
+        1,
+        "ssh is still asked once — its own config may name a host DNS does not — \
+         and the credentialed HTTPS attempt is skipped"
+    );
+    assert!(error.to_string().contains("skipped"), "{error}");
+}
+
+#[test]
+fn an_ssh_host_alias_dns_does_not_know_is_reached_over_ssh() {
+    let mut world = World::new("access-ssh-alias");
+    world.publish("team/plugins");
+    world.with_agent();
+
+    let registration = world
+        .application()
+        .marketplace()
+        .register("git@forge-alias.test:team/plugins.git")
+        .unwrap();
+
+    assert_eq!(
+        registration.identity,
+        "https://forge-alias.test/team/plugins"
+    );
+    assert!(
+        world
+            .ssh
+            .calls()
+            .iter()
+            .any(|call| call.contains("git@forge-alias.test")),
+        "{:?}",
+        world.ssh.calls()
+    );
+}
+
+#[test]
+fn a_port_that_does_not_answer_is_asked_over_https_once() {
+    let world = World::new("access-closed-once");
+    let url = format!("http://127.0.0.1:{}/team/plugins", closed_port());
+
+    let error = world
+        .application()
+        .marketplace()
+        .register(&url)
+        .unwrap_err()
+        .to_string();
+
+    assert!(
+        error.contains("https (credentials): skipped"),
+        "the credentialed HTTPS attempt would meet the same closed port: {error}"
+    );
+}
+
+#[test]
+fn a_refresh_nobody_answers_leaves_the_mirror_as_it_was() {
+    let world = World::new("access-failed-refresh");
+    world.publish("team/plugins");
+    let server = GitHttpServer::start(&world.forge, None, Answer::Git);
+    let url = server.url("team/plugins");
+    world.application().marketplace().register(&url).unwrap();
+    let mirror = world.mirror();
+    let refs = isolated_git_in(&mirror, &["for-each-ref"]);
+
+    server.answer_with(Answer::LoginPage);
+    let refreshed = uze_core::acquisition::mirror::ensure(&url, &url, &mirror);
+
+    assert!(refreshed.is_err(), "a login page is not a repository");
+    assert_eq!(
+        isolated_git_in(&mirror, &["for-each-ref"]),
+        refs,
+        "an empty answer pruned nothing"
+    );
+    assert_eq!(
+        isolated_git_in(&mirror, &["remote", "get-url", "origin"]),
+        url,
+        "origin still names the transport the mirror is remembered by"
+    );
 }
 
 #[test]
@@ -452,6 +529,23 @@ fn a_short_locator_asks_one_host_and_suggests_the_others() {
     assert!(other.requests().is_empty(), "another host was asked");
     assert!(!asked.requests().is_empty());
     assert!(error.contains("there:team/plugins"), "{error}");
+}
+
+#[test]
+fn a_failure_under_an_organisation_alias_suggests_paths_that_resolve() {
+    let world = World::new("access-org-hint");
+    let server = GitHttpServer::start(&world.forge, None, Answer::Git);
+    let application = world.application();
+    let market = application.marketplace();
+    market.define_host("org", &server.url("my-org")).unwrap();
+
+    let error = market.register("org:plugins").unwrap_err().to_string();
+
+    assert!(error.contains("github:my-org/plugins"), "{error}");
+    assert!(
+        !error.contains("org:my-org"),
+        "the alias asked is never suggested: {error}"
+    );
 }
 
 #[test]

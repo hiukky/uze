@@ -605,32 +605,41 @@ fn suggesting_other_hosts(
     source: &PackageSource,
     hosts: &uze_core::hosts::Hosts,
 ) -> UzeError {
-    use acquisition::forge::HostAliases;
     let PackageSource::Git { url, .. } = source else {
         return error;
     };
-    let Some(host) = acquisition::forge::host_of(url) else {
+    // The repository's path from its host's root — `my-org/plugins` even
+    // when it was typed as `org:plugins` — is the one name another host
+    // could hold it under, and only an alias for a host's root spells it.
+    let Some(path) = url
+        .split_once("://")
+        .and_then(|(_, rest)| rest.split_once('/'))
+        .map(|(_, path)| path.trim_matches('/'))
+        .filter(|path| !path.is_empty())
+    else {
         return error;
     };
-    let asked = hosts
+    // Host and port: two forges on one machine are two places to look.
+    let authority = |url: &str| {
+        url.split_once("://")
+            .map(|(_, rest)| rest.split('/').next().unwrap_or_default().to_lowercase())
+    };
+    let asked = authority(url);
+    let others: Vec<String> = hosts
         .entries()
         .into_iter()
-        .find(|entry| acquisition::forge::host_of(&entry.base).as_deref() == Some(host.as_str()));
-    let path = asked
-        .as_ref()
-        .and_then(|entry| url.strip_prefix(entry.base.trim_end_matches('/')))
-        .unwrap_or_default()
-        .trim_start_matches('/')
-        .to_owned();
-    if path.is_empty() {
+        .filter(|entry| {
+            let at_root = entry
+                .base
+                .split_once("://")
+                .is_some_and(|(_, rest)| !rest.trim_end_matches('/').contains('/'));
+            at_root && authority(&entry.base) != asked
+        })
+        .map(|entry| format!("{}:{path}", entry.alias))
+        .collect();
+    if others.is_empty() {
         return error;
     }
-    let others: Vec<String> = hosts
-        .aliases()
-        .into_iter()
-        .filter(|alias| Some(alias) != asked.as_ref().map(|entry| &entry.alias))
-        .map(|alias| format!("{alias}:{path}"))
-        .collect();
     let hint = format!("If it lives elsewhere: {}", others.join(", "));
     match error {
         UzeError::RepositoryAccessRefused { detail } => UzeError::RepositoryAccessRefused {

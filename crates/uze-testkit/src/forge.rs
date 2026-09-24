@@ -36,6 +36,7 @@ pub struct GitHttpServer {
     address: SocketAddr,
     stop: Arc<AtomicBool>,
     requests: Arc<Mutex<Vec<String>>>,
+    answer: Arc<Mutex<Answer>>,
 }
 
 impl GitHttpServer {
@@ -49,9 +50,11 @@ impl GitHttpServer {
             format!("Basic {}", base64(format!("{user}:{password}").as_bytes()))
         });
         let root = root.to_path_buf();
+        let answer = Arc::new(Mutex::new(answer));
         {
             let stop = stop.clone();
             let requests = requests.clone();
+            let answer = answer.clone();
             thread::spawn(move || {
                 for stream in listener.incoming() {
                     if stop.load(Ordering::SeqCst) {
@@ -60,7 +63,7 @@ impl GitHttpServer {
                     let Ok(stream) = stream else { continue };
                     let root = root.clone();
                     let expected = expected.clone();
-                    let answer = answer.clone();
+                    let answer = answer.lock().expect("answer").clone();
                     let requests = requests.clone();
                     thread::spawn(move || {
                         let _ = serve(stream, &root, expected.as_deref(), &answer, &requests);
@@ -72,7 +75,14 @@ impl GitHttpServer {
             address,
             stop,
             requests,
+            answer,
         }
+    }
+
+    /// Answers every later request this way — a forge that starts serving
+    /// a login page where it served a repository.
+    pub fn answer_with(&self, answer: Answer) {
+        *self.answer.lock().expect("answer") = answer;
     }
 
     /// `http://127.0.0.1:<port>/<path>`.
@@ -333,6 +343,13 @@ impl FakeSsh {
             r#"#!/bin/sh
 printf '%s\n' "$*" >> '{log}'
 [ "$1" = "-G" ] && exit 0
+for argument; do
+  case "$argument" in
+    *.invalid)
+      echo "ssh: Could not resolve hostname ${{argument#*@}}: Name or service not known" >&2
+      exit 255 ;;
+  esac
+done
 if [ -z "$SSH_AUTH_SOCK" ]; then
   echo "git@forge: Permission denied (publickey)." >&2
   exit 255

@@ -373,15 +373,20 @@ canonical form without a conflict.
 
 A fetch tries anonymous HTTPS, then HTTPS with the operator's credentials,
 then SSH at `git@<host>:<path>.git` — the same host and path every time, so
-no credential is ever offered to a host the identity does not name. A host
-that does not resolve ends the ladder as offline; any other failure is that
-transport's, and the next is asked. A short `owner/repo` resolves against
+no credential is ever offered to a host the identity does not name, and no
+helper may interact. A host HTTPS cannot resolve or reach skips the other
+HTTPS attempt but not SSH, whose own config may name it; offline is reported
+only when nothing resolved it. A refresh nobody answers leaves the mirror's
+refs and remote as they were. A short `owner/repo` resolves against
 one host and is never tried on another: a forge answers a private
 repository the caller cannot see exactly as it answers a missing one.
 
 > `tests/packages/access.rs::a_public_marketplace_is_reached_with_no_credential_at_all`
 > `tests/packages/access.rs::a_private_marketplace_is_reached_over_ssh_and_ssh_is_tried_first_next_time`
-> `tests/packages/access.rs::an_offline_machine_tries_no_credential`
+> `tests/packages/access.rs::an_offline_machine_is_reported_offline_after_asking_ssh_once`
+> `tests/packages/access.rs::an_ssh_host_alias_dns_does_not_know_is_reached_over_ssh`
+> `tests/packages/access.rs::a_refresh_nobody_answers_leaves_the_mirror_as_it_was`
+> `crates/uze-core/src/package/acquisition/git.rs::tests::a_credentialed_attempt_never_lets_a_helper_prompt`
 > `tests/packages/access.rs::a_short_locator_asks_one_host_and_suggests_the_others`
 
 ### One machine mutation at a time, and never two

@@ -198,6 +198,25 @@ pub fn ssh_endpoint(identity: &str) -> Option<String> {
     (!path.is_empty()).then(|| format!("git@{host}:{path}.git"))
 }
 
+/// What `ssh` is pointed at to reach an SSH URL — `user@host`, with
+/// `-p <port>` before it when the URL names a port — for a person asked to
+/// accept a host's key once.
+pub fn ssh_destination(url: &str) -> Option<String> {
+    if let Some(rest) = url.strip_prefix("ssh://") {
+        let (authority, _) = split_authority(rest);
+        let (user, host) = authority.rsplit_once('@').unwrap_or(("git", authority));
+        // A colon inside `[…]` belongs to an IPv6 address, not to a port.
+        let port = host
+            .rsplit_once(':')
+            .filter(|(address, _)| !address.contains('[') || address.ends_with(']'));
+        return Some(match port {
+            Some((host, port)) => format!("-p {port} {user}@{host}"),
+            None => format!("{user}@{host}"),
+        });
+    }
+    scp(url).map(|(user, host, _)| format!("{user}@{host}"))
+}
+
 /// `user@host:path`, Git's `scp`-like spelling of an SSH URL. A colon after
 /// the first slash is part of a path, not a host separator.
 fn scp(url: &str) -> Option<(&str, &str, &str)> {
@@ -566,6 +585,19 @@ mod tests {
         assert_eq!(attempts.len(), 1);
         assert_eq!(attempts[0].access, Access::Credentialed);
         assert_eq!(attempts[0].label(), "ssh");
+    }
+
+    #[test]
+    fn an_ssh_destination_keeps_its_user_and_port() {
+        assert_eq!(
+            ssh_destination("git@github.com:hiukky/ai.git").as_deref(),
+            Some("git@github.com")
+        );
+        assert_eq!(
+            ssh_destination("ssh://deploy@git.internal:2222/team/plugins").as_deref(),
+            Some("-p 2222 deploy@git.internal")
+        );
+        assert_eq!(ssh_destination("https://github.com/hiukky/ai"), None);
     }
 
     #[test]

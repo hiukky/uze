@@ -29,7 +29,7 @@ use crate::{
 /// the process on the terminal it shares with UZE, and an unknown host
 /// collecting the operator's public keys could identify them from a host
 /// named in somebody else's `agents.yaml`.
-const SSH_COMMAND: &str = "ssh -o BatchMode=yes -o StrictHostKeyChecking=yes";
+const SSH_COMMAND: &str = "ssh -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=15";
 
 /// How this machine reaches the network, which a repository cannot
 /// influence. libcurl reads `http_proxy` only in lowercase, the others in
@@ -378,11 +378,10 @@ pub(super) fn run_as(
                 .env("PATH", std::env::var("PATH").unwrap_or_default());
         }
         Access::Credentialed => {
-            for (key, _) in std::env::vars_os() {
-                if key.to_string_lossy().starts_with("GIT_") {
-                    command.env_remove(key);
-                }
-            }
+            without_git_environment(&mut command, &[]);
+            // A helper that would open a browser or a dialog for a host a
+            // project named is a login page somebody else chose.
+            command.env("GCM_INTERACTIVE", "never");
         }
     }
     let protocols = if reach.plain_http {
@@ -396,20 +395,14 @@ pub(super) fn run_as(
         .env("GIT_TERMINAL_PROMPT", "0")
         .env("GIT_ASKPASS", "")
         .env("GIT_ALLOW_PROTOCOL", protocols);
-    let mut config = vec![("core.sshCommand".to_owned(), SSH_COMMAND.to_owned())];
     if reach.access != Access::Local {
         for key in NETWORK_ENVIRONMENT {
             if let Some(value) = std::env::var_os(key) {
                 command.env(key, value);
             }
         }
-        config.extend(operator_config(NETWORK_KEYS));
     }
-    if reach.access == Access::Credentialed {
-        config.extend(operator_config(CREDENTIAL_KEYS));
-        // A redirect must not carry the helper's answer to another host.
-        config.push(("http.followRedirects".to_owned(), "false".to_owned()));
-    }
+    let config = pushed_config(reach);
     command.env("GIT_CONFIG_COUNT", config.len().to_string());
     for (index, (key, value)) in config.iter().enumerate() {
         command
@@ -517,6 +510,34 @@ pub(super) fn run_as(
     Ok(String::from_utf8_lossy(&stdout_bytes).into_owned())
 }
 
+/// The configuration an attempt carries, beyond the stripped environment's.
+fn pushed_config(reach: Reach) -> Vec<(String, String)> {
+    let mut config = vec![("core.sshCommand".to_owned(), SSH_COMMAND.to_owned())];
+    if reach.access != Access::Local {
+        config.extend(operator_config(NETWORK_KEYS));
+    }
+    if reach.access == Access::Credentialed {
+        config.extend(operator_config(CREDENTIAL_KEYS));
+        // After the operator's own, so no helper setting of theirs turns it
+        // back on: a helper asks nobody anything for a host a project named.
+        config.push(("credential.interactive".to_owned(), "false".to_owned()));
+        // A redirect must not carry the helper's answer to another host.
+        config.push(("http.followRedirects".to_owned(), "false".to_owned()));
+    }
+    config
+}
+
+/// Removes every `GIT_*` variable from `command`'s inherited environment,
+/// except those named in `keep`.
+fn without_git_environment(command: &mut Command, keep: &[&str]) {
+    for (key, _) in std::env::vars_os() {
+        let name = key.to_string_lossy();
+        if name.starts_with("GIT_") && !keep.contains(&name.as_ref()) {
+            command.env_remove(key);
+        }
+    }
+}
+
 /// The operator's own Git settings whose keys match `pattern`, in the order
 /// Git reads them, across every scope and every `[include]`.
 ///
@@ -567,16 +588,16 @@ fn read_operator_config(pattern: &str) -> Vec<(String, String)> {
         "GIT_CONFIG_GLOBAL",
         "GIT_CONFIG_SYSTEM",
     ];
+    // An empty directory as the repository, so no repository's own config
+    // can answer — whatever encloses the temporary directory.
+    let no_repository = std::env::temp_dir().join("uze-no-repository");
+    let _ = fs::create_dir_all(&no_repository);
     let mut command = Command::new("git");
-    for (key, _) in std::env::vars_os() {
-        let name = key.to_string_lossy();
-        if name.starts_with("GIT_") && !WHICH_FILES.contains(&name.as_ref()) {
-            command.env_remove(key);
-        }
-    }
+    without_git_environment(&mut command, WHICH_FILES);
     let Ok(output) = command
         .args(["config", "--includes", "-z", "--get-regexp", pattern])
-        .current_dir(std::env::temp_dir())
+        .env("GIT_DIR", &no_repository)
+        .current_dir(&no_repository)
         .stdin(Stdio::null())
         .stderr(Stdio::null())
         .output()
@@ -606,11 +627,14 @@ fn read_operator_config(pattern: &str) -> Vec<(String, String)> {
 /// starting from `remembered` when it is one of them, and answers with the
 /// first that works and the transport that did.
 ///
-/// A host that does not resolve ends the ladder: it is offline, and no
-/// other transport will find it. Anything else — a refusal, a closed port,
-/// a TLS error — is that transport's answer, and the next is asked. When
-/// none works, one error names every transport tried and what each said.
-/// A repository with a single transport answers exactly as it always did.
+/// The HTTPS attempts share a host, so when one of them cannot resolve or
+/// cannot connect to it, the other is skipped rather than paid for again —
+/// but SSH is still asked, because the operator's `~/.ssh/config` may name
+/// a host (`github-work`) that DNS has never heard of. The repository is
+/// offline only when no transport resolved it. A failure to write locally
+/// is not a question for another transport and is answered at once. When
+/// none works, one error names every transport and what each said. A
+/// repository with a single transport answers exactly as it always did.
 pub(super) fn through<T>(
     url: &str,
     remembered: Option<&Transport>,
@@ -628,24 +652,62 @@ pub(super) fn through<T>(
     }
     let identity = forge::canonical(url);
     let mut failures = Vec::new();
+    let mut https_unreachable: Option<&'static str> = None;
+    let (mut unresolved, mut refused) = (0, 0);
     for transport in transports {
+        let over_https = transport.url.contains("://") && !transport.url.starts_with("ssh://");
+        if over_https && let Some(why) = https_unreachable {
+            failures.push(format!("  {}: skipped, {why}", transport.label()));
+            unresolved += usize::from(why == UNRESOLVED);
+            continue;
+        }
         match attempt(&transport) {
             Ok(answer) => return Ok((answer, transport)),
-            Err(UzeError::RepositoryOffline { detail }) => {
-                return Err(UzeError::RepositoryOffline {
-                    detail: format!("{identity}\n{detail}"),
-                });
+            Err(error @ (UzeError::Write { .. } | UzeError::Read { .. })) => return Err(error),
+            Err(error) => {
+                let offline = matches!(error, UzeError::RepositoryOffline { .. });
+                unresolved += usize::from(offline);
+                refused += usize::from(matches!(error, UzeError::RepositoryAccessRefused { .. }));
+                if over_https && offline {
+                    https_unreachable = Some(UNRESOLVED);
+                } else if over_https && cannot_connect(&error.to_string()) {
+                    https_unreachable = Some("the host did not answer over HTTPS");
+                }
+                failures.push(format!(
+                    "  {}: {}",
+                    transport.label(),
+                    reason_of(&error, &transport)
+                ));
             }
-            Err(error) => failures.push(format!(
-                "  {}: {}",
-                transport.label(),
-                reason_of(&error, &transport)
-            )),
         }
     }
-    Err(UzeError::RepositoryAccessRefused {
-        detail: format!("{identity}\n{}", failures.join("\n")),
-    })
+    let detail = format!("{identity}\n{}", failures.join("\n"));
+    if unresolved == failures.len() {
+        return Err(UzeError::RepositoryOffline { detail });
+    }
+    if refused > 0 {
+        return Err(UzeError::RepositoryAccessRefused { detail });
+    }
+    Err(UzeError::AcquisitionFailed(detail))
+}
+
+const UNRESOLVED: &str = "the host does not resolve";
+
+/// Whether an attempt failed before any HTTP was spoken — a port that
+/// refuses or never answers, or TLS that did not complete — which the other
+/// HTTPS attempt, on the same host and port, would meet again.
+fn cannot_connect(complaint: &str) -> bool {
+    const UNREACHABLE: &[&str] = &[
+        "failed to connect",
+        "couldn't connect",
+        "connection refused",
+        "connection timed out",
+        "timed out",
+        "ssl",
+        "tls",
+    ];
+    let lowered = complaint.to_lowercase();
+    UNREACHABLE.iter().any(|phrase| lowered.contains(phrase))
 }
 
 /// Whether what an attempt brought back is a repository at all.
@@ -667,12 +729,14 @@ pub(super) fn holds_a_commit(directory: &Path, transport: &Transport) -> Result<
     Ok(())
 }
 
-/// The one line of a failed attempt a person needs: Git's last word, with
-/// its `fatal:` prefix gone, and how to accept an SSH host the operator has
+/// The one line of a failed attempt a person needs: Git's own complaint
+/// rather than its advice, and how to accept an SSH host the operator has
 /// never connected to.
 fn reason_of(error: &UzeError, transport: &Transport) -> String {
     let message = match error {
-        UzeError::RepositoryAccessRefused { detail } => detail.clone(),
+        UzeError::RepositoryAccessRefused { detail } | UzeError::RepositoryOffline { detail } => {
+            detail.clone()
+        }
         other => other.to_string(),
     };
     // Git's own words, not its advice: the line that says what went wrong
@@ -697,17 +761,12 @@ fn reason_of(error: &UzeError, transport: &Transport) -> String {
         .copied()
         .unwrap_or("failed");
     let line = line.rsplit_once("fatal: ").map_or(line, |(_, rest)| rest);
-    let line = line.to_owned();
     if line.to_lowercase().contains("host key verification failed")
-        && let Some(host) = forge::host_of(&if transport.url.contains("://") {
-            transport.url.clone()
-        } else {
-            format!("ssh://{}", transport.url.replacen(':', "/", 1))
-        })
+        && let Some(destination) = forge::ssh_destination(&transport.url)
     {
-        return format!("{line} (accept the host once with `ssh -T git@{host}`)");
+        return format!("{line} (accept the host once with `ssh -T {destination}`)");
     }
-    line
+    line.to_owned()
 }
 
 /// Whether Git's complaint is about *reaching* the repository rather than
@@ -851,6 +910,42 @@ mod tests {
                 "credential.https://github.com.helper".to_owned(),
                 "!gh auth git-credential".to_owned()
             )]
+        );
+        drop(environment);
+        let _ = fs::remove_dir_all(home);
+    }
+
+    /// A helper is never allowed to ask anybody anything for a host a
+    /// project named, whatever the operator configured.
+    #[test]
+    fn a_credentialed_attempt_never_lets_a_helper_prompt() {
+        let home = uze_testkit::temp::scratch("no-interactive-helper");
+        fs::write(
+            home.join(".gitconfig"),
+            "[credential]\n\thelper = manager\n\tinteractive = always\n",
+        )
+        .unwrap();
+        let mut environment = uze_testkit::env::scope();
+        environment
+            .set("HOME", &home)
+            .set("XDG_CONFIG_HOME", home.join("xdg"))
+            .set("GIT_CONFIG_NOSYSTEM", "1")
+            .remove("GIT_CONFIG_GLOBAL");
+        let transport = Transport {
+            url: "https://example.invalid/x".to_owned(),
+            access: Access::Credentialed,
+        };
+
+        let config = pushed_config(Reach::of(&transport));
+
+        let interactive: Vec<_> = config
+            .iter()
+            .filter(|(key, _)| key == "credential.interactive")
+            .collect();
+        assert_eq!(
+            interactive.last().map(|(_, value)| value.as_str()),
+            Some("false"),
+            "{config:?}"
         );
         drop(environment);
         let _ = fs::remove_dir_all(home);

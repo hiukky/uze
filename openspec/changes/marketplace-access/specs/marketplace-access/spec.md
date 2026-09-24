@@ -91,7 +91,7 @@ For an `https://` identity, the system SHALL attempt anonymous HTTPS first, with
 - **THEN** the install succeeds over anonymous HTTPS to `github.com/hiukky/ai`
 
 ### Requirement: A private repository is reached with the operator's own credentials, on the same host
-When anonymous HTTPS fails for any reason other than the host not resolving, the system SHALL try HTTPS with the operator's configured Git credentials, and then SSH at `git@<host>:<path>.git`, against the same host and repository path. The operator's `~/.ssh/config` SHALL be honoured. SSH SHALL run non-interactively and SHALL refuse a host whose key the operator has not accepted before offering any key. The authenticated HTTPS attempt SHALL NOT follow a redirect. The system SHALL NOT store, print, trace, pass on a command line, or write into any file a credential it used, and SHALL NOT prompt. The transport that answered SHALL be remembered per repository in the cache tier and tried first on the next fetch; deleting that memory SHALL cost only the attempts it saved. When the host does not resolve, the system SHALL report the machine as offline and SHALL NOT try another transport.
+When anonymous HTTPS fails for any reason other than the host not resolving, the system SHALL try HTTPS with the operator's configured Git credentials, and then SSH at `git@<host>:<path>.git`, against the same host and repository path. The operator's `~/.ssh/config` SHALL be honoured. SSH SHALL run non-interactively and SHALL refuse a host whose key the operator has not accepted before offering any key. The authenticated HTTPS attempt SHALL NOT follow a redirect. The system SHALL NOT store, print, trace, pass on a command line, or write into any file a credential it used, and SHALL NOT prompt. The transport that answered SHALL be remembered per repository in the cache tier and tried first on the next fetch; deleting that memory SHALL cost only the attempts it saved. When one HTTPS attempt cannot resolve or cannot connect to the host, the other HTTPS attempt SHALL be skipped, and SSH SHALL still be tried, since the operator's SSH configuration may name a host DNS does not know; the system SHALL report the machine as offline only when no transport resolved the host. A failure to write locally SHALL be reported as it is, never as a question of access.
 
 #### Scenario: Private over SSH with a key in the agent
 - **WHEN** the repository is private, the operator's key is loaded in `ssh-agent`, and no credential helper is configured
@@ -122,11 +122,23 @@ When anonymous HTTPS fails for any reason other than the host not resolving, the
 - **THEN** the command fails, nothing is recorded, and one message names the identity, each transport tried, and the reason each gave
 
 #### Scenario: Offline
-- **WHEN** the host name does not resolve
-- **THEN** the failure says the machine is offline and no authenticated transport is attempted
+- **WHEN** the host name resolves neither over HTTPS nor through the operator's SSH configuration
+- **THEN** the failure says the machine is offline, and the credentialed HTTPS attempt was skipped
+
+#### Scenario: An SSH host alias
+- **WHEN** the operator adds `git@github-work:org/plugins.git`, where `github-work` is a `Host` in their `~/.ssh/config` that DNS does not know
+- **THEN** the fetch succeeds over SSH after anonymous HTTPS fails to resolve the name
+
+#### Scenario: A port that does not answer is asked once over HTTPS
+- **WHEN** the host's HTTPS port refuses or never answers
+- **THEN** the credentialed HTTPS attempt is skipped and SSH is asked next
+
+#### Scenario: A refresh nobody answers changes nothing
+- **WHEN** a mirror's refresh fails on every transport, including a forge that answers with an empty repository
+- **THEN** the mirror keeps every ref it had and the remote it was last reached by
 
 ### Requirement: The acquisition environment admits authentication and the operator's network, and no configuration
-Every attempt SHALL use the operator's proxy settings and certificate authority settings, from the environment and from their Git config. The authenticated attempts SHALL additionally use the operator's environment, without any `GIT_*` variable, and the operator's `credential.*` settings with their URL scopes. No other setting of the operator's system or global Git config SHALL apply to any attempt. Repository hooks SHALL stay disabled, submodules SHALL NOT be fetched, and no terminal prompt SHALL be shown. Plain `http://` SHALL be allowed only to a loopback host. A URL carrying inline credentials SHALL still be refused before use.
+Every attempt SHALL use the operator's proxy settings and certificate authority settings, from the environment and from their Git config. The authenticated attempts SHALL additionally use the operator's environment, without any `GIT_*` variable, and the operator's `credential.*` settings with their URL scopes, read from their system and global configuration only, never from a repository's; and no credential helper SHALL be allowed to interact (`credential.interactive=false`), since the host was named by a project, not by the operator. No other setting of the operator's system or global Git config SHALL apply to any attempt. Repository hooks SHALL stay disabled, submodules SHALL NOT be fetched, and no terminal prompt SHALL be shown. Plain `http://` SHALL be allowed only to a loopback host. A URL carrying inline credentials SHALL still be refused before use.
 
 #### Scenario: Behind a company proxy with a private CA
 - **WHEN** the operator's environment sets `https_proxy` and their Git config sets `http.sslCAInfo` for a self-hosted forge
