@@ -86,12 +86,9 @@ fn rewrite_plugin_root_for_claude(value: &serde_json::Value) -> serde_json::Valu
         serde_json::Value::String(text) => {
             serde_json::Value::String(text.replace("${PLUGIN_ROOT}", "${CLAUDE_PLUGIN_ROOT}"))
         }
-        serde_json::Value::Array(items) => serde_json::Value::Array(
-            items
-                .iter()
-                .map(|item| rewrite_plugin_root_for_claude(item))
-                .collect(),
-        ),
+        serde_json::Value::Array(items) => {
+            serde_json::Value::Array(items.iter().map(rewrite_plugin_root_for_claude).collect())
+        }
         serde_json::Value::Object(entries) => serde_json::Value::Object(
             entries
                 .iter()
