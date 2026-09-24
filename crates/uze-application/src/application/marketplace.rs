@@ -67,6 +67,62 @@ pub(crate) struct MirrorAt<'a> {
     pub(crate) fetched: &'a std::sync::Mutex<Vec<PathBuf>>,
 }
 
+/// Brings every marketplace an operation is about to read up to date at
+/// once, so a project drawing from four marketplaces waits for the slowest
+/// of them rather than for all four in a row.
+///
+/// Best effort: one that fails is left for the operation to reach on its
+/// own, which is where its failure is reported. One this machine reads from
+/// a linked checkout has no mirror to fetch.
+pub(crate) fn prefetch_mirrors(
+    home: &uze_core::UzeHome,
+    fetched: &std::sync::Mutex<Vec<PathBuf>>,
+    wanted: &[(String, MarketplaceRequest)],
+    recent: Option<std::time::Duration>,
+) {
+    let mut seen: Vec<&str> = Vec::new();
+    let wanted: Vec<&(String, MarketplaceRequest)> = wanted
+        .iter()
+        .filter(|(name, _)| {
+            let first = !seen.contains(&name.as_str());
+            seen.push(name);
+            first
+        })
+        .filter(|(name, _)| {
+            !uze_core::state::marketplace_get(home, name)
+                .ok()
+                .flatten()
+                .is_some_and(|record| record.link.is_some())
+        })
+        .collect();
+    if wanted.len() < 2 {
+        return;
+    }
+    let parent = tracing::Span::current();
+    std::thread::scope(|scope| {
+        for (name, request) in wanted {
+            let parent = parent.clone();
+            scope.spawn(move || {
+                let directory = super::marketplace_catalogue::mirror_dir(home, name);
+                let reached = parent.in_scope(|| {
+                    acquisition::mirror::ensure_for(
+                        &request.repository.fetch,
+                        &request.repository.identity,
+                        &directory,
+                        request.reference.as_deref(),
+                        recent,
+                    )
+                });
+                if reached.is_ok()
+                    && let Ok(mut fetched) = fetched.lock()
+                {
+                    fetched.push(directory);
+                }
+            });
+        }
+    });
+}
+
 /// How long a mirror's answer about a branch stands for adding a plugin: as
 /// long as the catalogue it was chosen from stands. What a listing showed is
 /// what adding installs, rather than something newer nobody has seen;

@@ -302,6 +302,16 @@ impl Project<'_> {
             });
         }
 
+        let wanted: Vec<(String, MarketplaceRequest)> = declared
+            .iter()
+            .filter_map(|(_, marketplace)| {
+                let declared = manifest.marketplaces.get(marketplace)?;
+                let source = Self::declared_fetch_source(&canonical, marketplace, declared).ok()?;
+                Some((marketplace.clone(), MarketplaceRequest::of(&source).ok()?))
+            })
+            .collect();
+        super::marketplace::prefetch_mirrors(&self.0.home, &self.0.mirrors_fetched, &wanted, None);
+
         // No mutation lock here: `Plugins::update` takes one per plugin and
         // it is not reentrant. The lock file this writes is a project file,
         // which that lock does not govern.
@@ -475,6 +485,55 @@ impl Project<'_> {
         let _mutation = uze_core::persistence::MutationLock::acquire(&self.0.home)?;
         let mut installed_plugins = Vec::new();
         let mut skipped: Vec<SkippedPlugin> = Vec::new();
+
+        // Every marketplace this install is about to read, fetched at once:
+        // what the manifest declares and the lock does not answer for, and
+        // what the lock records that the Store does not hold yet.
+        let declared: Vec<(String, MarketplaceRequest)> =
+            project_lock::stale_against(&manifest, &lock)
+                .iter()
+                .filter_map(|stale| {
+                    let declared = manifest.marketplaces.get(&stale.marketplace)?;
+                    let source =
+                        Self::declared_fetch_source(&canonical, &stale.marketplace, declared)
+                            .ok()?;
+                    Some((
+                        stale.marketplace.clone(),
+                        MarketplaceRequest::of(&source).ok()?,
+                    ))
+                })
+                .collect();
+        super::marketplace::prefetch_mirrors(
+            &self.0.home,
+            &self.0.mirrors_fetched,
+            &declared,
+            Some(super::marketplace::RECENT),
+        );
+        let locked: Vec<(String, MarketplaceRequest)> = self
+            .0
+            .locked_plugins_missing(&lock)
+            .into_iter()
+            .filter_map(|(_, plugin)| {
+                let recorded = lock.marketplaces.get(&plugin.marketplace)?;
+                Some((
+                    plugin.marketplace.clone(),
+                    MarketplaceRequest {
+                        repository: uze_core::acquisition::marketplace::MarketplaceRepository {
+                            fetch: recorded.git.clone(),
+                            identity: recorded.git.clone(),
+                        },
+                        reference: Some(recorded.revision.clone()),
+                        subdirectory: recorded.subdirectory.clone(),
+                    },
+                ))
+            })
+            .collect();
+        super::marketplace::prefetch_mirrors(
+            &self.0.home,
+            &self.0.mirrors_fetched,
+            &locked,
+            Some(super::marketplace::RECENT),
+        );
 
         // Resolution comes first: `agents.yaml` is what the project asked
         // for and the lock is only what asking produced, so a declaration
