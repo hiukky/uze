@@ -31,9 +31,24 @@ The system SHALL, for `uze agent market create <name> [--at <dir>] [--descriptio
 - **WHEN** the requested name is already registered, or the target directory exists and is not an empty directory
 - **THEN** the command fails with a reason naming which precondition failed, and writes nothing
 
-#### Scenario: An existing marketplace is selected, not created
+#### Scenario: A standalone marketplace is selected by naming its directory
 - **WHEN** the agent already has a marketplace and passes `--market <name>` to a plugin-authoring verb
 - **THEN** the verb resolves the name against the machine registry's own answer and fails with a clear reason when the name is unknown; no new verb exists to "select" a marketplace
+
+### Requirement: A local marketplace is the project itself
+With `--local`, the marketplace the verb creates is the project the command runs in: `marketplace.json` at the project root and the plugins in `--plugins-dir` (default `plugins/`), exactly the layout this repository itself is one in. The project's own repository SHALL be the marketplace's repository — the scaffold SHALL NOT initialize a repository, make a commit, or write any Git state; the project's own commit flow carries the bytes. A project that already carries a `marketplace.json` SHALL be refused with its name and the direction to add the plugin directly. `--plugins-dir` SHALL be confined to the project (same name rule as a package id). Running `--local` outside any project SHALL fail naming the frontier choice.
+
+#### Scenario: A project becomes its own marketplace
+- **WHEN** an agent runs `uze agent market create tools --local` inside a project
+- **THEN** the project root carries `marketplace.json` (named `tools`) and `plugins/`, no commit was made by the scaffold, and `uze market list` answers for `tools`, linked to the project root
+
+#### Scenario: The local marketplace delivers the project's working tree
+- **WHEN** a plugin is scaffolded into the local marketplace and installed before the project commits anything
+- **THEN** the install acquires the working-tree content, because the link reads the checkout, not history
+
+#### Scenario: A project that is already a marketplace is refused, not extended
+- **WHEN** `uze agent market create <name> --local` runs where `marketplace.json` already exists
+- **THEN** the verb fails naming the existing marketplace and directing to `uze agent plugin create` instead
 
 ### Requirement: Plugin scaffold produces an installable plugin inside a marketplace
 The system SHALL, for `uze agent plugin create <name> --market <name> [--description <text>] [--hook] [--mcp] [--instructions]`, create `plugins/<plugin-name>/` inside the marketplace's checkout with: a `plugin.json` (name, description), a `skills/<skill-name>/SKILL.md` whose frontmatter carries the canonical `invoke: {model, user}` policy block, the optional capability files for each flag (`hooks.json`, `mcp.json`, an instruction resource), and the matching `plugins[]` entry added to the marketplace's `marketplace.json`. Every scaffolded file SHALL carry commented documentation explaining its fields, and the scaffold SHALL refuse to overwrite an existing plugin of the same name.

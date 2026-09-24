@@ -222,13 +222,27 @@ enum AgentAction {
 
 #[derive(Debug, Subcommand)]
 enum AgentMarketAction {
-    /// Create a marketplace: scaffold, commit, register, link — one step
+    /// Create a marketplace — the project's own with `--local`, or one
+    /// with a checkout of its own via `--at`
+    ///
+    /// With `--local`, the project is itself the marketplace:
+    /// `marketplace.json` at its root, plugins in `--plugins-dir` (default
+    /// `plugins/`) — no Git touched, no commit made, the project's own
+    /// flow carries them. With `--at <dir>`, the marketplace is a Git
+    /// repository born there, committed with the machine's Git identity,
+    /// and registered linked so installs read its working tree.
     Create {
         name: String,
-        /// Where the marketplace lives; the author's own text, so it is
-        /// created wherever this names
+        /// The project's own marketplace: the project the command runs in
+        /// is it
+        #[arg(long, conflicts_with = "at")]
+        local: bool,
+        /// Where a standalone marketplace lives — its own Git repository
         #[arg(long)]
-        at: PathBuf,
+        at: Option<PathBuf>,
+        /// The project's plugins directory (local only)
+        #[arg(long, default_value = "plugins", conflicts_with = "at")]
+        plugins_dir: String,
         #[arg(long)]
         description: Option<String>,
         #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
@@ -2880,10 +2894,50 @@ fn run_agent_market(app: &UzeApplication, action: AgentMarketAction) -> Result<(
     match action {
         AgentMarketAction::Create {
             name,
+            local,
             at,
+            plugins_dir,
             description,
             format,
         } => {
+            if local {
+                let current_dir = cwd()?;
+                let report = with_spinner(
+                    &format!("Scaffolding marketplace {name} in this project..."),
+                    "Failed to scaffold the marketplace",
+                    || {
+                        app.project().create_local_marketplace(
+                            &name,
+                            description.as_deref(),
+                            &plugins_dir,
+                            &current_dir,
+                        )
+                    },
+                )?;
+                emit(format, &report, |report| {
+                    format!(
+                        "{}\n{}",
+                        progress::report_title(
+                            "Marketplace created",
+                            Some(&format!(
+                                "{name} — this project is it; the manifest is at {}",
+                                report.root.display()
+                            ))
+                        ),
+                        progress::key_value(
+                            "Install from here",
+                            format!("uze install -m <plugin>@{name}"),
+                        )
+                    )
+                });
+                return Ok(());
+            }
+            let Some(at) = at else {
+                setup_usage_error(
+                    "choose a frontier: `--local` (this project is the \
+                                   marketplace) or `--at <dir>` (a standalone checkout)",
+                );
+            };
             let report = with_spinner(
                 &format!("Scaffolding marketplace {name}..."),
                 "Failed to scaffold the marketplace",

@@ -181,6 +181,127 @@ fn a_scaffolded_plugin_is_installable_before_any_second_commit() {
 }
 
 #[test]
+fn a_local_marketplace_is_the_project_itself_and_installs_immediately() {
+    let root = uze_testkit::temp::scratch("authoring-cli-local");
+    // The project is a real repository with a commit — a marketplace is a
+    // Git repository with a commit, and here the project's repo is it.
+    let project = root.join("project");
+    fs::write(
+        root.join(".gitconfig"),
+        "[user]\n\tname = Test\n\temail = t@example.invalid\n",
+    )
+    .unwrap();
+    let initialized = Command::new("git")
+        .env("GIT_CONFIG_GLOBAL", root.join(".gitconfig"))
+        .arg("-C")
+        .arg(&root)
+        .args([
+            "init",
+            "-q",
+            "-b",
+            "main",
+            project.to_string_lossy().as_ref(),
+        ])
+        .output()
+        .unwrap();
+    assert!(initialized.status.success());
+    fs::write(project.join("README.md"), "# demo\n").unwrap();
+    let committed = Command::new("git")
+        .env("GIT_CONFIG_GLOBAL", root.join(".gitconfig"))
+        .arg("-C")
+        .arg(&project)
+        .args(["add", "-A"])
+        .output()
+        .unwrap();
+    assert!(committed.status.success());
+    let commit = Command::new("git")
+        .env("GIT_CONFIG_GLOBAL", root.join(".gitconfig"))
+        .arg("-C")
+        .arg(&project)
+        .args(["commit", "-q", "-m", "first"])
+        .output()
+        .unwrap();
+    assert!(commit.status.success());
+    let created = uze(&root)
+        .current_dir(&project)
+        .args(["agent", "market", "create", "tools", "--local"])
+        .output()
+        .unwrap();
+    assert!(
+        created.status.success(),
+        "local create failed: {}",
+        String::from_utf8_lossy(&created.stderr)
+    );
+    // The manifest sits at the project root — the project is the
+    // marketplace — and no second commit was fabricated by the scaffold.
+    assert!(project.join("marketplace.json").is_file());
+    assert!(project.join("plugins").is_dir());
+    let commits = Command::new("git")
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .arg("-C")
+        .arg(&project)
+        .args(["rev-list", "--count", "HEAD"])
+        .output()
+        .unwrap();
+    assert_eq!(
+        String::from_utf8_lossy(&commits.stdout).trim(),
+        "1",
+        "the scaffold committed nothing; the project's flow owns it"
+    );
+
+    // A plugin authored into it is installable straight away.
+    let plugin = uze(&root)
+        .current_dir(&project)
+        .args(["agent", "plugin", "create", "greet", "--market", "tools"])
+        .output()
+        .unwrap();
+    assert!(
+        plugin.status.success(),
+        "plugin create failed: {}",
+        String::from_utf8_lossy(&plugin.stderr)
+    );
+    assert!(project.join("plugins/greet/plugin.json").is_file());
+    assert!(
+        fs::read_to_string(project.join("marketplace.json"))
+            .unwrap()
+            .contains("\"greet\"")
+    );
+
+    let check = uze(&root)
+        .current_dir(&project)
+        .args(["agent", "plugin", "check"])
+        .arg(project.join("plugins/greet"))
+        .output()
+        .unwrap();
+    assert!(check.status.success(), "scaffold must pass its own check");
+
+    // The install reads the project's working tree through the link.
+    let install = uze(&root)
+        .current_dir(&project)
+        .args(["install", "-m", "greet@tools"])
+        .output()
+        .unwrap();
+    assert!(
+        install.status.success(),
+        "install from the project marketplace failed: {}",
+        String::from_utf8_lossy(&install.stderr)
+    );
+
+    // A second marketplace in the same project is refused with the fact.
+    let again = uze(&root)
+        .current_dir(&project)
+        .args(["agent", "market", "create", "other", "--local"])
+        .output()
+        .unwrap();
+    assert!(!again.status.success());
+    let stderr = String::from_utf8_lossy(&again.stderr);
+    assert!(
+        stderr.contains("already"),
+        "the refusal says the project is already a marketplace: {stderr}"
+    );
+}
+
+#[test]
 fn a_plugin_that_would_fail_at_install_fails_check_first() {
     let root = uze_testkit::temp::scratch("authoring-cli-check");
     let at = root.join("my-market");

@@ -18,7 +18,11 @@ failure is an answer, not a dead end.
 Ask `uze market list` first. If a marketplace already fits, use its name in
 every later step; nothing new is created.
 
-Otherwise create one:
+Otherwise choose the frontier, and name it explicitly — the verb has one
+spelling for each:
+
+**Global — the marketplace has a checkout of its own** (the default choice
+when the person has not said where it belongs):
 
 ```bash
 uze agent market create <name> --at <directory> [--description "…"]
@@ -28,8 +32,7 @@ Choose `--at` outside every checkout — the operator's home (say
 `~/marketplace-<name>`) is the natural place. A marketplace is machine
 state, shared by every project on it; one created inside a worktree slot
 dies with the slot, and one created inside any repository is a nested
-repository that dirties that checkout's status. Inside a project only when
-the marketplace is deliberately that repository's own, versioned with it.
+repository that dirties that checkout's status.
 
 This scaffolds the directory as a Git repository (`marketplace.json`,
 `plugins/`, an initial commit), registers it with the machine, and links
@@ -38,6 +41,21 @@ files not committed yet, so authoring needs no publish step. If Git has no
 identity configured the command says so with the two `git config` lines to
 set; have the person run them (or run them with their consent), then
 repeat the command.
+
+**Local — the project is itself the marketplace** (only when the person
+wants the marketplace versioned with this repository):
+
+```bash
+uze agent market create <name> --local [--plugins-dir <dir>]
+```
+
+This writes `marketplace.json` at the project root and the plugins in
+`plugins/` — the layout this repository itself is one in. No Git state is
+written and no commit is made: the project's own flow carries them, so an
+author working in an isolated checkout reaches the marketplace through
+delivery, like every other piece of project content. A project that
+already carries a `marketplace.json` is refused with that fact — add the
+plugin to it directly.
 
 ## 2. The plugin
 

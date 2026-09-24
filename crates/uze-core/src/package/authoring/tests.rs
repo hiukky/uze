@@ -1,5 +1,6 @@
 use std::fs;
 use std::path::PathBuf;
+use std::process::Command;
 
 use super::*;
 use crate::package::acquisition::marketplace;
@@ -99,6 +100,51 @@ fn authoring_scaffold_meets_the_budget() -> Result<()> {
         "a plugin scaffold is file writes plus one marketplace manifest read: {elapsed:?}"
     );
     fs::remove_dir_all(&root).expect("teardown");
+    Ok(())
+}
+
+#[test]
+fn the_local_marketplace_is_the_project_itself() -> Result<()> {
+    let root = scratch("authoring-local");
+    // A project: its own repository is the marketplace's repository.
+    let project = root.join("project");
+    fs::create_dir_all(project.join(".git")).unwrap();
+    let (root, plugins) =
+        scaffold_local_marketplace("tools", Some("Project tools"), &project, "plugins")?;
+    assert!(root.join("marketplace.json").is_file());
+    assert!(plugins.is_dir());
+
+    // No Git was touched by the scaffold: the project's repository is the
+    // identity, and the commit is the project's own flow's to make — the
+    // unborn-HEAD state a fresh fixture starts in stays as it was.
+    let manifest = fs::read_to_string(project.join("marketplace.json")).unwrap();
+    assert!(manifest.contains("\"name\": \"tools\""));
+    let no_commit = Command::new("git")
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .arg("-C")
+        .arg(&project)
+        .args(["rev-parse", "--verify", "HEAD"])
+        .output()
+        .unwrap();
+    assert!(
+        !no_commit.status.success(),
+        "the scaffold fabricated a commit; the project's flow owns it"
+    );
+
+    // A project that already is a marketplace is refused, saying so.
+    assert!(
+        scaffold_local_marketplace("other", None, &project, "plugins").is_err(),
+        "a second manifest would be two marketplaces in one repository"
+    );
+
+    // The renameable plugins directory: same manifest rule, other folder.
+    let other = scratch("authoring-local-rename");
+    let project_two = other.join("project");
+    fs::create_dir_all(project_two.join(".git")).unwrap();
+    let (_, plugins) = scaffold_local_marketplace("tools", None, &project_two, "tools-plugins")?;
+    assert_eq!(plugins, project_two.join("tools-plugins"));
+    fs::remove_dir_all(other).expect("teardown");
+    fs::remove_dir_all(root).expect("teardown");
     Ok(())
 }
 

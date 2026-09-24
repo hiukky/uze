@@ -10,7 +10,7 @@
 
 use std::path::{Path, PathBuf};
 
-use uze_core::{PackageSource, Result, UzeError, authoring};
+use uze_core::{PackageSource, Result, UzeError, authoring, project_root};
 
 use super::services::Project;
 
@@ -46,6 +46,47 @@ impl Project<'_> {
             name: name.to_owned(),
             root,
             committed: true,
+        })
+    }
+
+    /// Scaffolds a **local** marketplace: the project the command runs in
+    /// is itself the marketplace — `marketplace.json` at its root, plugins
+    /// in `plugins_dir` — registered under `name` and linked to the project
+    /// root, which is what makes installs read the project's working tree.
+    ///
+    /// No Git is touched and no commit is made: the marketplace's bytes are
+    /// the project's own content, carried by the project's own commit flow.
+    /// That is the local frontier's contract, and the one cost that comes
+    /// with it — an author working in an isolated slot reaches the
+    /// marketplace through delivery, like every other piece of project
+    /// content.
+    #[tracing::instrument(name = "authoring.local_marketplace_create", skip_all, fields(name = %name, root = %root.display()), err)]
+    pub fn create_local_marketplace(
+        &self,
+        name: &str,
+        description: Option<&str>,
+        plugins_dir: &str,
+        root: &Path,
+    ) -> Result<MarketplaceCreated> {
+        let Some(canonical) = project_root::resolve_project_root(root)? else {
+            return Err(UzeError::NoProject {
+                hint: "a local marketplace is the project's own — stand inside one, or use \
+                       `--at <dir>` for a marketplace with a checkout of its own"
+                    .to_owned(),
+            });
+        };
+        let (root, _) =
+            authoring::scaffold_local_marketplace(name, description, &canonical, plugins_dir)?;
+        let _mutation = uze_core::persistence::MutationLock::acquire(&self.0.home)?;
+        self.0
+            .marketplace()
+            .register_typed_source(&PackageSource::Local { path: root.clone() })?;
+        uze_core::state::marketplace_link(&self.0.home, name, &root)?;
+        self.0.marketplace_catalogues.invalidate(name);
+        Ok(MarketplaceCreated {
+            name: name.to_owned(),
+            root,
+            committed: false,
         })
     }
 

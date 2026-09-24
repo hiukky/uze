@@ -31,6 +31,72 @@ const PLUGINS_DIRECTORY: &str = "plugins";
 /// The initial commit message a scaffolded marketplace is born with.
 const INITIAL_COMMIT_MESSAGE: &str = "chore: scaffold marketplace";
 
+/// Scaffolds a **local** marketplace: the named project is itself the
+/// marketplace, the way this repository is one — `marketplace.json` at the
+/// project root, the plugins in `plugins_dir` beside it (default
+/// `plugins/`, renameable).
+///
+/// No Git is touched: the project's own repository *is* the marketplace's
+/// repository, so its identity travels with the project the way every other
+/// project file does, and the commit is the project's own flow's to make.
+/// A project that already carries a `marketplace.json` is refused with that
+/// fact — adding the plugin directly is the answer, not a second manifest.
+pub fn scaffold_local_marketplace(
+    name: &str,
+    description: Option<&str>,
+    project_root: &Path,
+    plugins_dir: &str,
+) -> Result<(PathBuf, PathBuf)> {
+    if !store::is_valid_package_name(name) {
+        return Err(UzeError::InvalidPackageName {
+            name: name.to_owned(),
+            path: project_root.to_path_buf(),
+        });
+    }
+    if !store::is_valid_package_name(plugins_dir) {
+        return Err(UzeError::InvalidPackageName {
+            name: plugins_dir.to_owned(),
+            path: project_root.to_path_buf(),
+        });
+    }
+    let manifest_path = project_root.join(MARKETPLACE_MANIFEST);
+    if manifest_path.is_file() {
+        let existing = fs::read_to_string(&manifest_path)
+            .ok()
+            .and_then(|body| serde_json::from_str::<serde_json::Value>(&body).ok())
+            .and_then(|value| {
+                value
+                    .get("name")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_owned)
+            })
+            .unwrap_or_default();
+        return Err(UzeError::MarketplaceScaffold(format!(
+            "`{}` already carries a marketplace.json (named `{}`) — this project is already a \
+             marketplace; add the plugin directly with \
+             `uze agent plugin create <name> --market <its name>`",
+            project_root.display(),
+            existing
+        )));
+    }
+    let plugins = project_root.join(plugins_dir);
+    fs::create_dir_all(&plugins).map_err(|source| UzeError::Write {
+        path: plugins.clone(),
+        source,
+    })?;
+    let manifest = serde_json::json!({
+        "name": name,
+        "description": description.unwrap_or("This project's own plugins."),
+        "plugins": [],
+    });
+    let body = serde_json::to_string_pretty(&manifest).expect("a scaffolded manifest serializes");
+    fs::write(&manifest_path, format!("{body}\n")).map_err(|source| UzeError::Write {
+        path: manifest_path.clone(),
+        source,
+    })?;
+    Ok((project_root.to_path_buf(), plugins))
+}
+
 /// Scaffolds a marketplace at `at`: `marketplace.json` (name, description,
 /// an empty `plugins` list), an empty `plugins/` tree, a README, and a Git
 /// repository with an initial commit — the identity contract a marketplace

@@ -21,11 +21,16 @@ journey instead of a page of documentation read from `uze-testkit` sources.
   `agent work name` and `agent context`). Every verb is deterministic: same
   inputs, same artifacts, no interactive prompt, JSON or plain output, and a
   non-zero exit carrying the reason when validation fails.
-- **`uze agent market create <name>`** — scaffolds a new marketplace as a Git
-  repository at a directory the agent names (`--at <dir>`): `marketplace.json`
+- **`uze agent market create <name>`** — scaffolds a new marketplace: **the
+  frontier is named**, `--local` for the project's own and `--at <dir>` for a
+  standalone one. Standalone (`--at`): `marketplace.json`
   (name, owner, description, an empty `plugins: []`), `plugins/`,
-  `git init` and an initial commit through `uze-git`. The scaffold then
-  **registers and links** the marketplace in one step, reusing the existing
+  `git init` and an initial commit through `uze-git`. Local (`--local`): the
+  project the command runs in is itself the marketplace — `marketplace.json`
+  at its root and the plugins in `--plugins-dir` (default `plugins/`), the
+  layout this repository itself is one in; no Git state is written, no commit
+  is made, and the project's own repository carries the identity. Either
+  way the scaffold **registers and links** in one step, reusing the existing
   machine registry and `market link` machinery — the marketplace's bytes stay
   where the agent wrote them; only the record lives in `$UZE_HOME`. A linked
   marketplace delivers the author's working tree, including not-yet-committed
