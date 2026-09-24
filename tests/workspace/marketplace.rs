@@ -139,16 +139,30 @@ fn marketplace_with_two_plugins() -> (TestEnvironment, std::path::PathBuf) {
 #[test]
 fn a_blocked_package_keeps_the_marketplace_registered() {
     let (env, _market) = marketplace_with_two_plugins();
-    let skills = env.home.join(".agents/skills");
-    let managed = std::fs::read_dir(&skills)
-        .unwrap()
-        .filter_map(Result::ok)
-        .map(|entry| entry.path())
-        .find(|entry| entry.to_string_lossy().contains("flow"))
-        .expect("the fixture's skill is delivered as its own entry");
+    // The drift target comes from the receipts ledger, not from a guessed
+    // filesystem layout: what was delivered (and where) is what the ledger
+    // owns, on any machine, detected harness or not.
+    let receipts = uze_core::state::receipts(
+        &uze_core::UzeHome::at(&env.uze_home),
+        Some("flow@purge-market"),
+    )
+    .unwrap();
+    let managed = receipts
+        .iter()
+        .find_map(|receipt| match &receipt.artifact {
+            uze_core::exposure::ManagedArtifact::SymlinkReference { path, .. } => {
+                Some(path.clone())
+            }
+            _ => None,
+        })
+        .expect("flow has at least one receipt-owned symlink delivery");
     let foreign = env.home.join("foreign");
     std::fs::create_dir_all(&foreign).unwrap();
-    std::fs::remove_dir_all(&managed).unwrap();
+    if managed.is_dir() {
+        std::fs::remove_dir_all(&managed).unwrap();
+    } else {
+        std::fs::remove_file(&managed).unwrap();
+    }
     std::os::unix::fs::symlink(&foreign, &managed).unwrap();
 
     let remove = env.run(uze_bin(), &["market", "remove", "purge-market"]);
