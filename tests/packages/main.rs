@@ -3,6 +3,7 @@
 
 mod access;
 mod acquisition;
+mod authoring;
 mod canonical_model;
 mod containment;
 mod store;

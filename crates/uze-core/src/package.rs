@@ -13,6 +13,7 @@
 //! something a harness can use is `crate::delivery`.
 
 pub mod acquisition;
+pub mod authoring;
 pub mod hosts;
 pub mod naming;
 pub mod store;

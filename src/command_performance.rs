@@ -94,6 +94,32 @@ pub const CLASSIFICATION: &[(&str, PerformanceClass)] = &[
     ("config theme show", PerformanceClass::Budgeted),
     ("config icons", PerformanceClass::Budgeted),
     ("config notification", PerformanceClass::Budgeted),
+    // The authoring surface: the marketplace scaffold is born with an
+    // initial commit, so its cost is the author's own Git identity. The
+    // checks read and parse every file the artifact carries — like
+    // `agent artifacts check`, the cost is the artifact's own, and there
+    // is nothing to cache because the answer is about the bytes right now.
+    (
+        "agent market create",
+        PerformanceClass::JustifiedSlow(
+            "initializes a marketplace as a Git repository and makes its first commit",
+        ),
+    ),
+    (
+        "agent market check",
+        PerformanceClass::JustifiedSlow(
+            "reads and parses the marketplace manifest and every plugin it names; the cost is \
+             the artifact's own",
+        ),
+    ),
+    ("agent plugin create", PerformanceClass::Budgeted),
+    (
+        "agent plugin check",
+        PerformanceClass::JustifiedSlow(
+            "reads and parses every capability file the plugin carries; the cost is the \
+             artifact's own",
+        ),
+    ),
     // Machine scope: market.
     ("market list", PerformanceClass::Budgeted),
     ("market remove", PerformanceClass::Budgeted),
@@ -203,6 +229,10 @@ pub const BUDGETED_COMMAND_TESTS: &[(&str, &str)] = &[
     (
         "config notification",
         "uze_application::application::notifications::tests::notification_choice_meets_the_budget",
+    ),
+    (
+        "agent plugin create",
+        "crates/uze-core/src/package/authoring/tests.rs::authoring_scaffold_meets_the_budget",
     ),
     (
         "market list",

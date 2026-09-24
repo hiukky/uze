@@ -35,6 +35,7 @@ use uze_integrations::registry::IntegrationRegistry;
 use crate::bootstrap;
 
 mod agent_context;
+mod authoring;
 mod context;
 mod doctor;
 mod inspection_cache;

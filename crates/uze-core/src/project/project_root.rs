@@ -78,7 +78,7 @@ mod tests {
         // cwd is sub, which declares nothing; the walk finds the parent's
         // manifest, and the parent is the project root
         let resolved = resolve_project_root(&sub).unwrap();
-        assert_eq!(resolved, root.canonicalize().unwrap());
+        assert_eq!(resolved, Some(root.canonicalize().unwrap()));
         fs::remove_dir_all(root).unwrap();
     }
 

@@ -186,6 +186,13 @@ fn is_valid_name_component(value: &str) -> bool {
         })
 }
 
+/// The same rule a [`PackageId`] is held to, asked before one is built — the
+/// authoring surface validates the name the author chose rather than letting
+/// the failure surface from a constructed id.
+pub fn is_valid_package_name(value: &str) -> bool {
+    is_valid_name_component(value)
+}
+
 /// Parses the `plugin@marketplace` spelling an operator types. Both halves
 /// are required and held to the same rule a [`PackageId`] is.
 pub fn parse_plugin_marketplace_spec(spec: &str) -> Result<(String, String)> {

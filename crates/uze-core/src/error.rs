@@ -230,6 +230,10 @@ pub enum UzeError {
     /// what to do instead.
     #[error("not a project here (no agents.yaml, repository root or AGENTS.md); {hint}")]
     NoProject { hint: String },
+    /// Scaffolding an authored artifact failed before anything the author
+    /// keeps was written. The text names which precondition failed.
+    #[error("{0}")]
+    MarketplaceScaffold(String),
     #[error("symbolic links are unavailable on this platform: {0}")]
     SymlinkUnsupported(PathBuf),
     #[error("the plugin store cannot preserve special filesystem entry `{0}`")]

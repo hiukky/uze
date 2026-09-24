@@ -478,7 +478,17 @@ impl WorktreePolicy {
              by UZE from that commit's subject, which is a worse name than the one you would \
              have chosen. Either way your branch is renamed, so ask Git for its name rather than \
              remembering it. Name it again with the same command whenever the work turns out to \
-             be something else — the last name given is the one that stands.\n",
+             be something else — the last name given is the one that stands.\n\
+             - Creating a plugin is agent work, driven with these deterministic verbs: \
+             `uze agent market create <name> --at <dir> [--description <text>]` scaffolds a \
+             marketplace as a Git repository, registers and links it in one step (or skip to \
+             the next verb when a marketplace already exists — ask `uze market list` for the \
+             names); `uze agent plugin create <name> --market <market> [--hook] [--mcp] \
+             [--instructions]` scaffolds a plugin into it; `uze agent plugin check <path>` and \
+             `uze agent market check <path>` validate offline — run the check before any \
+             install, then `uze install -m <plugin>@<market>` and iterate on the files, which \
+             the linked marketplace already reads. The guided script for the whole loop is \
+             the `uze:author` skill.\n",
             types = self.branch.spelled()
         )
     }

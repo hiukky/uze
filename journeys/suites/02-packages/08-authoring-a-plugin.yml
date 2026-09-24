@@ -1,0 +1,88 @@
+journey: an agent authors a plugin and installs it from the marketplace it just made
+tags: [gate, cli, packages]
+proves: openspec/changes/agent-plugin-authoring
+about: |
+  The authoring loop as the product delivers it: one command gives a person
+  — or an agent driving a person's prompt — a marketplace, registered and
+  linked; the next one gives it a plugin that is installable right now; the
+  offline check is the licence to install; and the install reads the
+  working tree, so nothing has to be committed for the bytes to reach a
+  harness. Every `then` here reads the filesystem, Git and the machine's
+  own registry — UZE's report is the subject of a `cmd` step, never the
+  source of truth.
+
+world:
+  project: demo-app
+  files:
+    # Nothing: the world is authored, not staged — that is the claim.
+
+scenes:
+  - scene: a marketplace is created, and the machine registry answers for it
+    when:
+      - shell: "{uze} agent market create tools --at {root}/tools-market --description \"My tools\""
+        say: one command creates, commits, registers and links
+    then:
+      - file: "{root}/tools-market/marketplace.json"
+        contains: "\"name\": \"tools\""
+        about: the marketplace is the author's own text, where the command named
+      - file: "{root}/tools-market/plugins"
+        exists: true
+      - cmd:
+          run: "sh -c 'git -C {root}/tools-market rev-parse --verify HEAD'"
+          exit: 0
+        about: Git is where the identity contract is actually kept — one commit, made
+      - cmd:
+          run: "{uze} market list --format json"
+          stdout_contains: "\"tools\""
+        about: the machine registry answers for the name
+
+  - scene: the plugin scaffold is installable immediately
+    when:
+      - shell: "{uze} agent plugin create greet --market tools --description \"Says hello\""
+    then:
+      - file: "{root}/tools-market/plugins/greet/plugin.json"
+        exists: true
+      - file: "{root}/tools-market/plugins/greet/skills/greet/SKILL.md"
+        exists: true
+        about: the default is a skill plugin, carrying the canonical invoke policy
+      - file: "{root}/tools-market/marketplace.json"
+        contains: "greet"
+        about: and the entry that resolves it was written at scaffold time
+
+  - scene: the check is the licence to install
+    when:
+      - shell: "{uze} agent plugin check {root}/tools-market/plugins/greet"
+    then:
+      - cmd:
+          run: "{uze} agent plugin check {root}/tools-market/plugins/greet"
+          exit: 0
+        about: the same check the install would run, answered offline first
+
+  - scene: the install reads the working tree, before any second commit
+    when:
+      - shell: "{uze} install -m greet@tools"
+        say: install what the linked marketplace's working tree holds
+    then:
+      - file: "{home}/.agents/skills/greet/greet/SKILL.md"
+        exists: true
+        about: the skill reached every harness's mechanism
+      - cmd:
+          run: "sh -c 'git -C {root}/tools-market rev-list --count HEAD'"
+          stdout_contains: "1"
+        about: and only the scaffold's initial commit ever existed
+
+  - scene: a finding is an answer, before anything was ever installed
+    when:
+      - shell: |
+          set -e
+          printf '{ "name": "-flag", "description": "x" }' > {root}/tools-market/plugins/greet/plugin.json
+          {uze} agent plugin check {root}/tools-market/plugins/greet || true
+    then:
+      - cmd:
+          run: "{uze} agent plugin check {root}/tools-market/plugins/greet"
+          exit: 1
+        about: the finding is a non-zero answer a script can read
+      - cmd:
+          run: "{uze} status -m --format json"
+          stdout_excludes: "\"-flag\""
+        about: and nothing was installed by any of it

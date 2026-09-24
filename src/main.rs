@@ -11,7 +11,7 @@ mod shim;
 use std::{collections::BTreeMap, io::IsTerminal, path::PathBuf};
 
 use clap::{CommandFactory, Parser, Subcommand, ValueEnum, error::ErrorKind};
-use uze_application::{HostEntry, PlannedAction, Result, UzeHome};
+use uze_application::{Chime, HostEntry, PlannedAction, Result, UzeHome};
 use uze_application::{
     UzeApplication,
     application::{
@@ -21,7 +21,7 @@ use uze_application::{
         RemovePluginReport, RemoveProjectPluginReport, StatusReport,
     },
 };
-use uze_core::notifications::Chime;
+// `Chime` arrives through the facade's own re-export (see uze-application).
 
 #[derive(Debug, Parser)]
 #[command(
@@ -206,6 +206,71 @@ enum AgentAction {
     Context {
         #[command(subcommand)]
         action: ContextAction,
+    },
+    /// Authoring: a marketplace, a plugin inside one, and the offline
+    /// check that answers before any install does. Machine-scoped
+    /// throughout.
+    Market {
+        #[command(subcommand)]
+        action: AgentMarketAction,
+    },
+    Plugin {
+        #[command(subcommand)]
+        action: AgentPluginAction,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum AgentMarketAction {
+    /// Create a marketplace: scaffold, commit, register, link — one step
+    Create {
+        name: String,
+        /// Where the marketplace lives; the author's own text, so it is
+        /// created wherever this names
+        #[arg(long)]
+        at: PathBuf,
+        #[arg(long)]
+        description: Option<String>,
+        #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
+        format: OutputFormat,
+    },
+    /// Validate an authored marketplace and every plugin it names
+    Check {
+        path: PathBuf,
+        #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
+        format: OutputFormat,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum AgentPluginAction {
+    /// Create one plugin inside a linked marketplace
+    Create {
+        name: String,
+        /// The marketplace the plugin is authored into; linked, or
+        /// registered from a local path
+        #[arg(long)]
+        market: String,
+        #[arg(long)]
+        description: Option<String>,
+        /// Also scaffold a portable hooks.json and its handler stub
+        #[arg(long)]
+        hook: bool,
+        /// Also scaffold an mcp.json with one server stub
+        #[arg(long)]
+        mcp: bool,
+        /// Also scaffold an instruction contribution
+        #[arg(long)]
+        instructions: bool,
+        #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
+        format: OutputFormat,
+    },
+    /// Validate an authored plugin offline — the same parsers the install
+    /// would run
+    Check {
+        path: PathBuf,
+        #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
+        format: OutputFormat,
     },
 }
 
@@ -2221,7 +2286,7 @@ fn run_shorthand(app: &UzeApplication, args: Vec<String>, verbose: bool) -> Resu
             app,
             &format!("{plugin}@{marketplace}"),
             authority.as_ref(),
-            &uze_core::naming::NoNameCollisionAuthority,
+            &uze_application::NoNameCollisionAuthority,
         )?;
         emit(shorthand.format, &report, |report| {
             format!(
@@ -2269,7 +2334,7 @@ fn machine_install(
     app: &UzeApplication,
     spec: &str,
     authority: &dyn uze_application::TrustAuthority,
-    name_authority: &dyn uze_core::naming::NameCollisionAuthority,
+    name_authority: &dyn uze_application::NameCollisionAuthority,
 ) -> Result<AddPluginReport> {
     with_spinner(
         &format!("Installing {spec}..."),
@@ -2804,7 +2869,141 @@ fn run_agent(app: &UzeApplication, action: AgentAction) -> Result<()> {
         AgentAction::Work { action } => run_agent_work(app, action),
         AgentAction::Artifacts { action } => run_agent_artifacts(action),
         AgentAction::Context { action } => run_context(app, action),
+        AgentAction::Market { action } => run_agent_market(app, action),
+        AgentAction::Plugin { action } => run_agent_plugin(app, action),
     }
+}
+
+/// `uze agent market …` — the marketplace half of the authoring surface.
+fn run_agent_market(app: &UzeApplication, action: AgentMarketAction) -> Result<()> {
+    match action {
+        AgentMarketAction::Create {
+            name,
+            at,
+            description,
+            format,
+        } => {
+            let report = with_spinner(
+                &format!("Scaffolding marketplace {name}..."),
+                "Failed to scaffold the marketplace",
+                || {
+                    app.project()
+                        .create_marketplace(&name, description.as_deref(), &at)
+                },
+            )?;
+            emit(format, &report, |report| {
+                format!(
+                    "{}\n{}",
+                    progress::report_title(
+                        "Marketplace created",
+                        Some(&format!(
+                            "{name} — registered and linked to {}",
+                            report.root.display()
+                        ))
+                    ),
+                    progress::key_value(
+                        "Install from here",
+                        format!("uze install <plugin>@{name}"),
+                    )
+                )
+            });
+        }
+        AgentMarketAction::Check { path, format } => {
+            let report = app.project().check(&path, true)?;
+            emit(format, &report, |report| render_check(report, true));
+            if !report.is_clean() {
+                return Err(uze_application::UzeError::LifecycleBlocked(
+                    "the marketplace did not pass its check; nothing was installed".to_owned(),
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// `uze agent plugin …` — the plugin half of the authoring surface.
+fn run_agent_plugin(app: &UzeApplication, action: AgentPluginAction) -> Result<()> {
+    match action {
+        AgentPluginAction::Create {
+            name,
+            market,
+            description,
+            hook,
+            mcp,
+            instructions,
+            format,
+        } => {
+            let report = with_spinner(
+                &format!("Scaffolding plugin {name}..."),
+                "Failed to scaffold the plugin",
+                || {
+                    app.project().create_plugin(
+                        &market,
+                        &name,
+                        description.as_deref(),
+                        hook,
+                        mcp,
+                        instructions,
+                    )
+                },
+            )?;
+            emit(format, &report, |report| {
+                format!(
+                    "{}\n{}",
+                    progress::report_title(
+                        "Plugin created",
+                        Some(&format!(
+                            "{} — installable from {} now",
+                            report.name, report.market
+                        ))
+                    ),
+                    progress::key_value("Root", report.root.display().to_string())
+                )
+            });
+        }
+        AgentPluginAction::Check { path, format } => {
+            let report = app.project().check(&path, false)?;
+            emit(format, &report, |report| render_check(report, false));
+            if !report.is_clean() {
+                return Err(uze_application::UzeError::LifecycleBlocked(
+                    "the plugin did not pass its check; nothing was installed".to_owned(),
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// The check's answer: what it would deliver, and every finding, located.
+fn render_check(report: &uze_application::ValidationReport, as_marketplace: bool) -> String {
+    let mut text = progress::report_title(
+        if as_marketplace {
+            "Marketplace check"
+        } else {
+            "Plugin check"
+        },
+        Some(if report.is_clean() {
+            "clean"
+        } else {
+            "findings below"
+        }),
+    );
+    text.push('\n');
+    text.push_str(&progress::report_section("Delivers"));
+    if report.delivers.is_empty() {
+        text.push_str("  nothing — no capability files are there\n");
+    }
+    for identity in &report.delivers {
+        text.push_str(&format!("  {identity}\n"));
+    }
+    if !report.findings.is_empty() {
+        text.push('\n');
+        text.push_str(&progress::report_section("Findings"));
+        for finding in &report.findings {
+            text.push_str(&format!("  {}\n", progress::warning_text(finding)));
+        }
+    }
+    text
 }
 
 fn run_agent_work(app: &UzeApplication, action: AgentWorkAction) -> Result<()> {

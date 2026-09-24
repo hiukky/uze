@@ -1,0 +1,14 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "id": "guard",
+        "matcher": "shell",
+        "effect": "deny",
+        "hooks": [
+          { "type": "command", "command": "${PLUGIN_ROOT}/scripts/guard", "timeout": 10 }
+        ]
+      }
+    ]
+  }
+}

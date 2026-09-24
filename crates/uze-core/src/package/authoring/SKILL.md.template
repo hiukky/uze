@@ -1,0 +1,27 @@
+---
+# The skill's invocation name, one word, lowercase — this is what `flow:commit`
+# and `/commit` name in a harness.
+name: {SKILL_NAME}
+
+# Two lines that decide who finds this skill: the long text is what the
+# model matches an invocation against, so say what it is for, not what it is.
+description: {SKILL_DESCRIPTION}
+
+# Who may invoke this skill (ADR-030). `model: true` lets the model pick it
+# up on its own when the situation matches; `user: true` also offers it to
+# the person as an explicit action. Any 2x2 combination is valid:
+#   model: true,  user: true  — normal, discoverable (the default)
+#   model: true,  user: false — background knowledge, never a command
+#   model: false, user: true  — an explicit action only the person triggers
+#   model: false, user: false — unused
+invoke:
+  model: true
+  user: true
+
+# Everything below this line is the skill's body, read only when it runs.
+# Instructions here weigh against the work the skill is asked for.
+---
+Replace this paragraph with what the skill actually does, in the order a
+reader needs it: the situation it answers, the steps it performs, and what
+it must never do. Keep it short — it is loaded when the skill is invoked,
+not before.
