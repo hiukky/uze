@@ -90,8 +90,20 @@ arrives here, before anything is delivered.
 uze install -m <name>@<market>
 ```
 
-Because the marketplace was born linked, editing the plugin's files is what
-a re-install reads — no commit needed to test. Loop: edit → check → install.
+The first install is `install`. Because the marketplace was born linked,
+it reads the working tree — but the Store is idempotent by origin: a
+*repeated* `install` of a package it already holds hands back the stored
+bytes without re-reading the source. So the loop's re-delivery verb is
+**`update`**:
+
+```bash
+uze update <name> -m
+```
+
+Re-resolves the package from the linked marketplace, replaces the stored
+bytes, asks the trust question against the revision it replaces, and puts
+the old revision back if the new one cannot be delivered. Loop: edit →
+check → `update -m`.
 
 ## Publishing
 
