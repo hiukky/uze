@@ -96,9 +96,9 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 # thread of its own so a render loop never waits on a disk. Same repository
 # and release train as the two above (tokio-rs/tracing).
 tracing-appender = "0.2"
-opentelemetry = { version = "0.32", optional = true }
-opentelemetry_sdk = { version = "0.32", optional = true }
-opentelemetry-otlp = { version = "0.32", optional = true, default-features = false, features = ["trace", "http-proto", "reqwest-blocking-client"] }
+opentelemetry = { version = "0.33", optional = true }
+opentelemetry_sdk = { version = "0.33", optional = true }
+opentelemetry-otlp = { version = "0.33", optional = true, default-features = false, features = ["trace", "http-proto", "reqwest-blocking-client"] }
 tracing-opentelemetry = { version = "0.33", optional = true }
 
 [features]
