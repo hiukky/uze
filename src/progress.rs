@@ -247,6 +247,14 @@ fn on_step(step: &uze::steps::Step) {
     let verbose = VERBOSE.load(std::sync::atomic::Ordering::Relaxed);
     match describe(step) {
         Some(Described::Now(line)) => {
+            // Two receipts at one harness read as one step, not two lines.
+            if CURRENT.lock().ok().is_some_and(|current| {
+                current
+                    .as_ref()
+                    .is_some_and(|(showing, _)| *showing == line)
+            }) {
+                return;
+            }
             settle(&bar, true);
             bar.set_message(format!("{line}…"));
             if let Ok(mut current) = CURRENT.lock() {
@@ -343,6 +351,15 @@ mod step_tests {
     }
 }
 
+/// `42s`, `12m`, `3h`: how old a fetched copy is, to the unit that matters.
+fn ago(seconds: u64) -> String {
+    match seconds {
+        0..60 => format!("{seconds}s"),
+        60..3600 => format!("{}m", seconds / 60),
+        _ => format!("{}h", seconds / 3600),
+    }
+}
+
 /// `310ms` under a second, `2.1s` from there: a fast step reads as fast
 /// rather than as `0.0s`, and a slow one is not a wall of digits.
 fn took_to_say(took: Duration) -> String {
@@ -385,6 +402,11 @@ fn describe(step: &uze::steps::Step) -> Option<Described> {
             field("reason")
         )),
         "catalogue" => Described::Now("Reading the marketplace catalogue".to_owned()),
+        "fresh" => Described::Now(format!(
+            "Using {} as fetched {} ago (uze update fetches the latest)",
+            field("repository"),
+            ago(field("age_secs").parse().unwrap_or_default())
+        )),
         "download" => Described::Now(format!("Downloading {} files", field("files"))),
         "deliver" => Described::Now(format!("Delivering to {}", field("harness"))),
         "detach" => Described::Now(format!("Removing from {}", field("harness"))),

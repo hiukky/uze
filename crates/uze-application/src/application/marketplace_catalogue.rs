@@ -46,7 +46,7 @@ use uze_core::{
 /// How long a catalogue stands for before a read clones the remote again.
 /// Shorter than the detection cache's day: a marketplace has a person on
 /// the other end pushing to it, and nothing here can see that happen.
-const MAX_AGE: Duration = Duration::from_secs(60 * 60);
+pub(crate) const MAX_AGE: Duration = Duration::from_secs(60 * 60);
 
 const META_FILE: &str = "catalogue.json";
 /// The mirror itself: a bare, blobless clone.

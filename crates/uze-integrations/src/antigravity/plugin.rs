@@ -134,10 +134,26 @@ pub(super) fn run_agy(
 /// The full `agy plugin list` document, which the CLI writes as JSON
 /// (verified against 1.1.19; `{"imports":[...]}`). An unreadable listing is
 /// an error — inspection must never guess about ownership from silence.
+///
+/// `agy` prints its own `import_manifest.json`, so that is read first: an
+/// `agy` start is a quarter of a second, paid three times by a removal.
+/// Trusted only in the shape the CLI prints; anything else asks the CLI.
 pub(super) fn installed_plugins(
     executable: &str,
     command_home: &Path,
 ) -> std::result::Result<serde_json::Value, String> {
+    let recorded = std::fs::read(command_home.join(".gemini/config/import_manifest.json"))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+        .filter(|manifest| {
+            manifest
+                .get("imports")
+                .and_then(serde_json::Value::as_array)
+                .is_some_and(|imports| imports.iter().all(|entry| entry.get("name").is_some()))
+        });
+    if let Some(recorded) = recorded {
+        return Ok(recorded);
+    }
     json(
         Path::new(executable),
         command_home,

@@ -34,6 +34,7 @@ impl Plugins<'_> {
                     home: &self.0.home,
                     marketplace,
                     recent: None,
+                    fetched: &self.0.mirrors_fetched,
                 },
             )
             .ok()
@@ -41,6 +42,7 @@ impl Plugins<'_> {
 
     #[tracing::instrument(name = "plugins.update", skip_all, fields(id = %id), err)]
     pub fn update(&self, id: &str, authority: &dyn TrustAuthority) -> Result<UpdatePluginReport> {
+        self.0.begin_operation();
         // Reading which package this is, and fetching its new bytes, happen
         // *outside* the mutation lock. That lock is global and exclusive,
         // and acquisition reaches a remote: held across it, one background

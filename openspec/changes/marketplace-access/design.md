@@ -297,7 +297,31 @@ Three tiers, cheapest first, each owning what it alone can prove:
 
 The Lab is not involved: nothing here is harness-specific.
 
-### D8. Where this meets `plugin-freshness-and-linked-marketplaces`
+### D8. Speed: one connection, and none to add a plugin
+
+Measured on a private GitHub marketplace over SSH, where one handshake is
+about 1.1s of round trips:
+
+- **The mirror carries its small blobs** (`--filter=blob:limit=1m`): the
+  catalogue and a plugin's files travel with the history, so neither needs
+  a second connection. A binary over a megabyte still stays behind, and a
+  checkout that needs one fetches every missing blob in one request.
+- **Adding answers from the mirror while the catalogue stands** (one hour):
+  what a listing showed is what adding installs; `update` asks the remote,
+  and the output says when the mirror was used and how old it is. One
+  operation fetches each mirror at most once.
+- **SSH shares one connection per host for sixty seconds** (ControlMaster),
+  its socket in a directory only this user reaches, or not at all.
+- **Harnesses are delivered to, and detached from, at once**, and the
+  Claude and Antigravity integrations read their vendors' own records
+  (`installed_plugins.json` v2, `known_marketplaces.json`, `settings.json`,
+  `import_manifest.json`) before starting their CLIs, falling back to them
+  on any record they do not recognise.
+
+`uze <plugin>@<market>` went from 11.5s to 1.0s, `market add` of a known
+marketplace from 5.0s to 0.8s, and `plugin remove` from 4.9s to 1.0s.
+
+### D9. Where this meets `plugin-freshness-and-linked-marketplaces`
 - Its "a marketplace this machine cannot reach is skipped, never fatal" is
   about a source that is unreachable *by declaration* (a path that does not
   exist here). This change's DNS failure is named **offline** and fails the

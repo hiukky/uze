@@ -720,6 +720,15 @@ pub(super) fn through<T>(
             unresolved += usize::from(why == UNRESOLVED);
             continue;
         }
+        // With no helper and no `.netrc`, HTTPS "with credentials" carries
+        // none, and would only ask the anonymous question a second time.
+        if over_https && transport.access == Access::Credentialed && !holds_https_credentials() {
+            failures.push(format!(
+                "  {}: skipped, no credential helper is configured",
+                transport.label()
+            ));
+            continue;
+        }
         reach(&transport);
         match attempt(&transport) {
             Ok(answer) => return Ok((answer, transport)),
@@ -756,6 +765,19 @@ pub(super) fn through<T>(
 }
 
 const UNRESOLVED: &str = "the host does not resolve";
+
+/// Whether an authenticated HTTPS attempt could carry anything an anonymous
+/// one does not: a credential helper in the operator's config, or a
+/// `.netrc` curl would read.
+fn holds_https_credentials() -> bool {
+    let helper = operator_config(CREDENTIAL_KEYS)
+        .iter()
+        .any(|(key, value)| key.ends_with(".helper") && !value.is_empty());
+    let netrc = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .is_some_and(|home| home.join(".netrc").is_file() || home.join("_netrc").is_file());
+    helper || netrc
+}
 
 /// Whether an attempt failed before any HTTP was spoken — a port that
 /// refuses or never answers, or TLS that did not complete — which the other

@@ -63,10 +63,15 @@ pub(crate) struct MirrorAt<'a> {
     /// seconds earlier already did, and `None` for updating, whose whole
     /// point is where the ref points now.
     pub(crate) recent: Option<std::time::Duration>,
+    /// What this command already fetched, which is fresh whatever `recent`.
+    pub(crate) fetched: &'a std::sync::Mutex<Vec<PathBuf>>,
 }
 
-/// How long a mirror's answer about a branch stands for adding a plugin.
-pub(crate) const RECENT: std::time::Duration = std::time::Duration::from_secs(5 * 60);
+/// How long a mirror's answer about a branch stands for adding a plugin: as
+/// long as the catalogue it was chosen from stands. What a listing showed is
+/// what adding installs, rather than something newer nobody has seen;
+/// `uze update` is what asks the remote where the ref is now.
+pub(crate) const RECENT: std::time::Duration = super::marketplace_catalogue::MAX_AGE;
 
 impl MarketplaceRequest {
     /// What a machine-registered or declared source resolves to. A source
@@ -165,17 +170,31 @@ impl MarketplaceRequest {
         }
 
         let repository = super::marketplace_catalogue::mirror_dir(at.home, at.marketplace);
+        let fetched_already = at
+            .fetched
+            .lock()
+            .is_ok_and(|fetched| fetched.contains(&repository));
+        let recent = if fetched_already {
+            Some(std::time::Duration::MAX)
+        } else {
+            at.recent
+        };
         naming_the_marketplace(
             acquisition::mirror::ensure_for(
                 &self.repository.fetch,
                 &self.repository.identity,
                 &repository,
                 self.reference.as_deref(),
-                at.recent,
+                recent,
             ),
             at.marketplace,
             &self.repository.identity,
         )?;
+        if let Ok(mut fetched) = at.fetched.lock()
+            && !fetched.contains(&repository)
+        {
+            fetched.push(repository.clone());
+        }
         let commit = acquisition::mirror::resolve(&repository, self.reference.as_deref())?;
 
         let manifest_bytes = acquisition::mirror::read_file(
@@ -473,6 +492,7 @@ impl Marketplace<'_> {
         authority: &dyn TrustAuthority,
         name_authority: &dyn NameCollisionAuthority,
     ) -> Result<AddPluginReport> {
+        self.0.begin_operation();
         let (plugin_name, marketplace_name) = uze_core::store::parse_plugin_marketplace_spec(spec)?;
         let source = if marketplace_name == BUILT_IN_MARKETPLACE {
             None
@@ -490,6 +510,7 @@ impl Marketplace<'_> {
                     home: &self.0.home,
                     marketplace: &marketplace_name,
                     recent: Some(RECENT),
+                    fetched: &self.0.mirrors_fetched,
                 },
             )?,
         };

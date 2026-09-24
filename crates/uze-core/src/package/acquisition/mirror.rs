@@ -243,23 +243,29 @@ pub fn ensure_for(
         return Ok(());
     }
     if let Some(recent) = recent
-        && reached_within(directory, recent)
+        && let Some(age) = reached_ago(directory).filter(|age| *age < recent)
         && resolve(directory, reference).is_ok()
     {
+        tracing::info!(
+            target: super::git::STEP,
+            step = "fresh",
+            repository = %forge::shown(identity),
+            age_secs = age.as_secs()
+        );
         return Ok(());
     }
     ensure(fetch, identity, directory)
 }
 
-/// Whether the mirror was last brought up to date less than `recent` ago —
-/// read off when it last remembered how it was reached, which every
-/// successful clone and fetch writes.
-fn reached_within(directory: &Path, recent: std::time::Duration) -> bool {
+/// How long ago the mirror was last brought up to date — read off when it
+/// last remembered how it was reached, which every successful clone and
+/// fetch writes.
+fn reached_ago(directory: &Path) -> Option<std::time::Duration> {
     std::fs::metadata(directory.join(TRANSPORT_FILE))
         .and_then(|metadata| metadata.modified())
+        .ok()?
+        .elapsed()
         .ok()
-        .and_then(|written| written.elapsed().ok())
-        .is_some_and(|age| age < recent)
 }
 
 /// Whether `reference` is a full 40-character commit id, which is the only

@@ -193,6 +193,69 @@ fn recorded(home: &Path, file: &str) -> Option<serde_json::Value> {
     serde_json::from_slice(&fs::read(config.join("plugins").join(file)).ok()?).ok()
 }
 
+/// The inspection [`inspect_claude_plugin`] would give, answered from
+/// Claude's own records — `None` whenever one of them is missing or shaped
+/// otherwise, or the plugin has no explicit enablement, so the CLI is asked.
+/// Removing a plugin inspects every receipt before, during and after; three
+/// times two `claude` starts was three seconds of a five-second removal.
+fn inspect_from_records(
+    home: &Path,
+    selector: &str,
+    marketplace_root: &Path,
+) -> Option<AttachmentInspection> {
+    let (plugin, marketplace_name) = selector.rsplit_once('@')?;
+    let known = recorded(home, "known_marketplaces.json")?;
+    let known = known.as_object()?;
+    let installed = recorded_user_install(home, selector)?;
+    let found = |state: AttachmentState, reason: &str| {
+        Some(AttachmentInspection {
+            state,
+            reason: reason.to_owned(),
+        })
+    };
+    let Some(marketplace) = known.get(marketplace_name) else {
+        return found(AttachmentState::Missing, "Claude marketplace is absent");
+    };
+    let root = marketplace
+        .get("installLocation")
+        .or_else(|| {
+            marketplace
+                .get("source")
+                .and_then(|source| source.get("path"))
+        })
+        .and_then(serde_json::Value::as_str)?;
+    if Path::new(root) != marketplace_root {
+        return found(
+            AttachmentState::Drifted,
+            "Claude marketplace root differs from receipt",
+        );
+    }
+    if !installed {
+        return found(AttachmentState::Missing, "Claude plugin is not installed");
+    }
+    let settings = recorded_settings(home)?;
+    let enabled = settings
+        .get("enabledPlugins")?
+        .get(format!("{plugin}@{marketplace_name}"))?
+        .as_bool()?;
+    if enabled {
+        found(
+            AttachmentState::Matched,
+            "Claude native plugin matches receipt",
+        )
+    } else {
+        found(AttachmentState::Drifted, "Claude plugin is disabled")
+    }
+}
+
+/// Claude's user settings, where it records which plugins are enabled.
+fn recorded_settings(home: &Path) -> Option<serde_json::Value> {
+    let config = std::env::var_os("CLAUDE_CONFIG_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home.join(".claude"));
+    serde_json::from_slice(&fs::read(config.join("settings.json")).ok()?).ok()
+}
+
 /// Every marketplace Claude has registered, when its record reads as one
 /// entry per marketplace, each with a source.
 fn recorded_marketplaces(home: &Path) -> Option<Vec<serde_json::Value>> {
@@ -346,6 +409,9 @@ fn inspect_claude_plugin(
     selector: &str,
     marketplace_root: &Path,
 ) -> AttachmentInspection {
+    if let Some(inspection) = inspect_from_records(command_home, selector, marketplace_root) {
+        return inspection;
+    }
     // Verify marketplace still points at expected root.
     let marketplace_list = match json(
         executable,
@@ -939,6 +1005,47 @@ mod recorded_state_tests {
         assert!(
             !ClaudeMarketplace::plugin_installed(absent, &home, "other@uze-store"),
             "an install at project scope is not the user-scope one UZE makes"
+        );
+        let _ = fs::remove_dir_all(home);
+    }
+
+    #[test]
+    fn an_installed_enabled_plugin_inspects_as_matched_from_the_records() {
+        let mut env = uze_testkit::env::scope();
+        env.remove("CLAUDE_CONFIG_DIR");
+        let home = home_with(
+            "claude-recorded-inspect",
+            &[
+                (
+                    "known_marketplaces.json",
+                    r#"{"uze-store":{"source":{"source":"directory","path":"/uze/generated"},"installLocation":"/uze/generated"}}"#,
+                ),
+                (
+                    "installed_plugins.json",
+                    r#"{"version":2,"plugins":{"git@uze-store":[{"scope":"user"}]}}"#,
+                ),
+            ],
+        );
+        let settings = home.join(".claude/settings.json");
+        let absent = Path::new("/nonexistent/claude");
+        let inspect = |selector: &str| {
+            super::inspect_claude_plugin(absent, &home, selector, Path::new("/uze/generated")).state
+        };
+
+        fs::write(&settings, r#"{"enabledPlugins":{"git@uze-store":true}}"#).unwrap();
+        assert_eq!(
+            inspect("git@uze-store"),
+            uze_core::integration::AttachmentState::Matched
+        );
+        assert_eq!(
+            inspect("other@uze-store"),
+            uze_core::integration::AttachmentState::Missing
+        );
+
+        fs::write(&settings, r#"{"enabledPlugins":{"git@uze-store":false}}"#).unwrap();
+        assert_eq!(
+            inspect("git@uze-store"),
+            uze_core::integration::AttachmentState::Drifted
         );
         let _ = fs::remove_dir_all(home);
     }

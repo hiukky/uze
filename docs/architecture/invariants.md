@@ -432,7 +432,7 @@ planning re-inspects live, and a mutation invalidates the entries it
 touched.
 
 The mirror is the cache tier's one piece of real machinery rather than a
-copy: bare and blobless, it answers what a marketplace offers, at which
+copy: bare and without large blobs, it answers what a marketplace offers, at which
 commit, and how far a pinned revision is behind — none of which a copied
 tree can answer, and all of which cost a clone to rebuild and nothing else.
 A package's bytes are never read from it: they are ingested into the Store,

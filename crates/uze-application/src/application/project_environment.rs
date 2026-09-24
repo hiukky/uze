@@ -145,6 +145,7 @@ impl Project<'_> {
                 home: &self.0.home,
                 marketplace,
                 recent: Some(super::marketplace::RECENT),
+                fetched: &self.0.mirrors_fetched,
             },
         )
     }
@@ -158,6 +159,7 @@ impl Project<'_> {
         root: &Path,
         authority: &dyn TrustAuthority,
     ) -> Result<AddPluginReport> {
+        self.0.begin_operation();
         let canonical = project_root::resolve_project_root(root)?;
         // The marketplace built into UZE is not a project's to declare:
         // its plugins are installed for every project by the machine's own
@@ -282,6 +284,7 @@ impl Project<'_> {
         plugin: Option<&str>,
         authority: &dyn TrustAuthority,
     ) -> Result<UpdateReport> {
+        self.0.begin_operation();
         let canonical = project_root::resolve_project_root(root)?;
         let manifest = manifest::load(&canonical)?.unwrap_or_default();
         let mut lock = project_lock::load_lock(&canonical)?.unwrap_or_default();
@@ -347,6 +350,7 @@ impl Project<'_> {
                         home: &self.0.home,
                         marketplace: &marketplace,
                         recent: None,
+                        fetched: &self.0.mirrors_fetched,
                     },
                 )?;
                 match self
@@ -458,6 +462,7 @@ impl Project<'_> {
     /// primitive to build one on).
     #[tracing::instrument(name = "project.install", skip_all, fields(root = %root.display()), err)]
     pub fn install(&self, root: &Path, authority: &dyn TrustAuthority) -> Result<InstallReport> {
+        self.0.begin_operation();
         let canonical = project_root::resolve_project_root(root)?;
         // `install` is an explicit act of setting this project up, so it is
         // the right moment to create the file a person edits — unlike
@@ -705,6 +710,7 @@ impl Project<'_> {
                 home: &self.0.home,
                 marketplace,
                 recent: Some(super::marketplace::RECENT),
+                fetched: &self.0.mirrors_fetched,
             },
         )?;
         self.0.plugins().install_materialized(
