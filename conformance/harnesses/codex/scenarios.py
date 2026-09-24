@@ -57,7 +57,7 @@ hooks = true
 TOML
 {materialize_marketplace(cfg)}
 uze market add /work/market >/dev/null 2>&1
-for p in {plugins}; do uze plugin install $p@uze-lab >/dev/null 2>&1; done
+for p in {plugins}; do uze install $p@uze-lab -m >/dev/null 2>&1; done
 {final_cmd}
 """
 
@@ -525,7 +525,7 @@ def phase_skill_invocation_policy(cfg, prov_ip):
     and `flow:analyze` are offered, `flow:review` is not.
 
     Delivery shape, so the evidence is read where it lives: `commit` and
-    `review` arrive through the GENERATED native plugin (`uze plugin inspect`
+    `review` arrive through the GENERATED native plugin (`uze inspect`
     reports them "provided by package"), which Codex stages into its own
     cache under `$CODEX_HOME/plugins/cache/uze-store/flow/<version>/` — the
     sidecar Codex actually reads is that cache copy. `analyze` is Degraded

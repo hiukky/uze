@@ -540,7 +540,7 @@ impl Marketplace<'_> {
 
     /// `Marketplace::install_plugin`, with an explicit answer for a bare-plugin-name
     /// collision with an already-active, differently-marketplaced package
-    /// (ADR-038) — see `Marketplace::install_plugin_resolving`.
+    /// (ADR-036) — see `Marketplace::install_plugin_resolving`.
     #[tracing::instrument(name = "marketplace.install_plugin_resolving", skip_all, fields(spec = %spec), err)]
     pub fn install_plugin_resolving(
         &self,

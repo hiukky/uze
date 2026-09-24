@@ -107,7 +107,7 @@ fn market_add_never_touches_the_project_lock() {
     let _ = std::fs::remove_dir_all(home);
 }
 
-/// `uze plugin install <path>` — a direct source without a marketplace is
+/// `uze install <path>` — a direct source without a marketplace is
 /// rejected by the product (the marketplace is the provenance contract,
 /// ADR-019), and the marketplace flow never touches the project lock.
 #[test]
@@ -115,7 +115,7 @@ fn plugin_install_requires_a_marketplace_and_never_touches_the_project_lock() {
     let home = temporary_home("plugin-install-path");
     std::fs::create_dir_all(&home).unwrap();
     let rejected = uze(&home)
-        .args(["plugin", "install", package_fixture().to_str().unwrap()])
+        .args(["install", package_fixture().to_str().unwrap()])
         .output()
         .unwrap();
     assert!(
@@ -129,7 +129,7 @@ fn plugin_install_requires_a_marketplace_and_never_touches_the_project_lock() {
     );
     assert!(
         !home.join("agents.lock").is_file(),
-        "`plugin install` must never create agents.lock"
+        "`install` must never create agents.lock"
     );
 
     // The marketplace flow is the supported path.
@@ -149,7 +149,7 @@ fn plugin_install_requires_a_marketplace_and_never_touches_the_project_lock() {
     );
     assert!(
         !home.join("agents.lock").is_file(),
-        "`plugin install` must never create agents.lock"
+        "`install -m` must never create agents.lock"
     );
     let _ = std::fs::remove_dir_all(home);
 }

@@ -163,7 +163,7 @@ exporter's own thread and the command is not delayed.
 The shim puts its span's context into the harness's environment as W3C
 `TRACEPARENT`; the harness passes its environment to everything it runs,
 and every `uze` started under it — `uze status` typed by the agent inside
-it, `uze agent task name` on its first action — adopts that context as the
+it, `uze agent work name` on its first action — adopts that context as the
 parent of its own root, so both are one trace. A delivered hook is not one
 of them: it runs the generated wrapper, and no `uze` is on that path
 (ADR-040). Nothing is injected without the feature: there is no trace id to

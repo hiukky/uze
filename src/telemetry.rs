@@ -574,17 +574,17 @@ mod tests {
             "market add team https://<redacted>@github.com/org/market.git"
         );
         assert_eq!(
-            recorded(&["plugin", "install", "foo@https://token@host/market"]),
-            "plugin install foo@https://<redacted>@host/market"
+            recorded(&["install", "-m", "foo@https://token@host/market"]),
+            "install -m foo@https://<redacted>@host/market"
         );
         assert_eq!(
-            recorded(&["agent", "task", "name", "fix/ghp_short"]),
-            "agent task name fix/ghp_short",
+            recorded(&["agent", "work", "name", "fix/ghp_short"]),
+            "agent work name fix/ghp_short",
             "a word that merely starts like a token is not one"
         );
         assert_eq!(
-            recorded(&["plugin", "install", "ghp_0123456789abcdefghij"]),
-            "plugin install <redacted>"
+            recorded(&["install", "-m", "ghp_0123456789abcdefghij"]),
+            "install -m <redacted>"
         );
         assert_eq!(
             recorded(&["market", "add", "https://github.com/org/market.git"]),

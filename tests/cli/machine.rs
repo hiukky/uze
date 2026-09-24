@@ -16,9 +16,9 @@ fn contains_fixture_skill_wrapper(entries: &[PathBuf], uze_home: &std::path::Pat
     })
 }
 
-/// `uze plugin install` through a staged test marketplace — the product
+/// `uze install -m` through a staged test marketplace — the product
 /// rejects direct-path installs, so the test exercises the real user flow:
-/// `market add` first, then `plugin install <name>@<market>`.
+/// `market add` first, then `install -m <name>@<market>`.
 fn install_via_marketplace_json(
     home: &std::path::Path,
     uze_home: &std::path::Path,
@@ -266,13 +266,7 @@ fn inspect_reports_an_installed_plugin_without_vendor_writes() {
         .env("UZE_HOME", &home)
         .env("HOME", &home)
         .env("PATH", "/usr/bin:/bin")
-        .args([
-            "plugin",
-            "inspect",
-            "uze-agent-skill-conformance",
-            "--format",
-            "json",
-        ])
+        .args(["inspect", "uze-agent-skill-conformance", "--format", "json"])
         .output()
         .unwrap();
 
@@ -303,13 +297,7 @@ fn add_and_inspect_use_the_same_injected_uze_home() {
         .env("UZE_HOME", &home)
         .env("HOME", &home)
         .env("PATH", "/usr/bin:/bin")
-        .args([
-            "plugin",
-            "inspect",
-            "uze-agent-skill-conformance",
-            "--format",
-            "json",
-        ])
+        .args(["inspect", "uze-agent-skill-conformance", "--format", "json"])
         .output()
         .unwrap();
     assert!(inspect.status.success());
@@ -544,7 +532,7 @@ fn setup_then_add_attaches_transparently_without_a_separate_sync_step() {
     // see `IntegrationPort::status`'s doc comment.
     assert!(doctor.matches("installed / verified").count() >= 2);
 
-    // `uze plugin install` alone attaches both, without any separate sync
+    // `uze install -m` alone attaches both, without any separate sync
     // command.
     //
     // Both the default `uze` package and this single-skill fixture qualify
@@ -759,7 +747,7 @@ fn setup_then_add_attaches_the_mcp_fixture_idempotently_and_removal_works() {
         "generated"
     );
 
-    // Idempotent: `plugin install` a second time does not fail. Both
+    // Idempotent: `install -m` a second time does not fail. Both
     // integrations' package delivery re-resolves to the same
     // already-installed selector — no reinstall, no resource-level replay.
     let second_add = run(&install_args.iter().map(String::as_str).collect::<Vec<_>>());
@@ -772,7 +760,7 @@ fn setup_then_add_attaches_the_mcp_fixture_idempotently_and_removal_works() {
     let _ = std::fs::remove_dir_all(mcp_package_dir);
 }
 
-/// `uze plugin remove` — the machine-level verb (renamed from the old,
+/// `uze remove <plugin> -m` — the machine-level verb (renamed from the old,
 /// unnamespaced root `remove`, which used to reach this exact flow via an
 /// implicit fallback — see `plugin_remove_never_confused_with_project_remove`
 /// / ADR-019 for why that fallback is gone).
@@ -786,8 +774,8 @@ fn plugin_remove_uses_the_package_centric_application_flow() {
         .env("HOME", &home)
         .env("PATH", "/usr/bin:/bin")
         .args([
-            "plugin",
             "remove",
+            "-m",
             "uze-agent-skill-conformance",
             "--format",
             "json",
@@ -799,15 +787,15 @@ fn plugin_remove_uses_the_package_centric_application_flow() {
     assert_eq!(report["outcome"], "REMOVED");
     let list = Command::new(env!("CARGO_BIN_EXE_uze"))
         .env("UZE_HOME", &home)
-        .args(["plugin", "list", "--format", "json"])
+        .args(["status", "-m", "--format", "json"])
         .output()
         .unwrap();
     assert!(list.status.success());
-    // With the default `uze` seeded, `list` is not empty after removing the
-    // fixture — the default plugin remains. Filter it out for this test's
-    // original assertion that the user-added package is gone.
-    let plugins = serde_json::from_slice::<serde_json::Value>(&list.stdout)
-        .unwrap()
+    // With the default `uze` seeded, the machine read model is not empty
+    // after removing the fixture — the default plugin remains. Filter it
+    // out for this test's original assertion that the user-added package
+    // is gone.
+    let plugins = serde_json::from_slice::<serde_json::Value>(&list.stdout).unwrap()["packages"]
         .as_array()
         .unwrap()
         .clone();
@@ -858,19 +846,18 @@ fn root_remove_no_longer_falls_back_to_global_removal() {
         "expected a no-project-environment error, got: {stderr}"
     );
     assert!(
-        stderr.contains("uze plugin remove"),
+        stderr.contains("uze remove"),
         "error should point at the machine-level equivalent, got: {stderr}"
     );
 
     // The whole point: the machine-installed package must survive untouched.
     let list = Command::new(env!("CARGO_BIN_EXE_uze"))
         .env("UZE_HOME", &home)
-        .args(["plugin", "list", "--format", "json"])
+        .args(["status", "-m", "--format", "json"])
         .output()
         .unwrap();
     assert!(list.status.success());
-    let plugins = serde_json::from_slice::<serde_json::Value>(&list.stdout)
-        .unwrap()
+    let plugins = serde_json::from_slice::<serde_json::Value>(&list.stdout).unwrap()["packages"]
         .as_array()
         .unwrap()
         .clone();
@@ -903,7 +890,7 @@ fn drift_a_managed_attachment(home: &std::path::Path, uze_home: &std::path::Path
 
 /// `Blocked` means the safety check refused and nothing was removed. The
 /// report used to print and the process exit 0, so
-/// `uze plugin remove x && uze plugin install y` ran the second half after
+/// `uze remove x -m && uze install y -m` ran the second half after
 /// the first had done nothing.
 #[cfg(unix)]
 #[test]
@@ -951,7 +938,7 @@ fn a_blocked_removal_reports_and_fails() {
     let _ = std::fs::remove_dir_all(fake_bin);
 }
 
-/// The same for `uze plugin update`, which blocks on the same check: it
+/// The same for `uze update -m`, which blocks on the same check: it
 /// removes the installed package before putting the new one in place.
 #[cfg(unix)]
 #[test]

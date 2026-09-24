@@ -47,7 +47,7 @@ export UZE_CONFORMANCE_KEY=dummy
 mkdir -p /work/home/.config/opencode /work/home/.agents
 {materialize_marketplace(cfg)}
 uze market add /work/market >/dev/null 2>&1
-for p in {plugins}; do uze plugin install $p@uze-lab >/dev/null 2>&1; done
+for p in {plugins}; do uze install $p@uze-lab -m >/dev/null 2>&1; done
 node -e '
 const fs=require("fs");
 const p="/work/home/.config/opencode/opencode.json";

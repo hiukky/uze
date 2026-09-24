@@ -1,0 +1,62 @@
+journey: installing with -m inside a project declares nothing the command does not state
+tags: [gate, cli, packages]
+proves: openspec/changes/flatten-the-command-grammar
+about: |
+  `-m` is the one way a caller that cannot choose a working directory states
+  intent — a script, a container, the conformance Lab. Inside a project,
+  the same verb without it declares the package in agents.yaml and the
+  lock; with it, the machine half happens and the project's files are left
+  byte-identical. The flag means the same machine scope on every verb it
+  appears on, and this journey holds the strictest reading: not one byte
+  of the project may move.
+
+world:
+  project: demo-app
+  files:
+    market/marketplace.json: |
+      {
+        "name": "demo",
+        "plugins": [
+          { "name": "flow", "source": "./plugins/flow", "description": "Canonical skill plugin." }
+        ]
+      }
+    market/plugins/flow/plugin.json: |
+      {
+        "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+        "name": "flow"
+      }
+    market/plugins/flow/skills/commit/SKILL.md: |
+      ---
+      name: commit
+      description: Commit the current changes
+      invoke:
+        model: false
+        user: true
+      ---
+      Commit body.
+
+scenes:
+  - scene: the project has a lock, and the command is about to leave it alone
+    when:
+      - shell: "{uze} market add {root}/market"
+      - shell: "{uze} install flow@demo"
+        say: declare the package the project's own way first
+    then:
+      - file: "{project}/agents.lock"
+        exists: true
+      - capture: { name: project_before, tree: "{project}" }
+        about: the whole project tree as the declaring left it
+
+  - scene: -m installs the machine half and the project files do not move
+    when:
+      - shell: "{uze} install -m flow@demo"
+        say: state machine scope from inside a project
+    then:
+      - tree: "{project}"
+        same_as: project_before
+        about: |
+          the project is byte-identical across the command — a scripted
+          install declared nothing, exactly as -m stated
+      - file: "{home}/.agents/skills/flow:commit/SKILL.md"
+        exists: true
+        about: the machine half happened; only the declaring did not

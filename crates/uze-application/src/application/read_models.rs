@@ -79,7 +79,7 @@ impl Plugins<'_> {
 #[derive(Clone, Debug, Serialize)]
 pub struct PluginSummary {
     pub id: String,
-    /// The local name this plugin currently invokes under (ADR-038) — its
+    /// The local name this plugin currently invokes under (ADR-036) — its
     /// own bare plugin name unless an install-time `alias` resolution gave
     /// it a different one to coexist with another marketplace's same-named
     /// plugin. Always present, never itself marketplace-qualified; `id`
@@ -784,6 +784,14 @@ pub struct StatusReport {
     /// `agent context inspect` — this is the "does anything need my
     /// attention" view.
     pub issues: Vec<String>,
+}
+
+/// The machine read model `uze status` answers with when there is no
+/// project here: every package installed, from where, and its freshness.
+/// The absence of a project is an answer, never a fault.
+#[derive(Clone, Debug, Serialize)]
+pub struct MachineStatusReport {
+    pub packages: Vec<PluginSummary>,
 }
 
 /// Drift along the chain a project's environment passes through:

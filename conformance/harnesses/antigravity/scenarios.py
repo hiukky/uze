@@ -92,7 +92,7 @@ cp /app/fixtures/installation_id /work/home/.gemini/antigravity-cli/installation
 {auth_fragment(prov_ip, auth)}
 {materialize_marketplace(cfg)}
 uze market add /work/market >/dev/null 2>&1
-for p in {plugins}; do uze plugin install $p@uze-lab >/dev/null 2>&1; done
+for p in {plugins}; do uze install $p@uze-lab -m >/dev/null 2>&1; done
 {prelude}
 {final_cmd}
 """

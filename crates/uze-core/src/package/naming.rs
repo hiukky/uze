@@ -1,4 +1,4 @@
-//! Plugin name collision boundary (ADR-038): the question `UzeStore::ingest`
+//! Plugin name collision boundary (ADR-036): the question `UzeStore::ingest`
 //! made necessary once a bare plugin name became something only one
 //! marketplace-qualified identity may actively claim at a time — *whose*
 //! decision is it when a second one wants the same name?

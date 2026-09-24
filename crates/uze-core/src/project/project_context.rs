@@ -45,8 +45,13 @@ impl ProjectContext {
 /// shim about to exec a harness) needs an answer it can render or ignore,
 /// not a failure mode.
 pub fn resolve(cwd: &Path) -> ProjectContext {
+    // Absence is an answer, not a failure: a directory that is no project
+    // yields a context rooted at `cwd` with no resources, which every
+    // caller can render or ignore.
     let root = crate::project_root::resolve_project_root(cwd)
-        .unwrap_or_else(|_| cwd.canonicalize().unwrap_or_else(|_| cwd.to_path_buf()));
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| cwd.canonicalize().unwrap_or_else(|_| cwd.to_path_buf()));
     let agents_md = root.join(AGENTS_MD_FILE_NAME);
     let agents_directory = root.join(AGENTS_DIRECTORY_NAME);
     ProjectContext {

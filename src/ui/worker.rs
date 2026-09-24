@@ -203,7 +203,7 @@ pub(crate) fn dispatch(
         Intent::None | Intent::Quit | Intent::CloseModal | Intent::CloseToTab(_) => {}
         Intent::OpenThemePicker => {
             // Cheap enough to read here rather than on a thread: a JSON
-            // read and a directory listing, the same work `uze theme list`
+            // read and a directory listing, the same work `uze config theme list`
             // is budgeted for.
             let themes: Vec<(String, bool)> = tui_application(home.clone())
                 .and_then(|app| app.themes().list(uze_theme::builtin_names()))
@@ -1058,7 +1058,7 @@ const SWATCHES: &[uze_theme::Token] = &[
 ///
 /// Cheap enough to read on this thread rather than a worker, for the same
 /// reason the theme picker reads its own: a JSON read and a directory
-/// listing, which is exactly the work `uze theme list` is budgeted for.
+/// listing, which is exactly the work `uze config theme list` is budgeted for.
 fn load_settings(home: &UzeHome, model: &mut TuiModel) {
     model.settings_read = true;
     let Ok(application) = tui_application(home.clone()) else {

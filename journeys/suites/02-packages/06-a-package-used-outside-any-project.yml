@@ -1,0 +1,81 @@
+journey: a package used outside any project is installed and delivered, and declares nothing
+tags: [gate, cli, packages]
+proves: openspec/changes/flatten-the-command-grammar
+about: |
+  The verb that has two scopes decides its own by where it runs. Standing
+  outside every project — no agents.yaml, no repository root, no AGENTS.md
+  anywhere above — the machine half alone is all there is: the package is
+  installed and delivered, and no project file is written anywhere, because
+  there is no project to write one into. The absence of a project is a
+  fact, never a fault, so the install says so instead of failing.
+
+world:
+  project: demo-app
+  files:
+    market/marketplace.json: |
+      {
+        "name": "demo",
+        "plugins": [
+          { "name": "flow", "source": "./plugins/flow", "description": "Canonical skill plugin." }
+        ]
+      }
+    market/plugins/flow/plugin.json: |
+      {
+        "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+        "name": "flow"
+      }
+    market/plugins/flow/skills/commit/SKILL.md: |
+      ---
+      name: commit
+      description: Commit the current changes
+      invoke:
+        model: false
+        user: true
+      ---
+      Commit body.
+
+scenes:
+  - scene: a package installed where no project is
+    when:
+      - shell: "{uze} market add {root}/market"
+        in: "{home}"
+        say: register the marketplace from a directory that is no project
+    then:
+      - dir: "{home}/agents.yaml"
+        exists: false
+        about: registering a marketplace declares nothing in a home that is no project
+
+  - scene: the install acts on the machine, and says nothing was declared
+    when:
+      - shell: "{uze} install flow@demo"
+        in: "{home}"
+        say: install from the home directory — the machine half alone
+    then:
+      - file: "{uze_home}/store/plugins/demo/flow/plugin.json"
+        exists: true
+        about: the package is installed on the machine
+      - file: "{home}/.agents/skills/flow:commit/SKILL.md"
+        exists: true
+        about: and delivered where every harness reads skills from
+      - file: "{home}/.claude/skills/flow:commit/SKILL.md"
+        exists: true
+      - file: "{home}/agents.yaml"
+        exists: false
+        about: no project file anywhere — there was no project to declare it in
+      - file: "{home}/agents.lock"
+        exists: false
+      - file: "{home}/AGENTS.md"
+        exists: false
+        about: not even the context file was begun
+
+  - scene: the bytes the machine holds reach a project's harnesses too
+    when:
+      - shell: "{uze} status"
+        in: "{project}"
+        say: from inside the project, where nothing was declared
+    then:
+      - file: "{project}/agents.yaml"
+        exists: false
+        about: this project declared nothing, and the report said as much
+      - file: "{project}/.worktrees"
+        exists: false

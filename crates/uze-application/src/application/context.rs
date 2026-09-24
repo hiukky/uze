@@ -268,7 +268,12 @@ impl Context<'_> {
         // caller pointing at a subdirectory must land on the same root every
         // other project-scoped command finds, not treat the subdirectory as
         // a project with no context at all.
-        let canonical = uze_core::project_root::resolve_project_root(project_root)?;
+        let canonical =
+            uze_core::project_root::resolve_project_root(project_root)?.ok_or_else(|| {
+                UzeError::NoProject {
+                    hint: "context is a project's; stand inside one".to_owned(),
+                }
+            })?;
         Ok(ContextScope {
             agents_md: canonical.join(AGENTS_MD_FILE_NAME),
             canonical,

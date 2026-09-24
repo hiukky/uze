@@ -1151,7 +1151,7 @@ fn render_navigator(
                 };
                 // The selected row is marked the way every other list in
                 // the product marks its selection — the accent bar and the
-                // selected surface the plugin list uses — rather than a
+                // selected surface the status listing uses — rather than a
                 // neutral lift that the diff beside it easily outshone.
                 // The marker stands in the column a group's fold mark does,
                 // and holds that column's width even when it has nothing to

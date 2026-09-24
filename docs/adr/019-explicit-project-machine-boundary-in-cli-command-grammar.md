@@ -2,6 +2,13 @@
 
 Status: Accepted
 
+> Superseded in part by the flattening of the command grammar: the `plugin`
+> namespace this ADR established is gone, its operations are root verbs, and
+> the scope it made structural is carried by the directory the command runs
+> in plus `-m` / `--machine`. See the successor ADR written when
+> `flatten-the-command-grammar` archives; this record's boundary — machine
+> and project scope never inferred from one another — stands.
+
 ## Context
 
 ADR-016 established, at the application layer, a firm separation between Project state (`agents.lock`,

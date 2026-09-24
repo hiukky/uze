@@ -514,7 +514,7 @@ impl UzeApplication {
     }
 
     pub(crate) fn package_by_name(&self, name: &str) -> Result<StoredPackage> {
-        // A plugin is addressable by its active local name (ADR-038) first —
+        // A plugin is addressable by its active local name (ADR-036) first —
         // its own bare plugin name unless an install-time alias resolved a
         // collision, in which case only one installed package ever answers
         // to a given name at all, so this can never be ambiguous. Falls

@@ -174,7 +174,7 @@ impl PackageId {
 }
 
 /// The one charset/shape rule every plugin name, marketplace name, and
-/// local active-name alias is held to (ADR-038): a leading `-` would let a
+/// local active-name alias is held to (ADR-036): a leading `-` would let a
 /// carelessly named entry be parsed as a flag by a vendor CLI that takes it
 /// as a bare positional argument, so it is rejected at every chokepoint
 /// that turns operator/manifest text into one of these tokens.
@@ -223,7 +223,7 @@ pub struct StoredPackage {
     pub provenance: Provenance,
     /// The local token this plugin currently invokes under — `id.plugin_name()`
     /// unless an install-time alias resolved a collision with another
-    /// marketplace's same-named plugin (ADR-038). This is what a harness's
+    /// marketplace's same-named plugin (ADR-036). This is what a harness's
     /// generated manifest/catalog and every Skill/Command label use; `id`
     /// remains the real, marketplace-qualified identity everywhere else
     /// (Store paths, receipts, removal, update).
@@ -309,7 +309,7 @@ impl UzeStore {
     ///
     /// The plugin is recorded under the marketplace that resolved it, active
     /// under its own bare name unless `active_name` gives an alias — the
-    /// `alias` collision resolution (ADR-038). Fails with
+    /// `alias` collision resolution (ADR-036). Fails with
     /// `PluginNameCollision` when the name it would answer to is already
     /// active under a different marketplace-qualified identity.
     pub fn ingest(
@@ -361,7 +361,7 @@ impl UzeStore {
         // first wins `/name:capability`, with zero indication the other
         // exists). This is the one place every install path passes
         // through, so the check cannot be bypassed by a different entry
-        // point (ADR-038).
+        // point (ADR-036).
         if let Some(holder) = Self::active_name_holder(&registry, requested_active)
             && holder != &id
         {

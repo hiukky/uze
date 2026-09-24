@@ -12,7 +12,7 @@ make wsl-lab
 
 # In Lab
 uze setup opencode
-uze plugin list
+uze status
 ```
 
 > **Not installable as-is.** A plugin is only ever resolved through a

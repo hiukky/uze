@@ -266,6 +266,17 @@ impl Health<'_> {
         )
     }
 
+    /// `uze status` outside a project: this machine's packages, from where
+    /// and their freshness — the machine read model the spec asks for. The
+    /// absence of a project is an answer, never a fault, so this is a
+    /// report like any other rather than `status`'s project view with the
+    /// project half blank.
+    #[tracing::instrument(name = "health.machine_status", skip_all, err)]
+    pub fn machine_status(&self) -> Result<MachineStatusReport> {
+        let packages = self.0.plugins().list()?;
+        Ok(MachineStatusReport { packages })
+    }
+
     #[tracing::instrument(name = "health.status", skip_all, fields(project_root = %project_root.display()), err)]
     pub fn status(&self, project_root: &std::path::Path) -> Result<StatusReport> {
         let context = self.0.context().inspect(project_root)?;

@@ -40,7 +40,7 @@ scenes:
 
   - scene: the first command that needs state creates UZE's home, and nobody else's
     when:
-      - shell: "{uze} plugin list"
+      - shell: "{uze} status -m"
         say: ask the machine what it has installed
     then:
       - dir: "{uze_home}/store"
@@ -60,7 +60,7 @@ scenes:
         about: |
           and it is delivered, not merely stored — the seeded plugin reaches
           each harness through that harness's own mechanism, which is why a
-          machine that has only ever run `plugin list` already has UZE's own
+          machine that has only ever run `status -m` already has UZE's own
           skill available in every one of them
       - dir: "{home}/.claude/skills"
         exists: true

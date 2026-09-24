@@ -44,13 +44,7 @@ fn fresh_machine_installs_canonical_plugin_and_inspects_healthy() {
 
     let inspect = env.run_ok(
         uze_bin(),
-        &[
-            "plugin",
-            "inspect",
-            "uze-agent-skill-conformance",
-            "--format",
-            "json",
-        ],
+        &["inspect", "uze-agent-skill-conformance", "--format", "json"],
     );
     let report: serde_json::Value = serde_json::from_slice(&inspect.stdout).expect("json report");
     let capabilities = report["capabilities"]

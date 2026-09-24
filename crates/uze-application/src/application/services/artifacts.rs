@@ -31,7 +31,7 @@ pub enum ProjectArtifacts {
 
 /// What the project `cwd` sits in declares about its artifacts.
 pub fn project_artifacts(cwd: &Path) -> ProjectArtifacts {
-    let Ok(root) = project_root::resolve_project_root(cwd) else {
+    let Ok(Some(root)) = project_root::resolve_project_root(cwd) else {
         return ProjectArtifacts::Undeclared;
     };
     let declared = match manifest::load(&root) {

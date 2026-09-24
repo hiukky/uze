@@ -466,7 +466,7 @@ fn emit_vendor_marketplace(state_dir: &Path, vendor: MarketplaceVendor) -> Strin
             block.push_str("        name=$(cat \"$state_dir/name\" 2>/dev/null)\n");
             block.push_str("        while IFS= read -r sel; do\n");
             // `sel` is the vendor selector `{active_name}@{native
-            // marketplace}` (ADR-038: `active_name` is bare, never
+            // marketplace}` (ADR-036: `active_name` is bare, never
             // marketplace-qualified). The real Codex resolves an install by
             // looking up `active_name` in its own catalogue and reporting
             // back that entry's `source.path` — the generated dir named by

@@ -29,3 +29,7 @@
 
 - [x] 5.1 `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test --workspace`
 - [x] 5.2 `openspec validate agent-finished-chime --strict`
+
+## 6. The CLI surface (carried by flatten-the-command-grammar)
+
+- [x] 6.1 `uze config notification on|off|silent|test` writes the same `config.toml` record the TUI control writes; `test` rings once and leaves the choice in force untouched

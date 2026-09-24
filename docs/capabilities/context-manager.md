@@ -30,7 +30,7 @@ of this boundary later:
 
 ## Why a separate boundary
 
-`uze plugin install`/`remove`/`update` stay entirely machine-scoped. A second,
+`uze install <name>@<market>`/`remove <plugin> -m`/`update -m` stay entirely machine-scoped. A second,
 independent concern reads the installed package set and reconciles it into *one
 project's* shared context, taking `project_root` as ordinary function input —
 never as a persisted `Project` entity.

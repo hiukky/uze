@@ -654,7 +654,7 @@ fn remove_project_plugin_reports_no_lock_and_not_in_lock_distinctly() {
 #[test]
 fn same_named_plugins_from_two_marketplaces_coexist_and_require_qualified_lookup() {
     // ADR-036's Store layout (bytes/registrations coexist per marketplace)
-    // is unchanged; ADR-038 adds that only one of them may be *active*
+    // is unchanged; ADR-036 adds that only one of them may be *active*
     // under the bare name at a time. Plain `plugin_install` refuses the
     // second one; resolving with an explicit alias lets both coexist.
     let base = temp("same-name-marketplaces");
@@ -730,7 +730,7 @@ fn same_named_plugins_from_two_marketplaces_coexist_and_require_qualified_lookup
         .is_dir()
     );
     // Once resolved, at most one package ever answers to a bare name at all
-    // (ADR-038) — `flow` now unambiguously means "whichever is active under
+    // (ADR-036) — `flow` now unambiguously means "whichever is active under
     // it", never the old "installed from multiple marketplaces" refusal.
     // The aliased one is addressable the same way, by its own active name.
     assert!(matches!(
@@ -878,7 +878,7 @@ mod drift {
     ///
     /// What is *not* touched is the machine. The Store keeps the package
     /// and every harness keeps reading it, because other projects share
-    /// both — taking it off this machine is `uze plugin remove`, which is
+    /// both — taking it off this machine is `uze remove <plugin> -m`, which is
     /// a different scope by ADR-019.
     #[test]
     fn install_converges_the_lock_and_leaves_the_machine_alone() {

@@ -1,0 +1,61 @@
+journey: the notification choice made from the CLI is the choice the machine is in force with
+tags: [gate, cli, first-run]
+proves: openspec/changes/flatten-the-command-grammar
+about: |
+  The chime's choice has two ways in — the workspace client's own control
+  and `uze config notification` — and they are two doors into one room: both
+  write the same `config.toml` record, and whichever surface reads it next
+  shows the choice the last one made. `test` rings once whatever the choice
+  in force says, because "does this machine actually speak" is a question a
+  person asks standing at a prompt, and a choice they cannot hear is one
+  they cannot verify.
+
+world:
+  project: demo-app
+  first_run: true
+
+scenes:
+  - scene: a machine that never chose is silent, and says so
+    when:
+      - shell: "{uze} config notification"
+        say: ask what the choice in force is
+    then:
+      - file: "{uze_home}/config.toml"
+        exists: false
+        about: reading the choice wrote nothing — the default is absence itself
+
+  - scene: the CLI sets the choice, and the file is the one the client reads
+    when:
+      - shell: "{uze} config notification on"
+        say: choose Always from the command line
+    then:
+      - file: "{uze_home}/config.toml"
+        contains: "agent_finished = \"always\""
+        about: the same record the workspace client's own control writes
+      - file: "{uze_home}/config.toml"
+        contains: "[notifications]"
+        about: in the section the chime reads, machine-scoped as the spec keeps it
+
+  - scene: a choice is a decision, so repeating it exactly is safe
+    when:
+      - shell: "{uze} config notification on"
+        say: set the same choice again
+    then:
+      - file: "{uze_home}/config.toml"
+        contains: "agent_finished = \"always\""
+        about: the file grew by a key, not by a rewrite that could lose a hand-written neighbour
+
+  - scene: an unknown value the file did not write is reported, never rewritten
+    when:
+      - shell: |
+          set -e
+          printf '[notifications]\nagent_finished = "maybe"\n' > {uze_home}/config.toml
+        say: a hand-written value the grammar does not recognise
+      - shell: "{uze} config notification silent"
+    then:
+      - file: "{uze_home}/config.toml"
+        contains: 'agent_finished = "silent"'
+        about: |
+          the unknown value behaved as Silent until the operator chose again,
+          and the choice is an explicit one, not a silent rewrite of a file
+          they may have written by hand

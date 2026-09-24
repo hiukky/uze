@@ -77,7 +77,7 @@ scenes:
 
   - scene: installing keeps one copy of the bytes, in the Store
     when:
-      - shell: "{uze} plugin install flow@demo"
+      - shell: "{uze} install -m flow@demo"
         say: install the plugin once
     then:
       - file: "{uze_home}/store/plugins/demo/flow/plugin.json"
@@ -90,7 +90,7 @@ scenes:
         contains: The body a harness would read
         about: the source it came from was never written to
       - cmd:
-          run: "{uze} plugin list"
+          run: "{uze} status -m"
           stdout_contains: flow
         about: and UZE agrees it is installed
 

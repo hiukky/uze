@@ -39,7 +39,10 @@ impl Project<'_> {
     /// `agents.yaml` to the projection that has not caught up.
     #[tracing::instrument(name = "project.plan", skip_all, fields(root = %root.display()), err)]
     pub fn plan(&self, root: &Path) -> Result<ProjectEnvironmentPlan> {
-        let canonical = project_root::resolve_project_root(root)?;
+        let canonical =
+            project_root::resolve_project_root(root)?.ok_or_else(|| UzeError::NoProject {
+                hint: "a plan is about a project; stand inside one".to_owned(),
+            })?;
         // The manifest is the head of the chain, not the lock. A plan
         // founded on `agents.lock` cannot see the edit a person just made
         // to `agents.yaml`, which is the most common reason to ask for one
@@ -165,8 +168,9 @@ impl Project<'_> {
         // its plugins are installed for every project by the machine's own
         // bootstrap, so neither `agents.yaml` nor the lock records it — an
         // entry recording something nobody declared is a line that cannot
-        // be acted on.
-        if marketplace == uze_core::manifest::BUILT_IN_MARKETPLACE {
+        // be acted on. A directory that is no project takes the same road:
+        // the machine half alone, and the report says nothing was declared.
+        if marketplace == uze_core::manifest::BUILT_IN_MARKETPLACE || canonical.is_none() {
             // No mutation lock taken here: the call below takes it, and it
             // is not re-entrant.
             return self.0.marketplace().install_plugin_resolving(
@@ -175,6 +179,7 @@ impl Project<'_> {
                 &uze_core::naming::NoNameCollisionAuthority,
             );
         }
+        let canonical = canonical.unwrap();
 
         let mut lock = project_lock::load_lock(&canonical)?.unwrap_or_default();
         let global = uze_core::state::marketplace_get(&self.0.home, marketplace)?
@@ -232,7 +237,11 @@ impl Project<'_> {
     /// command is about what *this* project declares.
     #[tracing::instrument(name = "project.remove", skip_all, fields(plugin = %plugin, root = %root.display()), err)]
     pub fn remove(&self, plugin: &str, root: &Path) -> Result<RemoveProjectPluginReport> {
-        let canonical = project_root::resolve_project_root(root)?;
+        let canonical = project_root::resolve_project_root(root)?.ok_or_else(|| {
+            UzeError::NoProjectEnvironment {
+                plugin: plugin.to_owned(),
+            }
+        })?;
         let undeclared = manifest::undeclare_plugin(&canonical, plugin)?;
         let mut lock = match project_lock::load_lock(&canonical)? {
             Some(lock) => lock,
@@ -282,10 +291,22 @@ impl Project<'_> {
         &self,
         root: &Path,
         plugin: Option<&str>,
+        machine: bool,
         authority: &dyn TrustAuthority,
     ) -> Result<UpdateReport> {
         self.0.begin_operation();
         let canonical = project_root::resolve_project_root(root)?;
+        // `-m` states machine scope even inside a project; and where there
+        // is no project, the machine half alone is all there is. Either
+        // way: every installed package re-resolved from its own source, and
+        // no project file written anywhere because there is none to write
+        // into.
+        if machine {
+            return self.update_machine(plugin, authority);
+        }
+        let Some(canonical) = canonical else {
+            return self.update_machine(plugin, authority);
+        };
         let manifest = manifest::load(&canonical)?.unwrap_or_default();
         let mut lock = project_lock::load_lock(&canonical)?.unwrap_or_default();
 
@@ -442,6 +463,67 @@ impl Project<'_> {
         })
     }
 
+    /// The machine half of `update`, stated explicitly by `-m` or taken
+    /// because there is no project: every installed package — or the one
+    /// named — re-resolved from its own source, with no project file
+    /// touched and the report naming each package it moved.
+    ///
+    /// Best-effort like the project update: one package's failure never
+    /// stops the rest, and a blocked or trust-held update leaves the
+    /// installed revision untouched — `Plugins::update` inspects before it
+    /// detaches.
+    fn update_machine(
+        &self,
+        plugin: Option<&str>,
+        authority: &dyn TrustAuthority,
+    ) -> Result<UpdateReport> {
+        let targets: Vec<String> = match plugin {
+            Some(wanted) => vec![self.0.package_by_name(wanted)?.id.as_str().to_owned()],
+            None => self
+                .0
+                .installed_packages()
+                .iter()
+                .map(|package| package.id.as_str().to_owned())
+                .collect(),
+        };
+        let mut outcomes = Vec::new();
+        for id in targets {
+            match self.0.plugins().update(&id, authority) {
+                Ok(UpdatePluginReport::Updated { .. }) => {
+                    let revision = self
+                        .0
+                        .package_by_name(&id)
+                        .map(|package| package.provenance.resolved.display())
+                        .unwrap_or_default();
+                    outcomes.push(UpdateOutcome::Moved {
+                        plugin: id,
+                        revision,
+                    });
+                }
+                Ok(UpdatePluginReport::Blocked { .. }) => {
+                    outcomes.push(UpdateOutcome::Held {
+                        plugin: id,
+                        reason: "managed state has drifted; nothing was changed".to_owned(),
+                    });
+                }
+                Err(UzeError::TrustRequired { detail, .. }) => {
+                    outcomes.push(UpdateOutcome::Held {
+                        plugin: id,
+                        reason: format!(
+                            "the newer revision asks to execute something new ({detail}); \
+                             confirm it explicitly"
+                        ),
+                    });
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        Ok(UpdateReport {
+            reconciled: false,
+            outcomes,
+        })
+    }
+
     /// Brings the project's declared environment about, in two passes over
     /// the same lifecycle an ordinary add uses
     /// (`authorize → prepare → ingest → republish → attach`):
@@ -474,6 +556,14 @@ impl Project<'_> {
     pub fn install(&self, root: &Path, authority: &dyn TrustAuthority) -> Result<InstallReport> {
         self.0.begin_operation();
         let canonical = project_root::resolve_project_root(root)?;
+        // No project here: there is nothing declared to bring about, and
+        // creating an `agents.yaml` would turn the directory into a project
+        // by being stood in — the exact thing the resolution above refuses.
+        // The answer is an empty report the verb reports as "nothing was
+        // declared".
+        let Some(canonical) = canonical else {
+            return Ok(InstallReport::NoChanges);
+        };
         // `install` is an explicit act of setting this project up, so it is
         // the right moment to create the file a person edits — unlike
         // opening the client, which must write nothing into a repository
@@ -641,8 +731,9 @@ impl Project<'_> {
         // it agree with what the project declared is the least destructive
         // thing this command does, not the most. What *would* be
         // destructive is taking the package off the machine or out of a
-        // harness, and that is `uze plugin remove`'s to do: other projects
-        // share the Store, and ADR-019 keeps project scope out of it.
+        // harness, and that is `uze remove <plugin> -m`'s to do: other
+        // projects share the Store, and ADR-019 keeps project scope out of
+        // it.
         let mut removed_plugins = Vec::new();
         let surplus = project_lock::surplus_against(&manifest, &lock);
         if !surplus.is_empty() {
@@ -864,8 +955,8 @@ impl Project<'_> {
     #[tracing::instrument(name = "project.lock_status", skip_all, fields(root = %root.display()))]
     pub fn lock_status(&self, root: &Path) -> ProjectLockStatus {
         let canonical = match project_root::resolve_project_root(root) {
-            Ok(canonical) => canonical,
-            Err(_) => return ProjectLockStatus::Absent,
+            Ok(Some(canonical)) => canonical,
+            Ok(None) | Err(_) => return ProjectLockStatus::Absent,
         };
         let lock = match project_lock::load_lock(&canonical) {
             Ok(Some(lock)) => lock,

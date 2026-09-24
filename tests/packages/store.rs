@@ -91,7 +91,7 @@ fn store_installs_one_agent_plugin_once_without_a_uze_manifest() {
 /// ADR-036's Store layout is unchanged: two same-named plugins from distinct
 /// marketplaces can always coexist as *bytes*, each under its own
 /// `store/plugins/<marketplace>/<plugin>` directory and registry entry.
-/// ADR-038 adds a second, independent layer on top: at most one of them may
+/// ADR-036 adds a second, independent layer on top: at most one of them may
 /// be *active* under that bare name at a time (the name a harness actually
 /// invokes) — ingesting a second one under the same default name is refused,
 /// not silently allowed to shadow the first.

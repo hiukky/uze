@@ -16,16 +16,22 @@ use uze_application::{
     UzeApplication,
     application::{
         AddPluginReport, ContextPlan, ContextReconciliationReport, DoctorReport,
-        HarnessContextDelivery, HarnessHealth, MarketplaceSummary, PluginInspection, Portability,
-        ProjectContextStatus, RemovePluginReport, RemoveProjectPluginReport, StatusReport,
+        HarnessContextDelivery, HarnessHealth, InstallReport, MachineStatusReport,
+        MarketplaceSummary, PluginInspection, Portability, ProjectContextStatus,
+        RemovePluginReport, RemoveProjectPluginReport, StatusReport,
     },
 };
+use uze_core::notifications::Chime;
 
 #[derive(Debug, Parser)]
 #[command(
     name = "uze",
     version,
     about = "Manage one local agent plugin environment",
+    after_help = "Scope: a project is the nearest agents.yaml, repository root or AGENTS.md. \
+                  Project verbs maintain this project's agents.yaml when one is here, and \
+                  act on this machine only when there is none — they always say which they \
+                  touched. -m states machine scope on the verbs that have two.",
     styles = progress::clap_styles()
 )]
 struct Cli {
@@ -38,13 +44,38 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
-    /// Resolve agents.yaml into agents.lock, then install what it records
+    /// Install what this project declares, or one package from its
+    /// marketplace
+    ///
+    /// With `name@marketplace`, that package is installed on this machine
+    /// and, inside a project, declared in agents.yaml — `-m` installs and
+    /// declares nothing. With no package, the project's environment is
+    /// converged: agents.yaml resolved into agents.lock, then installed.
+    /// A direct path or Git URL is never accepted — the marketplace is the
+    /// product's provenance contract (see ADR-019).
     #[command(visible_alias = "i")]
     Install {
+        /// `<name>@<marketplace>`; omitted, converge this project's
+        /// environment
+        plugin: Option<String>,
         path: Option<PathBuf>,
         /// Authorize executable capabilities
         #[arg(long)]
         trust: bool,
+        /// Machine scope: install and declare nothing, project or not
+        #[arg(short = 'm', long)]
+        machine: bool,
+        /// If the package's bare name is already active from a different
+        /// marketplace, install this one under `NAME` instead, so both stay
+        /// active side by side. Package installs only; conflicts with
+        /// `--replace`.
+        #[arg(long, conflicts_with = "replace")]
+        alias: Option<String>,
+        /// If the package's bare name is already active from a different
+        /// marketplace, remove that one first (once safe to) and let this
+        /// install claim the name. Package installs only.
+        #[arg(long)]
+        replace: bool,
         #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
         format: OutputFormat,
     },
@@ -52,45 +83,61 @@ enum Command {
     ///
     /// `install` reproduces what `agents.lock` records, which is what lets
     /// a clone reach the bytes the project was locked at. Moving a pin is
-    /// this command. Machine-wide package bytes are `uze plugin update`.
+    /// this command. Outside a project — or with `-m` — every package
+    /// installed on this machine is re-resolved from its own source.
     Update {
-        /// One plugin. Omit to consider every plugin the manifest declares.
+        /// One package. Omit to update what the manifest declares.
         plugin: Option<String>,
         path: Option<PathBuf>,
         /// Authorize executable capabilities
         #[arg(long)]
         trust: bool,
+        /// Machine scope: re-resolve installed packages, touching no
+        /// project file
+        #[arg(short = 'm', long)]
+        machine: bool,
         #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
         format: OutputFormat,
     },
-    /// Remove a plugin from this project
+    /// Undeclare a package from this project, or remove it from this
+    /// machine with `-m`
     ///
-    /// Never touches the machine Store — see `uze plugin remove` for that.
+    /// Removing undeclares: the bytes stay, because other projects share
+    /// them. `-m` is the machine removal, subject to the same lifecycle and
+    /// drift safety. Neither is implied by the other.
     Remove {
+        plugin: String,
+        /// Remove from this machine instead of undeclaring
+        #[arg(short = 'm', long)]
+        machine: bool,
+        #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
+        format: OutputFormat,
+    },
+    /// Inspect one installed package's delivery
+    Inspect {
         plugin: String,
         #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
         format: OutputFormat,
     },
-    /// Show this project's environment status
+    /// Remove from this project, or from this machine with `-m`
     Status {
         path: Option<PathBuf>,
+        /// The machine read model: packages installed, from where, and
+        /// their freshness — the project's own report otherwise
+        #[arg(short = 'm', long)]
+        machine: bool,
         #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
         format: OutputFormat,
     },
-    /// Choose what UZE looks like
-    Theme {
+    /// Configure this machine: appearance, icons, notifications
+    Config {
         #[command(subcommand)]
-        action: ThemeAction,
+        action: ConfigAction,
     },
     /// Manage marketplace sources
     Market {
         #[command(subcommand)]
         action: MarketAction,
-    },
-    /// Manage plugins installed on this machine
-    Plugin {
-        #[command(subcommand)]
-        action: PluginAction,
     },
     /// Run diagnostics
     Doctor {
@@ -143,10 +190,11 @@ enum Command {
 
 #[derive(Debug, Subcommand)]
 enum AgentAction {
-    /// The task this agent is working in
-    Task {
+    /// The work this agent is doing — the checkout under .worktrees/, the
+    /// branch a reviewer sees, the label an operator reads
+    Work {
         #[command(subcommand)]
-        action: AgentTaskAction,
+        action: AgentWorkAction,
     },
     /// The diagrams this project declares under `artifacts:`
     Artifacts {
@@ -162,7 +210,7 @@ enum AgentAction {
 }
 
 #[derive(Debug, Subcommand)]
-enum AgentTaskAction {
+enum AgentWorkAction {
     /// Name the work being done, as `<type>/<subject>`
     Name {
         /// The proposed name, judged against the project's vocabulary
@@ -267,7 +315,7 @@ enum MarketAction {
     /// Inspect one marketplace's own source and plugin count.
     ///
     /// Distinct from inspecting one plugin within a marketplace
-    /// (`plugin inspect`).
+    /// (`uze inspect <plugin>`).
     Inspect {
         name: String,
         #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
@@ -276,81 +324,42 @@ enum MarketAction {
 }
 
 #[derive(Debug, Subcommand)]
-enum ThemeAction {
-    /// List the themes this machine can draw with, marking the active one.
-    List {
-        #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
-        format: OutputFormat,
+enum ConfigAction {
+    /// The themes this machine draws with
+    Theme {
+        #[command(subcommand)]
+        action: ConfigThemeAction,
     },
-    /// Draw in this theme, from now on, in both the CLI and the TUI.
-    Set { id: String },
     /// The glyph sets UZE carries, or the one to draw with. Chosen apart
     /// from the palette: which marks your terminal can draw is a fact about
     /// the font you installed, not about which colours you like today.
-    Glyphs {
+    Icons {
         set: Option<String>,
         #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
         format: OutputFormat,
     },
-    /// Show a theme's resolved colours and glyphs, and anything its file
-    /// got wrong. The active one by default.
-    Show {
-        id: Option<String>,
+    /// Which finished agent turns ring, or `test` to hear one now
+    Notification {
+        /// `on`, `off` or `silent`; omitted, the choice in force
+        state: Option<String>,
         #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
         format: OutputFormat,
     },
 }
 
 #[derive(Debug, Subcommand)]
-enum PluginAction {
-    /// Install a plugin on this machine, as `name@marketplace`.
-    ///
-    /// Its marketplace must have been added first (`uze market add
-    /// <market>`); a direct path or Git URL is never accepted. Never
-    /// touches the current project's `agents.lock` (use
-    /// `uze <plugin>@<market>` for that).
-    Install {
-        plugin: String,
-        #[arg(long)]
-        trust: bool,
-        /// If `plugin`'s bare name is already active from a different
-        /// marketplace, install this one under `NAME` instead, so both stay
-        /// active side by side. Conflicts with `--replace`.
-        #[arg(long, conflicts_with = "replace")]
-        alias: Option<String>,
-        /// If `plugin`'s bare name is already active from a different
-        /// marketplace, remove that one first (once safe to) and let this
-        /// install claim the name. Conflicts with `--alias`.
-        #[arg(long)]
-        replace: bool,
-        #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
-        format: OutputFormat,
-    },
-    /// List plugins installed on this machine.
+enum ConfigThemeAction {
+    /// List the themes this machine can draw with, marking the active one
     List {
         #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
         format: OutputFormat,
     },
-    /// Inspect one installed plugin's delivery.
-    Inspect {
-        plugin: String,
-        #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
-        format: OutputFormat,
-    },
-    /// Remove a plugin from this machine.
-    ///
-    /// Subject to ADR-009 lifecycle/drift safety, and never implied by
-    /// `uze remove`.
-    Remove {
-        plugin: String,
-        #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
-        format: OutputFormat,
-    },
-    /// Update a plugin to its latest version (re-resolves its source).
-    Update {
-        plugin: String,
-        #[arg(long)]
-        trust: bool,
+    /// Draw in this theme, from now on, in both the CLI and the TUI
+    Set { id: String },
+    /// Show a theme's resolved colours and glyphs, and anything its file
+    /// got wrong. The active one by default.
+    Show {
+        id: Option<String>,
         #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
         format: OutputFormat,
     },
@@ -379,6 +388,9 @@ struct ShorthandArgs {
     /// Authorize executable capabilities
     #[arg(long)]
     trust: bool,
+    /// Machine scope: install the package and declare nothing, project or not
+    #[arg(short = 'm', long)]
+    machine: bool,
     /// Show delivery evidence and full attachment details
     #[arg(long)]
     verbose: bool,
@@ -435,6 +447,16 @@ fn main() {
             )
             .exit();
     }
+    // The two removed spellings the removal would otherwise leave nameless:
+    // clap's own "unrecognized subcommand" is the right shape, but it
+    // cannot know what replaced them — so the tip is added here, where the
+    // argv is still readable, rather than a deprecated alias kept alive.
+    // One spelling per operation (see the command-grammar spec): no alias.
+    if let Some(replacement) = removed_spelling(&args[1..]) {
+        Cli::command()
+            .error(ErrorKind::InvalidSubcommand, replacement)
+            .exit();
+    }
     // `get`, not an index: a process `exec`d with an empty argv has no
     // element 1, and asking for one is a panic before clap ever runs.
     if let Some(topic) = help_topic(args.get(1..).unwrap_or_default()) {
@@ -457,6 +479,36 @@ fn argv_lossy() -> Vec<String> {
     std::env::args_os()
         .map(|argument| argument.to_string_lossy().into_owned())
         .collect()
+}
+
+/// The removed spellings, each named by the verb that replaced it.
+///
+/// Only these two: the `plugin` namespace and the `agent task` noun. An
+/// alias would keep two spellings of one operation alive, which the
+/// command-grammar spec refuses — but a removal that leaves no message
+/// naming its replacement is a removal the next caller repeats wrong.
+fn removed_spelling(argv: &[String]) -> Option<String> {
+    let spoken = |words: &[&str]| {
+        words
+            .iter()
+            .zip(argv.iter().map(String::as_str))
+            .all(|(word, given)| word.eq_ignore_ascii_case(given))
+    };
+    if argv.first().is_some_and(|first| first == "plugin") {
+        return Some(
+            "unrecognized subcommand 'plugin'\n\n  the plugin namespace is gone — install, remove, \
+             update, inspect and status are root verbs now, and `-m` states machine scope"
+                .to_owned(),
+        );
+    }
+    if spoken(&["agent", "task"]) {
+        return Some(
+            "unrecognized subcommand 'task'\n\n  the agent grammar speaks of work: \
+             use `uze agent work`"
+                .to_owned(),
+        );
+    }
+    None
 }
 
 enum HelpTopic {
@@ -800,44 +852,153 @@ fn dispatch(cli: Cli, home: UzeHome) -> Result<()> {
     let app = UzeApplication::from_env(home.clone())?;
     // Seed the default marketplace plugins (`plugins/uze`) on every CLI
     // invocation. This makes the Skill globally available without a manual
-    // `uze plugin install` and heals its attachment after a binary update.
+    // `ensure_default_plugins()` and heals its attachment after a binary update.
     // Best-effort: failures here must not block `doctor`/`list` etc.
     let _ = app.ensure_default_plugins();
     match command {
         Command::Install {
+            plugin,
             path,
             trust,
+            machine,
+            alias,
+            replace,
             format,
         } => {
             let authority = trust_authority(trust);
-            let report = with_spinner(
-                "Installing project environment...",
-                "Failed to install environment",
-                || {
-                    app.project()
-                        .install(&context_path(path), authority.as_ref())
-                },
-            )?;
-            emit(format, &report, render_install);
+            match plugin {
+                // One package: the marketplace is the product's provenance
+                // contract, so the spec is always `name@marketplace` (see
+                // ADR-019). `-m` states machine scope; without it the
+                // project declares the package when there is a project,
+                // and the machine half alone runs when there is not — both
+                // report which scope they touched.
+                Some(spec) => {
+                    if !spec.contains('@') {
+                        return Err(uze_application::UzeError::UnknownPackage(format!(
+                            "`{spec}` is not a `name@marketplace` spec; add its marketplace with \
+                             `uze market add <market>` first, then install with \
+                             `uze install {spec}@<market>`"
+                        )));
+                    }
+                    let name_authority = name_collision_authority(alias, replace);
+                    let report = if machine {
+                        machine_install(&app, &spec, authority.as_ref(), name_authority.as_ref())?
+                    } else {
+                        let (plugin_name, marketplace) = split_spec(&spec)?;
+                        let current_dir = cwd()?;
+                        let report = with_spinner(
+                            &format!("Installing {spec}..."),
+                            &format!("Failed to install {spec}"),
+                            || {
+                                app.project().add(
+                                    &plugin_name,
+                                    &marketplace,
+                                    &current_dir,
+                                    authority.as_ref(),
+                                )
+                            },
+                        )?;
+                        if matches!(format, OutputFormat::Text) {
+                            report_scope("this machine and this project");
+                        }
+                        emit(format, &report, |report| {
+                            format!(
+                                "{}\n{}\n{}",
+                                progress::report_title(
+                                    "Added to project",
+                                    Some(&format!("{plugin_name}@{marketplace}"))
+                                ),
+                                progress::key_value(
+                                    "Store path",
+                                    report.plugin.store_path.display().to_string()
+                                ),
+                                render_add_report(report, verbose, &app)
+                            )
+                        });
+                        warn_blocked(&report, &app);
+                        return Ok(());
+                    };
+                    emit(format, &report, |report| {
+                        format!(
+                            "{}\n{}\n{}",
+                            progress::report_title("Package installed", Some(&report.plugin.id)),
+                            progress::key_value(
+                                "Store path",
+                                report.plugin.store_path.display().to_string()
+                            ),
+                            render_add_report(report, verbose, &app)
+                        )
+                    });
+                    if matches!(format, OutputFormat::Text) {
+                        report_scope("this machine only — nothing was declared");
+                        for publication in &report.publications {
+                            if let Some(error) = &publication.error {
+                                progress::warn(&format!(
+                                    "{} could not publish: {error}",
+                                    app.health().integration_label(&publication.integration)
+                                ));
+                            }
+                        }
+                        warn_blocked(&report, &app);
+                    }
+                }
+                // The project's environment: resolved, reproduced and left
+                // reconciled — or, outside a project, an answer that says
+                // so rather than a fault.
+                None => {
+                    let report = with_spinner(
+                        "Installing project environment...",
+                        "Failed to install environment",
+                        || {
+                            app.project()
+                                .install(&context_path(path), authority.as_ref())
+                        },
+                    )?;
+                    emit(format, &report, render_install);
+                    if matches!(format, OutputFormat::Text)
+                        && matches!(report, InstallReport::NoChanges)
+                    {
+                        progress::key_value("Scope", "no project here — nothing was declared");
+                    }
+                }
+            }
         }
         Command::Update {
             plugin,
             path,
             trust,
+            machine,
             format,
         } => {
             let authority = trust_authority(trust);
-            let report = with_spinner(
-                "Moving this project's pins...",
-                "Failed to update the project",
-                || {
-                    app.project()
-                        .update(&context_path(path), plugin.as_deref(), authority.as_ref())
-                },
-            )?;
+            let report = with_spinner("Updating...", "Failed to update", || {
+                app.project().update(
+                    &context_path(path),
+                    plugin.as_deref(),
+                    machine,
+                    authority.as_ref(),
+                )
+            })?;
             emit(format, &report, render_update_report);
         }
-        Command::Remove { plugin, format } => {
+        Command::Remove {
+            plugin,
+            machine,
+            format,
+        } => {
+            if machine {
+                let report = with_spinner(
+                    &format!("Removing {plugin} from this machine..."),
+                    &format!("Failed to remove {plugin}"),
+                    || app.plugins().remove(&plugin),
+                )?;
+                emit(format, &report, render_remove);
+                if let RemovePluginReport::Blocked { report, plan } = &report {
+                    return Err(blocked("removal", &report.package_id, plan));
+                }
+                return Ok(());
+            }
             let current_dir = cwd()?;
             let report = with_spinner(
                 &format!("Removing {plugin} from this project..."),
@@ -856,11 +1017,11 @@ fn dispatch(cli: Cli, home: UzeHome) -> Result<()> {
                         |_| message,
                     );
                 }
-                // Strictly project-scoped, by design (ADR-019): neither of
-                // these falls through to machine-level removal. `?` below
-                // surfaces `uze_application::UzeError::{NoProjectEnvironment,
-                // PluginNotUsedByProject}` through the same `uze: {error}`
-                // path every other failure in this program uses.
+                // Strictly project-scoped without `-m`, by design (ADR-019):
+                // neither of these falls through to machine-level removal.
+                // `?` below surfaces `uze_application::UzeError::
+                // {NoProjectEnvironment, PluginNotUsedByProject}` through the
+                // same `uze: {error}` path every other failure uses.
                 RemoveProjectPluginReport::NoLock => {
                     return Err(uze_application::UzeError::NoProjectEnvironment { plugin });
                 }
@@ -869,14 +1030,43 @@ fn dispatch(cli: Cli, home: UzeHome) -> Result<()> {
                 }
             }
         }
-        Command::Status { path, format } => {
-            let report = app.health().status(&context_path(path))?;
-            emit(format, &report, render_status);
+        Command::Inspect { plugin, format } => {
+            let report = app.plugins().inspect(&plugin)?;
+            emit(format, &report, render_inspection);
+        }
+        Command::Status {
+            path,
+            machine,
+            format,
+        } => {
+            let root = context_path(path);
+            // No project here is an answer, not a fault: the machine read
+            // model — what is installed, from where, and its freshness —
+            // instead of the project's own report with the project absent.
+            // `-m` states the machine read model even inside a project.
+            let machine_report = if machine {
+                Some(app.health().machine_status()?)
+            } else {
+                match app.health().status(&root) {
+                    Ok(report) => {
+                        emit(format, &report, render_status);
+                        return Ok(());
+                    }
+                    Err(uze_application::UzeError::NoProject { .. }) => {
+                        Some(app.health().machine_status()?)
+                    }
+                    Err(error) => return Err(error),
+                }
+            };
+            emit(
+                format,
+                machine_report.as_ref().expect("a machine answer"),
+                render_machine_status,
+            );
         }
         Command::Agent { action } => run_agent(&app, action)?,
-        Command::Theme { action } => run_theme(&app, &home, action)?,
+        Command::Config { action } => run_config(&app, &home, action)?,
         Command::Market { action } => run_market(&app, action)?,
-        Command::Plugin { action } => run_plugin(&app, action, verbose)?,
         Command::Doctor { format } => {
             let spinner = progress::spinner("Running diagnostics...");
             let report = app.health().report();
@@ -1091,25 +1281,47 @@ fn run_context(app: &UzeApplication, action: ContextAction) -> Result<()> {
 }
 
 /// `uze market …` — the marketplaces a machine knows about.
-fn run_theme(app: &UzeApplication, home: &UzeHome, action: ThemeAction) -> Result<()> {
+/// `uze config …` — this machine's authored configuration: the palette,
+/// the glyph set the installed font can draw, and which finished turns
+/// ring. All machine-scoped; the file they write is the operator's own
+/// `config.toml`, never a project's.
+fn run_config(app: &UzeApplication, home: &UzeHome, action: ConfigAction) -> Result<()> {
     match action {
-        ThemeAction::List { format } => {
-            let themes = app.themes().list(uze_theme::builtin_names())?;
-            emit(format, &themes, |themes| render_theme_list(themes));
-        }
-        ThemeAction::Set { id } => {
-            // Load it before recording the choice: a theme that will not
-            // resolve should be refused here, where the operator is looking,
-            // rather than accepted and complained about on every later run.
-            let resolved = uze::theme::resolve(app, home, &id)?;
-            for warning in &resolved.warnings {
-                progress::warn(&warning.to_string());
+        ConfigAction::Theme { action } => match action {
+            ConfigThemeAction::List { format } => {
+                let themes = app.themes().list(uze_theme::builtin_names())?;
+                emit(format, &themes, |themes| render_theme_list(themes));
             }
-            app.themes().select(&id)?;
-            uze_theme::set_active(resolved.theme);
-            progress::success(&format!("Drawing in {id}"));
-        }
-        ThemeAction::Glyphs { set, format } => match set {
+            ConfigThemeAction::Set { id } => {
+                // Load it before recording the choice: a theme that will not
+                // resolve should be refused here, where the operator is
+                // looking, rather than accepted and complained about on
+                // every later run.
+                let resolved = uze::theme::resolve(app, home, &id)?;
+                for warning in &resolved.warnings {
+                    progress::warn(&warning.to_string());
+                }
+                app.themes().select(&id)?;
+                uze_theme::set_active(resolved.theme);
+                progress::success(&format!("Drawing in {id}"));
+            }
+            ConfigThemeAction::Show { id, format } => {
+                let id = match id {
+                    Some(id) => id,
+                    None => app
+                        .themes()
+                        .active()?
+                        .unwrap_or_else(|| uze_theme::builtin_names()[0].to_owned()),
+                };
+                let (resolved, layers) = uze::theme::resolve_with_layers(app, home, &id)?;
+                emit(
+                    format,
+                    &theme_report(&id, layers.clone(), &resolved),
+                    |_| render_theme(&id, layers, &resolved),
+                );
+            }
+        },
+        ConfigAction::Icons { set, format } => match set {
             None => {
                 let sets = app.themes().glyph_sets(uze_theme::glyph_sets())?;
                 emit(format, &sets, |sets| render_glyph_sets(sets));
@@ -1135,23 +1347,66 @@ fn run_theme(app: &UzeApplication, home: &UzeHome, action: ThemeAction) -> Resul
                 progress::success(&format!("Drawing with the {set} glyphs"));
             }
         },
-        ThemeAction::Show { id, format } => {
-            let id = match id {
-                Some(id) => id,
-                None => app
-                    .themes()
-                    .active()?
-                    .unwrap_or_else(|| uze_theme::builtin_names()[0].to_owned()),
-            };
-            let (resolved, layers) = uze::theme::resolve_with_layers(app, home, &id)?;
-            emit(
-                format,
-                &theme_report(&id, layers.clone(), &resolved),
-                |_| render_theme(&id, layers, &resolved),
-            );
-        }
+        ConfigAction::Notification { state, format } => match state.as_deref() {
+            None => {
+                let chime = app.notifications().agent_finished()?;
+                if matches!(format, OutputFormat::Json) {
+                    // Chime carries no read model of its own; the choice's
+                    // label is the answer.
+                    println!(r#"{{"finished_turns_ring":"{}"}}"#, chime_label(chime));
+                } else {
+                    println!(
+                        "{}",
+                        progress::key_value("Finished turns ring", chime_label(chime).to_owned())
+                    );
+                }
+            }
+            Some(state) if state == "test" => {
+                // Ring once, whatever the choice in force: the answer to
+                // "does this machine actually speak?" asked where the
+                // choice was just made. The choice itself is untouched.
+                let chime = app.notifications().agent_finished()?;
+                // The terminal's own bell — the same control character the
+                // workspace client rings, here written to stdout because
+                // the CLI has no client and owns no pane.
+                print!("\x07");
+                progress::success(&format!(
+                    "Rang once — the choice in force is {}",
+                    chime_label(chime)
+                ));
+            }
+            Some(state) => {
+                let Some(chime) = parse_chime(state) else {
+                    setup_usage_error("notification choice is `on`, `off`, `silent` or `test`");
+                };
+                app.notifications().set_agent_finished(chime)?;
+                if matches!(format, OutputFormat::Text) {
+                    progress::success(&format!(
+                        "Finished turns ring: {}",
+                        chime_label(app.notifications().agent_finished()?)
+                    ));
+                }
+            }
+        },
     }
     Ok(())
+}
+
+fn chime_label(chime: Chime) -> &'static str {
+    match chime {
+        Chime::Silent => "silent",
+        Chime::OutOfSight => "out of sight",
+        Chime::Always => "always",
+    }
+}
+
+fn parse_chime(state: &str) -> Option<Chime> {
+    match state {
+        "on" => Some(Chime::Always),
+        "off" => Some(Chime::OutOfSight),
+        "silent" => Some(Chime::Silent),
+        _ => None,
+    }
 }
 
 fn render_glyph_sets(sets: &[uze_application::application::GlyphSetSummary]) -> String {
@@ -1394,101 +1649,6 @@ fn run_market(app: &UzeApplication, action: MarketAction) -> Result<()> {
         MarketAction::Inspect { name, format } => {
             let detail = app.marketplace().inspect(&name)?;
             emit(format, &detail, render_market_detail);
-        }
-    }
-    Ok(())
-}
-
-/// `uze plugin …` — the machine-scoped package lifecycle.
-fn run_plugin(app: &UzeApplication, action: PluginAction, verbose: bool) -> Result<()> {
-    match action {
-        PluginAction::Install {
-            plugin,
-            trust,
-            alias,
-            replace,
-            format,
-        } => {
-            let authority = trust_authority(trust);
-            let name_authority = name_collision_authority(alias, replace);
-            // Every install goes through a marketplace that must have
-            // been added first: `uze market add <market>` then
-            // `uze plugin install <name>@<market>`. A direct source
-            // (path or Git URL) is never accepted — the marketplace is
-            // the product's provenance contract (see ADR-019).
-            if !plugin.contains('@') {
-                return Err(uze_application::UzeError::UnknownPackage(format!(
-                    "`{plugin}` is not a `name@marketplace` spec; add its marketplace with \
-                     `uze market add <market>` first, then install with \
-                     `uze plugin install {plugin}@<market>`"
-                )));
-            }
-            let report = with_spinner(
-                &format!("Installing plugin {plugin}..."),
-                "Failed to install plugin",
-                || {
-                    app.marketplace().install_plugin_resolving(
-                        &plugin,
-                        authority.as_ref(),
-                        name_authority.as_ref(),
-                    )
-                },
-            )?;
-            emit(format, &report, |report| {
-                format!(
-                    "{}\n{}\n{}",
-                    progress::report_title("Plugin installed", Some(&report.plugin.id)),
-                    progress::key_value(
-                        "Store path",
-                        report.plugin.store_path.display().to_string()
-                    ),
-                    render_add_report(report, verbose, app)
-                )
-            });
-            if matches!(format, OutputFormat::Text) {
-                for publication in &report.publications {
-                    if let Some(error) = &publication.error {
-                        progress::warn(&format!(
-                            "{} could not publish: {error}",
-                            app.health().integration_label(&publication.integration)
-                        ));
-                    }
-                }
-                warn_blocked(&report, app);
-            }
-        }
-        PluginAction::List { format } => {
-            let plugins = app.plugins().list()?;
-            emit(format, &plugins, |plugins| render_plugin_list(plugins));
-        }
-        PluginAction::Inspect { plugin, format } => {
-            let report = app.plugins().inspect(&plugin)?;
-            emit(format, &report, render_inspection);
-        }
-        PluginAction::Remove { plugin, format } => {
-            let report = with_spinner(
-                &format!("Removing {plugin}..."),
-                &format!("Failed to remove {plugin}"),
-                || app.plugins().remove(&plugin),
-            )?;
-            emit(format, &report, render_remove);
-            if let RemovePluginReport::Blocked { report, plan } = &report {
-                return Err(blocked("removal", &report.package_id, plan));
-            }
-        }
-        PluginAction::Update {
-            plugin,
-            trust,
-            format,
-        } => {
-            let authority = trust_authority(trust);
-            let report = app.plugins().update(&plugin, authority.as_ref())?;
-            emit(format, &report, render_update);
-            if let uze_application::application::UpdatePluginReport::Blocked { report, plan } =
-                &report
-            {
-                return Err(blocked("update", &report.package_id, plan));
-            }
         }
     }
     Ok(())
@@ -2053,8 +2213,31 @@ fn run_shorthand(app: &UzeApplication, args: Vec<String>, verbose: bool) -> Resu
     if shorthand.verbose {
         progress::follow_steps(true);
     }
-    let current_dir = cwd()?;
     let authority = trust_authority(shorthand.trust);
+    if shorthand.machine {
+        // `-m` states machine scope from a caller that cannot choose a
+        // directory to express it: install and deliver, declare nothing.
+        let report = machine_install(
+            app,
+            &format!("{plugin}@{marketplace}"),
+            authority.as_ref(),
+            &uze_core::naming::NoNameCollisionAuthority,
+        )?;
+        emit(shorthand.format, &report, |report| {
+            format!(
+                "{}\n{}\n{}",
+                progress::report_title("Package installed", Some(&report.plugin.id)),
+                progress::key_value("Store path", report.plugin.store_path.display().to_string()),
+                render_add_report(report, verbose || shorthand.verbose, app)
+            )
+        });
+        if matches!(shorthand.format, OutputFormat::Text) {
+            report_scope("this machine only — nothing was declared");
+        }
+        warn_blocked(&report, app);
+        return Ok(());
+    }
+    let current_dir = cwd()?;
     let report = with_spinner(
         &format!("Adding {plugin}@{marketplace} to this project..."),
         &format!("Failed to add {plugin}@{marketplace}"),
@@ -2072,8 +2255,46 @@ fn run_shorthand(app: &UzeApplication, args: Vec<String>, verbose: bool) -> Resu
             render_add_report(report, verbose || shorthand.verbose, app)
         )
     });
+    if matches!(shorthand.format, OutputFormat::Text) {
+        report_scope("this machine and this project");
+    }
     warn_blocked(&report, app);
     Ok(())
+}
+
+/// One `name@marketplace` package installed and delivered on this machine,
+/// declaring nothing anywhere — `-m`'s answer, and `install_plugin_resolving`'s
+/// whole job.
+fn machine_install(
+    app: &UzeApplication,
+    spec: &str,
+    authority: &dyn uze_application::TrustAuthority,
+    name_authority: &dyn uze_core::naming::NameCollisionAuthority,
+) -> Result<AddPluginReport> {
+    with_spinner(
+        &format!("Installing {spec}..."),
+        &format!("Failed to install {spec}"),
+        || {
+            app.marketplace()
+                .install_plugin_resolving(spec, authority, name_authority)
+        },
+    )
+}
+
+/// Splits `name@marketplace` for the project install path, which asks for
+/// the halves separately.
+fn split_spec(spec: &str) -> Result<(String, String)> {
+    let (plugin, marketplace) = spec.split_once('@').ok_or_else(|| {
+        uze_application::UzeError::UnknownPackage(format!(
+            "`{spec}` is not a `name@marketplace` spec"
+        ))
+    })?;
+    Ok((plugin.to_owned(), marketplace.to_owned()))
+}
+
+/// The scope note every two-scoped verb ends with: what the command touched.
+fn report_scope(scope: &str) {
+    progress::key_value("Scope", scope);
 }
 
 /// The ending a blocked lifecycle mutation deserves.
@@ -2081,7 +2302,7 @@ fn run_shorthand(app: &UzeApplication, args: Vec<String>, verbose: bool) -> Resu
 /// `Blocked` means the safety check refused and nothing was removed or
 /// updated. Rendered and then returned as an error, so the report is still
 /// on screen (or in the JSON a caller parses) while the exit status says
-/// the machine is unchanged — `uze plugin remove x && uze plugin install y`
+/// the machine is unchanged — `uze remove x -m && uze install y -m`
 /// used to run the second half after the first did nothing. The same shape
 /// `uze setup` uses for a provisioning step that did not complete.
 fn blocked(
@@ -2165,7 +2386,7 @@ fn trust_evidence(request: &uze_application::TrustRequest) -> String {
     text
 }
 
-/// Chooses who answers a plugin-name-collision question (ADR-038).
+/// Chooses who answers a plugin-name-collision question (ADR-036).
 ///
 /// `--alias`/`--replace` answer it out of band. Without either, an
 /// interactive terminal prompts and anything else refuses to answer — a
@@ -2420,7 +2641,7 @@ fn render_inspection(report: &PluginInspection) -> String {
 /// Compact per-harness report for an install/add: one line per harness with
 /// its route and — when an attachment was recorded — where. Evidence
 /// sentences and full attachment details are `--verbose`-only; `doctor`/
-/// `plugin inspect` state the same facts read-only. Harness rows carry the
+/// `uze inspect` states the same facts read-only. Harness rows carry the
 /// human label (`app.integration_label`) — the report's own keys stay the
 /// stable ids, which is what `--format json` emits.
 /// A capability whose vendor-visible name is held by something UZE does not
@@ -2489,36 +2710,6 @@ fn render_add_report(report: &AddPluginReport, verbose: bool, app: &UzeApplicati
         ));
     }
     out
-}
-
-fn render_update(report: &uze_application::application::UpdatePluginReport) -> String {
-    use uze_application::application::UpdatePluginReport;
-    match report {
-        UpdatePluginReport::Updated { plugin, .. } => format!(
-            "{} Updated {}\n",
-            progress::success_icon(),
-            progress::title(&plugin.id)
-        ),
-        UpdatePluginReport::Blocked { report, plan } => {
-            let mut text = progress::report_title("Update blocked", Some(&report.package_id));
-            text.push_str(&format!(
-                "{}\n\n",
-                progress::warning_text(format!("Plan: {plan:?}"))
-            ));
-            text.push_str(&progress::report_section("Managed state"));
-            text.push_str(&format!(
-                "{}\n",
-                render_managed_state(
-                    &report
-                        .receipts
-                        .iter()
-                        .map(|receipt| receipt.inspection.state)
-                        .collect::<Vec<_>>(),
-                )
-            ));
-            text
-        }
-    }
 }
 
 fn render_remove(report: &RemovePluginReport) -> String {
@@ -2610,15 +2801,15 @@ fn render_install(report: &uze_application::application::InstallReport) -> Strin
 /// sentence is the only feedback channel a denied agent has.
 fn run_agent(app: &UzeApplication, action: AgentAction) -> Result<()> {
     match action {
-        AgentAction::Task { action } => run_agent_task(app, action),
+        AgentAction::Work { action } => run_agent_work(app, action),
         AgentAction::Artifacts { action } => run_agent_artifacts(action),
         AgentAction::Context { action } => run_context(app, action),
     }
 }
 
-fn run_agent_task(app: &UzeApplication, action: AgentTaskAction) -> Result<()> {
+fn run_agent_work(app: &UzeApplication, action: AgentWorkAction) -> Result<()> {
     match action {
-        AgentTaskAction::Name { name, format } => {
+        AgentWorkAction::Name { name, format } => {
             let cwd = cwd()?;
             // The identity the agent's launch carried, inherited by every
             // process the harness starts — this one included. Without it
@@ -3106,6 +3297,17 @@ fn render_harness_detail(harness: &HarnessHealth) -> String {
             provisioning.status, provisioning.method, provisioning.action
         ));
     }
+    text
+}
+
+/// `uze status` outside a project: the machine read model. The absence of
+/// a project is stated as the fact it is, and the packages answer follows.
+fn render_machine_status(report: &MachineStatusReport) -> String {
+    let mut text = progress::report_title("Machine status", Some("No project here"));
+    text.push('\n');
+    text.push_str(&progress::label("no project here — nothing was declared\n"));
+    text.push_str(&render_plugin_list(&report.packages));
+    text.push('\n');
     text
 }
 
