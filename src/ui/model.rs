@@ -118,17 +118,18 @@ impl Route {
         }
     }
 
-    /// What the route is about, in the few words under its name — few
-    /// enough to fit the sidebar at its narrowest, which a test holds.
+    /// What the route is about, in two words under its name — two because
+    /// every route says it the same way, and few enough to fit the sidebar
+    /// at its narrowest, which a test holds.
     pub(crate) fn subtitle(self) -> &'static str {
         match self {
             Route::Overview => "status & health",
-            Route::Plugins => "skills · agents · MCP",
-            Route::Extensions => "official extensions",
+            Route::Plugins => "skills & MCP",
+            Route::Extensions => "official tools",
             Route::Harnesses => "detected agents",
             Route::Profiles => "agent preferences",
-            Route::Keys => "what each key does",
-            Route::Settings => "theme · notifications",
+            Route::Keys => "key bindings",
+            Route::Settings => "theme & notifications",
         }
     }
 
