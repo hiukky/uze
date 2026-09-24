@@ -58,7 +58,11 @@ pub(super) fn materialize_envelope(package: &StoredPackage, dir: &Path) -> Resul
         manifest["skills"] = serde_json::json!(["./skills"]);
     }
     if let Some(servers) = canonical_mcp_manifest_value(package) {
-        manifest["mcpServers"] = servers;
+        // The canonical manifest speaks the hook wrapper's `${PLUGIN_ROOT}`;
+        // Claude Code expands its own `${CLAUDE_PLUGIN_ROOT}` — carrying one
+        // verbatim into the other's grammar is a server entry that points at
+        // a variable nobody resolves.
+        manifest["mcpServers"] = rewrite_plugin_root_for_claude(&servers);
     }
     let plugin_dir = dir.join(".claude-plugin");
     fs::create_dir_all(&plugin_dir).map_err(|source| UzeError::Write {
@@ -70,6 +74,32 @@ pub(super) fn materialize_envelope(package: &StoredPackage, dir: &Path) -> Resul
         &serde_json::to_vec_pretty(&manifest).expect("generated manifest is serializable"),
     )?;
     materialize_generated_skills(package, dir)
+}
+
+/// Rewrites the hook wrapper's `${PLUGIN_ROOT}` token into Claude Code's own
+/// `${CLAUDE_PLUGIN_ROOT}` in every string the server entries carry —
+/// `command`, `args`, `env` values — so an MCP server declared once in the
+/// portable manifest resolves in the grammar of the harness it is delivered
+/// to.
+fn rewrite_plugin_root_for_claude(value: &serde_json::Value) -> serde_json::Value {
+    match value {
+        serde_json::Value::String(text) => {
+            serde_json::Value::String(text.replace("${PLUGIN_ROOT}", "${CLAUDE_PLUGIN_ROOT}"))
+        }
+        serde_json::Value::Array(items) => serde_json::Value::Array(
+            items
+                .iter()
+                .map(|item| rewrite_plugin_root_for_claude(item))
+                .collect(),
+        ),
+        serde_json::Value::Object(entries) => serde_json::Value::Object(
+            entries
+                .iter()
+                .map(|(key, value)| (key.clone(), rewrite_plugin_root_for_claude(value)))
+                .collect(),
+        ),
+        other => other.clone(),
+    }
 }
 
 /// Materializes the generated envelope's `skills/` surface.
