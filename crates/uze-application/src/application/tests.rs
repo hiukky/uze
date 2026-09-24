@@ -5,7 +5,6 @@
 //! surface they cover.
 
 use std::{
-    cell::Cell,
     fs,
     sync::{
         Arc,
@@ -65,11 +64,11 @@ impl IntegrationPort for SymlinkIntegration {
 
 struct PartialIntegration {
     root: PathBuf,
-    attached: Cell<bool>,
+    attached: std::sync::atomic::AtomicBool,
 }
 
 struct AbsentIntegration {
-    attach_attempted: Cell<bool>,
+    attach_attempted: std::sync::atomic::AtomicBool,
 }
 
 struct AllResourceSymlinkIntegration {
@@ -176,7 +175,8 @@ impl IntegrationPort for PartialIntegration {
                 source,
             }
         })?;
-        self.attached.set(true);
+        self.attached
+            .store(true, std::sync::atomic::Ordering::Relaxed);
         Ok(Some(AttachmentReceipt {
             package_id: resource.package_id.as_str().to_owned(),
             resource_identity: Some(resource.identity()),
@@ -209,7 +209,8 @@ impl IntegrationPort for AbsentIntegration {
     }
 
     fn attach_receipt(&self, _resource: &Resource) -> Result<Option<AttachmentReceipt>> {
-        self.attach_attempted.set(true);
+        self.attach_attempted
+            .store(true, std::sync::atomic::Ordering::Relaxed);
         Err(UzeError::ExposureUnavailable(
             "absent integration was invoked".to_owned(),
         ))
@@ -248,7 +249,7 @@ pub(crate) fn list_and_inspect_are_package_centric() {
 pub(crate) fn add_installs_portable_package_without_invoking_absent_harnesses() {
     let root = uze_testkit::temp::scratch("absent-harness");
     let absent = AbsentIntegration {
-        attach_attempted: Cell::new(false),
+        attach_attempted: std::sync::atomic::AtomicBool::new(false),
     };
     let app = UzeApplication::new(UzeHome::at(&root), vec![Box::new(absent)]);
     app.plugins()
@@ -819,7 +820,7 @@ pub(crate) fn add_failure_after_a_confirmed_attachment_leaves_reconcilable_ledge
     let home = UzeHome::at(&root);
     let integration = PartialIntegration {
         root: root.clone(),
-        attached: Cell::new(false),
+        attached: std::sync::atomic::AtomicBool::new(false),
     };
     let app = UzeApplication::new(home.clone(), vec![Box::new(integration)]);
     assert!(

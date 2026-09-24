@@ -58,7 +58,15 @@ pub(crate) fn naming_the_marketplace<T>(
 pub(crate) struct MirrorAt<'a> {
     pub(crate) home: &'a uze_core::UzeHome,
     pub(crate) marketplace: &'a str,
+    /// How old an answer about a branch may be: [`RECENT`] for adding and
+    /// installing, which ask the remote the same question a `market add`
+    /// seconds earlier already did, and `None` for updating, whose whole
+    /// point is where the ref points now.
+    pub(crate) recent: Option<std::time::Duration>,
 }
+
+/// How long a mirror's answer about a branch stands for adding a plugin.
+pub(crate) const RECENT: std::time::Duration = std::time::Duration::from_secs(5 * 60);
 
 impl MarketplaceRequest {
     /// What a machine-registered or declared source resolves to. A source
@@ -163,6 +171,7 @@ impl MarketplaceRequest {
                 &self.repository.identity,
                 &repository,
                 self.reference.as_deref(),
+                at.recent,
             ),
             at.marketplace,
             &self.repository.identity,
@@ -480,6 +489,7 @@ impl Marketplace<'_> {
                 MirrorAt {
                     home: &self.0.home,
                     marketplace: &marketplace_name,
+                    recent: Some(RECENT),
                 },
             )?,
         };

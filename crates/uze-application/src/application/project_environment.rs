@@ -144,6 +144,7 @@ impl Project<'_> {
             super::marketplace::MirrorAt {
                 home: &self.0.home,
                 marketplace,
+                recent: Some(super::marketplace::RECENT),
             },
         )
     }
@@ -345,6 +346,7 @@ impl Project<'_> {
                     super::marketplace::MirrorAt {
                         home: &self.0.home,
                         marketplace: &marketplace,
+                        recent: None,
                     },
                 )?;
                 match self
@@ -702,6 +704,7 @@ impl Project<'_> {
             super::marketplace::MirrorAt {
                 home: &self.0.home,
                 marketplace,
+                recent: Some(super::marketplace::RECENT),
             },
         )?;
         self.0.plugins().install_materialized(

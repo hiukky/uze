@@ -513,9 +513,55 @@ pub(super) fn run_as(
     Ok(String::from_utf8_lossy(&stdout_bytes).into_owned())
 }
 
+/// [`SSH_COMMAND`], sharing one connection per host for a minute when this
+/// machine has a directory only this user can reach to keep its socket in.
+///
+/// An SSH handshake to a forge is a second or more of round trips, paid
+/// again by every Git operation that opens one: a catalogue refresh over
+/// three marketplaces on one host paid it three times. A master connection
+/// kept for sixty seconds turns the second and later into a few
+/// milliseconds. The socket is the operator's connection, so it lives where
+/// nobody else can reach it — `$XDG_RUNTIME_DIR`, or a directory under the
+/// temporary one that this user owns with no access for anybody else — and
+/// when neither can be had, every operation opens its own.
+fn ssh_command() -> String {
+    match multiplexing_directory() {
+        Some(directory) => format!(
+            "{SSH_COMMAND} -o ControlMaster=auto -o ControlPersist=60 -o \"ControlPath={}/%C\"",
+            directory.display()
+        ),
+        None => SSH_COMMAND.to_owned(),
+    }
+}
+
+#[cfg(unix)]
+fn multiplexing_directory() -> Option<PathBuf> {
+    use std::os::unix::fs::{DirBuilderExt, MetadataExt, PermissionsExt};
+    // SAFETY: getuid cannot fail and touches no memory.
+    let uid = unsafe { libc::getuid() };
+    let directory = match std::env::var_os("XDG_RUNTIME_DIR") {
+        Some(runtime) => PathBuf::from(runtime).join("uze-ssh"),
+        None => std::env::temp_dir().join(format!("uze-ssh-{uid}")),
+    };
+    let _ = fs::DirBuilder::new().mode(0o700).create(&directory);
+    // Never followed: a link planted here would point the socket elsewhere.
+    let metadata = fs::symlink_metadata(&directory).ok()?;
+    let private =
+        metadata.is_dir() && metadata.uid() == uid && metadata.permissions().mode() & 0o077 == 0;
+    // A socket path has to fit `sun_path`, with room for the 40-character
+    // hash `%C` expands to.
+    let fits = directory.as_os_str().len() + 42 < 100;
+    (private && fits && !directory.to_string_lossy().contains('"')).then_some(directory)
+}
+
+#[cfg(not(unix))]
+fn multiplexing_directory() -> Option<PathBuf> {
+    None
+}
+
 /// The configuration an attempt carries, beyond the stripped environment's.
 fn pushed_config(reach: Reach) -> Vec<(String, String)> {
-    let mut config = vec![("core.sshCommand".to_owned(), SSH_COMMAND.to_owned())];
+    let mut config = vec![("core.sshCommand".to_owned(), ssh_command())];
     if reach.access != Access::Local {
         config.extend(operator_config(NETWORK_KEYS));
     }

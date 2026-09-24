@@ -127,36 +127,67 @@ impl Plugins<'_> {
 
         let resources = uze_core::engine::package_resources(&installed)?;
         let resources: Vec<_> = resources.iter().collect();
-        let mut attachments = Vec::new();
-        let mut package_plans = Vec::new();
-        let mut blocked = Vec::new();
-        for integration in &self.0.integrations {
-            // A package must remain installable on a machine that has only a
-            // subset of UZE's peer harnesses. `add` prepares and attaches to
-            // detected harnesses; an absent executable is neither a package
-            // incompatibility nor a reason to invoke its vendor CLI.
-            if !self.0.detect_cached(integration.as_ref()).present {
-                continue;
-            }
-            // Native delivery reads the view; attempting it against a view
-            // that failed to publish would fail for a reason that has
-            // nothing to do with this package.
+        // A package must remain installable on a machine that has only a
+        // subset of UZE's peer harnesses. `add` prepares and attaches to
+        // detected harnesses; an absent executable is neither a package
+        // incompatibility nor a reason to invoke its vendor CLI. Native
+        // delivery reads the view; attempting it against a view that failed
+        // to publish would fail for a reason that has nothing to do with
+        // this package.
+        let targets: Vec<(&dyn IntegrationPort, NativeDelivery)> = self
+            .0
+            .integrations
+            .iter()
+            .filter(|integration| self.0.detect_cached(integration.as_ref()).present)
+            .map(|integration| {
+                let native = if unpublished.contains(integration.id()) {
+                    NativeDelivery::Skipped
+                } else {
+                    NativeDelivery::Allowed
+                };
+                (integration.as_ref(), native)
+            })
+            .collect();
+        if !targets.is_empty() {
+            let names: Vec<&str> = targets
+                .iter()
+                .map(|(integration, _)| integration.id())
+                .collect();
             tracing::info!(
                 target: uze_core::acquisition::git::STEP,
                 step = "deliver",
-                harness = integration.id()
+                harness = names.join(", ")
             );
-            let native_delivery = if unpublished.contains(integration.id()) {
-                NativeDelivery::Skipped
-            } else {
-                NativeDelivery::Allowed
-            };
-            let delivery = self.0.deliver_package_to(
-                &installed,
-                &resources,
-                integration.as_ref(),
-                native_delivery,
-            )?;
+        }
+        // Every harness at once: each delivery is its own vendor CLI's
+        // startup and work, and they share nothing but the receipt ledger,
+        // which serializes its own writes. Collected in the registry's order,
+        // so the report — and the first error — read the same as before.
+        let parent = tracing::Span::current();
+        let deliveries: Vec<_> = std::thread::scope(|scope| {
+            let running: Vec<_> = targets
+                .iter()
+                .map(|(integration, native)| {
+                    let parent = parent.clone();
+                    let (installed, resources) = (&installed, &resources);
+                    scope.spawn(move || {
+                        parent.in_scope(|| {
+                            self.0
+                                .deliver_package_to(installed, resources, *integration, *native)
+                        })
+                    })
+                })
+                .collect();
+            running
+                .into_iter()
+                .map(|delivery| delivery.join().expect("a delivery thread does not panic"))
+                .collect()
+        });
+        let mut attachments = Vec::new();
+        let mut package_plans = Vec::new();
+        let mut blocked = Vec::new();
+        for ((integration, _), delivery) in targets.iter().zip(deliveries) {
+            let delivery = delivery?;
             if let Some(plan) = delivery.plan {
                 package_plans.push((integration.id().to_owned(), plan));
             }

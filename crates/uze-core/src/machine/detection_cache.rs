@@ -26,7 +26,6 @@
 //! update never has a stale window.
 
 use std::{
-    cell::RefCell,
     collections::HashMap,
     fs,
     path::{Path, PathBuf},
@@ -143,7 +142,7 @@ pub struct DetectionCache {
     path: PathBuf,
     /// Captured so every fingerprint can skip it — see `resolve_candidate`.
     shims_dir: PathBuf,
-    memo: RefCell<HashMap<&'static str, HarnessDetection>>,
+    memo: std::sync::Mutex<HashMap<&'static str, HarnessDetection>>,
 }
 
 impl DetectionCache {
@@ -151,7 +150,7 @@ impl DetectionCache {
         Self {
             path: home.harness_detection_cache_path(),
             shims_dir: home.shims_dir(),
-            memo: RefCell::new(HashMap::new()),
+            memo: std::sync::Mutex::new(HashMap::new()),
         }
     }
 
@@ -162,7 +161,7 @@ impl DetectionCache {
             // Tests resolve candidates by explicit path, never through
             // `PATH`, so no shim directory can be in the way.
             shims_dir: PathBuf::from("/nonexistent-shims"),
-            memo: RefCell::new(HashMap::new()),
+            memo: std::sync::Mutex::new(HashMap::new()),
         }
     }
 
@@ -176,7 +175,12 @@ impl DetectionCache {
         integration_id: &'static str,
         program_candidates: &[&str],
     ) -> Option<HarnessDetection> {
-        if let Some(detection) = self.memo.borrow().get(integration_id) {
+        if let Some(detection) = self
+            .memo
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(integration_id)
+        {
             return Some(detection.clone());
         }
         let on_disk = OnDiskCache::load(&self.path);
@@ -204,7 +208,8 @@ impl DetectionCache {
         }
         tracing::debug!(integration = integration_id, "detection cache hit");
         self.memo
-            .borrow_mut()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .insert(integration_id, entry.detection.clone());
         Some(entry.detection.clone())
     }
@@ -218,7 +223,8 @@ impl DetectionCache {
         detection: HarnessDetection,
     ) {
         self.memo
-            .borrow_mut()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .insert(integration_id, detection.clone());
         let mut on_disk = OnDiskCache::load(&self.path);
         on_disk.entries.insert(

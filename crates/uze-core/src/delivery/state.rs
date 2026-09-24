@@ -150,7 +150,16 @@ pub fn forget_receipt(home: &UzeHome, receipt: &AttachmentReceipt) -> Result<()>
     })
 }
 
+/// One change to the ledger at a time within this process: delivery reaches
+/// every harness at once, and two threads reading and rewriting one file
+/// would each lose the other's receipt. Another process is kept out by the
+/// machine mutation lock every writer already holds.
+static LEDGER: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 fn update_receipts(home: &UzeHome, change: impl FnOnce(&mut Vec<AttachmentReceipt>)) -> Result<()> {
+    let _one_at_a_time = LEDGER
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let path = attachments_path(home);
     let mut ledger: AttachmentLedger = read_json_or_default(&path)?;
     change(&mut ledger.receipts);

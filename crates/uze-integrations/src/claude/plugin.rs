@@ -97,6 +97,18 @@ impl MarketplaceDialect for ClaudeMarketplace {
     }
 
     fn marketplace_exists(executable: &Path, home: &Path, root: &Path) -> bool {
+        if let Some(known) = recorded_marketplaces(home) {
+            return known.iter().any(|entry| {
+                [
+                    entry.get("installLocation"),
+                    entry.get("source").and_then(|source| source.get("path")),
+                ]
+                .into_iter()
+                .flatten()
+                .filter_map(serde_json::Value::as_str)
+                .any(|candidate| Path::new(candidate) == root)
+            });
+        }
         let Ok(listing) = json(
             executable,
             home,
@@ -130,12 +142,15 @@ impl MarketplaceDialect for ClaudeMarketplace {
 
     /// Installed only when absent: Claude's behavior for re-installing an
     /// installed plugin is not relied on.
-    fn install_plugin(executable: &Path, home: &Path, selector: &str) -> Result<()> {
-        let installed = json(executable, home, &["plugin", "list", "--json"], "claude")
-            .is_ok_and(|listing| installed_entry(&listing, selector).is_some());
-        if installed {
-            return Ok(());
+    fn plugin_installed(executable: &Path, home: &Path, selector: &str) -> bool {
+        if let Some(installed) = recorded_user_install(home, selector) {
+            return installed;
         }
+        json(executable, home, &["plugin", "list", "--json"], "claude")
+            .is_ok_and(|listing| installed_entry(&listing, selector).is_some())
+    }
+
+    fn install_plugin(executable: &Path, home: &Path, selector: &str) -> Result<()> {
         run_quiet(
             executable,
             home,
@@ -162,6 +177,55 @@ impl MarketplaceDialect for ClaudeMarketplace {
             &["plugin", "uninstall", selector],
         )
     }
+}
+
+/// One of Claude's own plugin records, read where it keeps them.
+///
+/// A `claude` process start costs a quarter of a second — more with every
+/// other harness starting beside it — to answer what these files already
+/// say. So they are read first, and trusted only in the shape this knows:
+/// a file that is missing, unreadable or shaped otherwise answers nothing,
+/// and the CLI is asked as before.
+fn recorded(home: &Path, file: &str) -> Option<serde_json::Value> {
+    let config = std::env::var_os("CLAUDE_CONFIG_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home.join(".claude"));
+    serde_json::from_slice(&fs::read(config.join("plugins").join(file)).ok()?).ok()
+}
+
+/// Every marketplace Claude has registered, when its record reads as one
+/// entry per marketplace, each with a source.
+fn recorded_marketplaces(home: &Path) -> Option<Vec<serde_json::Value>> {
+    let known = recorded(home, "known_marketplaces.json")?;
+    let entries: Vec<serde_json::Value> = known.as_object()?.values().cloned().collect();
+    entries
+        .iter()
+        .all(|entry| {
+            entry
+                .get("source")
+                .is_some_and(serde_json::Value::is_object)
+        })
+        .then_some(entries)
+}
+
+/// Whether Claude records `selector` installed at user scope — the scope
+/// UZE installs at — when its record is the version-2 shape.
+fn recorded_user_install(home: &Path, selector: &str) -> Option<bool> {
+    let installed = recorded(home, "installed_plugins.json")?;
+    if installed.get("version").and_then(serde_json::Value::as_u64) != Some(2) {
+        return None;
+    }
+    let plugins = installed.get("plugins")?.as_object()?;
+    Some(
+        plugins
+            .get(selector)
+            .and_then(serde_json::Value::as_array)
+            .is_some_and(|installs| {
+                installs.iter().any(|install| {
+                    install.get("scope").and_then(serde_json::Value::as_str) == Some("user")
+                })
+            }),
+    )
 }
 
 fn installed_entry<'a>(
@@ -816,5 +880,84 @@ mod claude_native_coverage_tests {
             uze_core::exposure::ExposureMechanism::Unsupported { .. }
         ));
         let _ = fs::remove_dir_all(_root);
+    }
+}
+
+#[cfg(test)]
+mod recorded_state_tests {
+    use std::{fs, path::Path};
+
+    use super::{ClaudeMarketplace, recorded_marketplaces, recorded_user_install};
+    use crate::shared::marketplace::MarketplaceDialect;
+
+    fn home_with(label: &str, files: &[(&str, &str)]) -> std::path::PathBuf {
+        let home = uze_testkit::temp::scratch(label);
+        let plugins = home.join(".claude/plugins");
+        fs::create_dir_all(&plugins).unwrap();
+        for (name, body) in files {
+            fs::write(plugins.join(name), body).unwrap();
+        }
+        home
+    }
+
+    /// Answered from Claude's own records, without starting it: the program
+    /// named here does not exist, so any answer came from the files.
+    #[test]
+    fn claudes_records_answer_without_its_cli() {
+        let mut env = uze_testkit::env::scope();
+        env.remove("CLAUDE_CONFIG_DIR");
+        let home = home_with(
+            "claude-recorded",
+            &[
+                (
+                    "known_marketplaces.json",
+                    r#"{"uze-store":{"source":{"source":"directory","path":"/uze/generated"},"installLocation":"/uze/generated"}}"#,
+                ),
+                (
+                    "installed_plugins.json",
+                    r#"{"version":2,"plugins":{"git@uze-store":[{"scope":"user"}],"other@uze-store":[{"scope":"project"}]}}"#,
+                ),
+            ],
+        );
+        let absent = Path::new("/nonexistent/claude");
+
+        assert!(ClaudeMarketplace::marketplace_exists(
+            absent,
+            &home,
+            Path::new("/uze/generated")
+        ));
+        assert!(!ClaudeMarketplace::marketplace_exists(
+            absent,
+            &home,
+            Path::new("/elsewhere")
+        ));
+        assert!(ClaudeMarketplace::plugin_installed(
+            absent,
+            &home,
+            "git@uze-store"
+        ));
+        assert!(
+            !ClaudeMarketplace::plugin_installed(absent, &home, "other@uze-store"),
+            "an install at project scope is not the user-scope one UZE makes"
+        );
+        let _ = fs::remove_dir_all(home);
+    }
+
+    /// A record in a shape this does not know answers nothing, so the CLI
+    /// is asked as before.
+    #[test]
+    fn an_unknown_shape_is_not_trusted() {
+        let mut env = uze_testkit::env::scope();
+        env.remove("CLAUDE_CONFIG_DIR");
+        let home = home_with(
+            "claude-recorded-unknown",
+            &[
+                ("known_marketplaces.json", r#"{"uze-store":{"where":"/x"}}"#),
+                ("installed_plugins.json", r#"{"version":3,"plugins":{}}"#),
+            ],
+        );
+        assert!(recorded_marketplaces(&home).is_none());
+        assert!(recorded_user_install(&home, "git@uze-store").is_none());
+        let _ = fs::remove_dir_all(home);
     }
 }

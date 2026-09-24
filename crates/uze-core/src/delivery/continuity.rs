@@ -194,7 +194,6 @@ mod tests {
         task::{self, Agent, AgentStore, Base},
     };
     use std::{
-        cell::RefCell,
         path::PathBuf,
         sync::atomic::{AtomicUsize, Ordering},
     };
@@ -203,7 +202,7 @@ mod tests {
     struct Harness {
         continuity: SessionContinuity,
         exists: bool,
-        observed: RefCell<Option<SessionId>>,
+        observed: std::sync::Mutex<Option<SessionId>>,
         recorded_for: Option<SessionId>,
     }
 
@@ -212,7 +211,7 @@ mod tests {
             Self {
                 continuity,
                 exists: true,
-                observed: RefCell::new(None),
+                observed: std::sync::Mutex::new(None),
                 recorded_for: None,
             }
         }
@@ -244,7 +243,7 @@ mod tests {
             self.recorded_for.clone()
         }
         fn observe_session(&self, _ctx: &ObservationContext) -> Option<SessionId> {
-            self.observed.borrow().clone()
+            self.observed.lock().unwrap().clone()
         }
         fn session_exists(&self, _session: &SessionId, _cwd: &Path) -> bool {
             self.exists
@@ -352,7 +351,7 @@ mod tests {
         plan(&home, claim(&id, &slot), &harness);
         assert_eq!(recorded(&home, &primary), None, "still pending");
 
-        *harness.observed.borrow_mut() = Some(SessionId::new("named-by-the-harness"));
+        *harness.observed.lock().unwrap() = Some(SessionId::new("named-by-the-harness"));
         let plan = plan(&home, claim(&id, &slot), &harness);
 
         assert_eq!(
@@ -491,7 +490,7 @@ mod tests {
         let harness = Harness::new(SessionContinuity::Observed);
         plan(&home, claim(&id, &slot), &harness);
 
-        *harness.observed.borrow_mut() = Some(SessionId::new("started-by-the-harness"));
+        *harness.observed.lock().unwrap() = Some(SessionId::new("started-by-the-harness"));
         assert!(refresh(&home, claim(&id, &slot), &harness));
         assert_eq!(
             recorded(&home, &primary),
@@ -511,7 +510,7 @@ mod tests {
         plan(&home, claim(&id, &slot), &harness);
         let started_in = recorded(&home, &primary).unwrap();
 
-        *harness.observed.borrow_mut() = Some(SessionId::new("moved-to"));
+        *harness.observed.lock().unwrap() = Some(SessionId::new("moved-to"));
         assert!(refresh(&home, claim(&id, &slot), &harness));
 
         let plan = plan(&home, claim(&id, &slot), &harness);

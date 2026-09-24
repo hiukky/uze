@@ -7,11 +7,13 @@
 //! network round trip for bytes already on disk, and then threw away the
 //! one thing that could answer the third question: `.git`.
 //!
-//! A mirror is that repository, kept. Cloned without blobs, so what travels
-//! is commits and trees — enough to resolve a ref, read one file, and count
-//! the distance between two commits — with file content fetched only for
-//! what is actually checked out. Refreshed by `fetch`, so the second
-//! question costs nothing the first did not already pay for.
+//! A mirror is that repository, kept. Cloned without *large* blobs: what
+//! travels is commits, trees and every file under a megabyte — which for a
+//! marketplace of skills and manifests is all of its content, so reading
+//! the catalogue and installing a plugin need no second connection — while
+//! a binary somebody committed stays behind until a checkout asks for it.
+//! Refreshed by `fetch`, so the second question costs nothing the first did
+//! not already pay for.
 //!
 //! It lives in the cache tier: deleting it costs one clone and never
 //! correctness. Nothing here is authoritative, and a package's bytes are
@@ -27,8 +29,14 @@ use super::forge::{self, Transport};
 use super::git::{Reach, reject_option_shaped, run, run_as, through};
 use crate::error::{Result, UzeError};
 
-/// Blobs are what a clone spends its time on, and what answering a question
-/// about *history* never needs.
+/// Large blobs are what a clone spends its time on and what a marketplace
+/// rarely holds; small ones are its content, and fetching them with the
+/// history they belong to is one connection where fetching them later is
+/// one more per question.
+const SMALL_BLOBS: &str = "--filter=blob:limit=1m";
+
+/// For a fetch that names the blobs it wants: the filter only keeps the
+/// fetch from bringing anything else.
 const NO_BLOBS: &str = "--filter=blob:none";
 
 /// Where a mirror remembers which repository it is and how it was last
@@ -98,7 +106,7 @@ pub fn ensure(fetch: &str, identity: &str, directory: &Path) -> Result<()> {
                 // exist".
                 run_as(
                     Reach::of(transport),
-                    &["fetch", "--prune", NO_BLOBS, "origin", "+refs/*:refs/*"],
+                    &["fetch", "--prune", SMALL_BLOBS, "origin", "+refs/*:refs/*"],
                     Some(directory),
                 )?;
                 let answered = super::git::holds_a_commit(directory, transport);
@@ -140,7 +148,7 @@ pub fn ensure(fetch: &str, identity: &str, directory: &Path) -> Result<()> {
             &[
                 "clone",
                 "--bare",
-                NO_BLOBS,
+                SMALL_BLOBS,
                 "--no-recurse-submodules",
                 "--",
                 &transport.url,
@@ -216,12 +224,16 @@ fn reach_of(directory: &Path) -> Reach {
 /// a machine that has seen that commit before.
 ///
 /// Everything else — a branch, a tag, no reference at all — names whatever
-/// it names *now*, and only the remote knows that.
+/// it names *now*, and only the remote knows that — unless the caller
+/// accepts an answer `recent` old, and the mirror was reached that recently:
+/// adding a plugin seconds after its marketplace was fetched asks the remote
+/// the same question twice.
 pub fn ensure_for(
     fetch: &str,
     identity: &str,
     directory: &Path,
     reference: Option<&str>,
+    recent: Option<std::time::Duration>,
 ) -> Result<()> {
     if let Some(reference) = reference
         && is_full_commit_id(reference)
@@ -230,7 +242,24 @@ pub fn ensure_for(
     {
         return Ok(());
     }
+    if let Some(recent) = recent
+        && reached_within(directory, recent)
+        && resolve(directory, reference).is_ok()
+    {
+        return Ok(());
+    }
     ensure(fetch, identity, directory)
+}
+
+/// Whether the mirror was last brought up to date less than `recent` ago —
+/// read off when it last remembered how it was reached, which every
+/// successful clone and fetch writes.
+fn reached_within(directory: &Path, recent: std::time::Duration) -> bool {
+    std::fs::metadata(directory.join(TRANSPORT_FILE))
+        .and_then(|metadata| metadata.modified())
+        .ok()
+        .and_then(|written| written.elapsed().ok())
+        .is_some_and(|age| age < recent)
 }
 
 /// Whether `reference` is a full 40-character commit id, which is the only
@@ -532,6 +561,7 @@ mod tests {
             "does-not-resolve",
             &mirror,
             Some(&first),
+            None,
         )
         .unwrap();
         assert_eq!(resolve(&mirror, Some(&first)).unwrap(), first);
@@ -540,6 +570,7 @@ mod tests {
             "does-not-resolve",
             &mirror,
             Some(&second),
+            None,
         )
         .unwrap();
 
@@ -549,11 +580,12 @@ mod tests {
                 "does-not-resolve",
                 "does-not-resolve",
                 &mirror,
-                Some("main")
+                Some("main"),
+                None
             )
             .is_err()
         );
-        assert!(ensure_for("does-not-resolve", "does-not-resolve", &mirror, None).is_err());
+        assert!(ensure_for("does-not-resolve", "does-not-resolve", &mirror, None, None).is_err());
         fs::remove_dir_all(&root).unwrap();
     }
 
