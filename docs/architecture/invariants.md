@@ -1707,7 +1707,7 @@ because index 2 is *green* to whatever emitted it.
 > `src/theme.rs::a_glyph_set_applies_under_a_theme_that_declares_no_symbols`
 > `src/theme.rs::a_themes_own_symbol_wins_over_the_selected_set`
 > `src/theme.rs::the_operators_overrides_win_over_the_set_and_the_theme_both`
-> `crates/uze-core/src/theme_state.rs::the_two_choices_do_not_overwrite_each_other`
+> `crates/uze-core/src/appearance.rs::the_two_choices_do_not_overwrite_each_other`
 > `src/ui/tests.rs::each_glyph_set_is_previewed_in_its_own_glyphs`
 > `src/progress.rs::the_cli_and_the_tui_resolve_a_shared_token_to_the_same_colour`
 > `src/ui/orchestrator/tests.rs::the_palette_a_pane_is_told_about_is_the_one_being_drawn`

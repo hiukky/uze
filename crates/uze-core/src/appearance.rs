@@ -1,4 +1,5 @@
-//! Which theme is active, and where a user's own themes live.
+//! The `[appearance]` section: which theme is active, which glyph set, and
+//! where a user's own themes live.
 //!
 //! Only the *selection* lives here. What a theme is — tokens, symbols, the
 //! file format, how a partial one resolves — belongs to the design system,
@@ -11,32 +12,21 @@
 
 use std::{fs, path::PathBuf};
 
-use serde::{Deserialize, Serialize};
-
 use crate::{
+    config,
     error::{Result, UzeError},
     home::UzeHome,
 };
 
-/// The two appearance choices, in one record because they are one answer to
-/// one question — what this machine looks like — even though neither
-/// decides the other.
-///
-/// `glyphs` is optional in the sense that never having chosen is the
-/// ordinary case, not an error: its absence reads as "the default set".
-#[derive(Clone, Debug, Default, Deserialize, Serialize)]
-struct ThemeSelection {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    active: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    glyphs: Option<String>,
-}
+const SECTION: &str = "appearance";
+const THEME: &str = "theme";
+const GLYPHS: &str = "glyphs";
 
 /// The theme the operator chose, or `None` while they have not chosen —
 /// which is not an error state: the built-in default is what a fresh
 /// installation draws with, and choosing is how you leave it.
 pub fn active(home: &UzeHome) -> Result<Option<String>> {
-    Ok(read(home)?.active)
+    config::get(home, SECTION, THEME)
 }
 
 /// The glyph set the operator chose, or `None` while they have not chosen.
@@ -45,40 +35,15 @@ pub fn active(home: &UzeHome) -> Result<Option<String>> {
 /// palette with the default glyphs, on the ASCII glyphs with no palette
 /// chosen at all, or on neither.
 pub fn glyphs(home: &UzeHome) -> Result<Option<String>> {
-    Ok(read(home)?.glyphs)
+    config::get(home, SECTION, GLYPHS)
 }
 
 pub fn set_active(home: &UzeHome, id: &str) -> Result<()> {
-    let mut selection = read(home)?;
-    selection.active = Some(id.to_owned());
-    write(home, &selection)
+    config::set(home, SECTION, THEME, id)
 }
 
 pub fn set_glyphs(home: &UzeHome, id: &str) -> Result<()> {
-    let mut selection = read(home)?;
-    selection.glyphs = Some(id.to_owned());
-    write(home, &selection)
-}
-
-/// Both selections share one file, so each is written by reading the record
-/// and replacing its own half. Writing a fresh record instead is how
-/// choosing a palette would silently forget the operator's glyphs.
-fn read(home: &UzeHome) -> Result<ThemeSelection> {
-    Ok(uze_document::read::<ThemeSelection>(&home.active_theme_path())?.or_default())
-}
-
-/// A record: what the operator chose, which nothing else on the machine
-/// knows and no probe re-derives.
-impl uze_document::Shaped for ThemeSelection {
-    const SHAPE: u32 = uze_document::FIRST_SHAPE;
-    const KIND: &'static str = "theme";
-}
-
-fn write(home: &UzeHome, selection: &ThemeSelection) -> Result<()> {
-    home.ensure_layout()?;
-    let payload =
-        serde_json::to_vec_pretty(selection).expect("theme selection serialization is infallible");
-    crate::persistence::write_atomic(&home.active_theme_path(), &payload)
+    config::set(home, SECTION, GLYPHS, id)
 }
 
 /// The theme files the operator has written, as `(id, path)` sorted by id.
@@ -167,8 +132,7 @@ mod tests {
     #[test]
     fn a_selection_naming_only_a_theme_leaves_the_glyph_set_at_the_default() {
         let home = home("theme-only-active");
-        home.ensure_layout().expect("layout");
-        fs::write(home.active_theme_path(), r#"{"active":"nocturne"}"#).expect("written");
+        set_active(&home, "nocturne").expect("written");
 
         assert_eq!(
             active(&home).expect("readable").as_deref(),

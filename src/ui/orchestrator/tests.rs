@@ -34,15 +34,15 @@ mod workspace_tests {
     use super::WorkspaceHit;
     use super::{
         AGENT_BEATS, AGENT_ECHO_GRACE, AGENT_PASTE_GRACE, AGENT_QUIET_AFTER, AgentGroup,
-        AgentIdentity, AgentTabStatus, AgentView, Attach, CommitDetailPopup,
-        CommitDetailResolution, CompletionBehavior, DeliveryResolution, DraggingTab, ExtensionHit,
-        Flow, GitAnswer, GitBadge, GitResolution, PendingDrop, PlacementResolution,
-        PreservedOverlay, RootPicker, ScrollDirection, TabDragGroup, UpstreamSync, Viewport,
-        WorkResolution, WorkStateView, WorkspaceModel, adopt_agent_labels, agent_activity_frame,
-        agent_identity_for_tab, answered_or, blank_pane, can_close_tab_from_menu, checkout_lost,
-        encode_mouse, evaluation_key, forward_paste, forward_scroll, next_agent_label,
-        next_shell_label, open_architect, open_code, open_commit_detail, pane_relative,
-        pending_tab_drop,
+        AgentIdentity, AgentTabStatus, AgentView, Attach, CHIME_COOLDOWN, CHIME_SETTLE,
+        CommitDetailPopup, CommitDetailResolution, CompletionBehavior, DeliveryResolution,
+        DraggingTab, ExtensionHit, Flow, GitAnswer, GitBadge, GitResolution, PendingDrop,
+        PlacementResolution, PreservedOverlay, RootPicker, ScrollDirection, TabDragGroup,
+        UpstreamSync, Viewport, WorkResolution, WorkStateView, WorkspaceModel, adopt_agent_labels,
+        agent_activity_frame, agent_identity_for_tab, answered_or, blank_pane,
+        can_close_tab_from_menu, checkout_lost, encode_mouse, evaluation_key, forward_paste,
+        forward_scroll, next_agent_label, next_shell_label, open_architect, open_code,
+        open_commit_detail, pane_relative, pending_tab_drop,
         render::{
             self, FrameMetrics, WorkspaceLayout, compute_layout, render_commit_detail,
             render_preserved, render_sidebar, render_status_catalog, render_tab_strip, task_mark,
@@ -6599,6 +6599,115 @@ mod workspace_tests {
         assert_ne!(
             model.agent_tab_status(PaneId(1), false),
             AgentTabStatus::Working
+        );
+    }
+
+    /// Ends one turn in `pane` of a [`two_agent_session`] whose first tab
+    /// is on screen, lets it settle, and answers whether the bell rings
+    /// under `chime`.
+    fn rings_when_a_turn_ends_in(pane: PaneId, chime: uze_application::Chime) -> bool {
+        let mut model = two_agent_session("/a", "/b");
+        let start = Instant::now();
+        model.note_agent_prompt_submission(pane, &identities_fixture(), Some("hello"));
+        let ended = start + AGENT_QUIET_AFTER + Duration::from_secs(1);
+        assert!(model.expire_agent_activity(ended));
+        assert!(
+            !model.take_ring(chime, ended),
+            "a turn rings only once it has stayed ended"
+        );
+        model.take_ring(chime, ended + CHIME_SETTLE)
+    }
+
+    #[test]
+    fn out_of_sight_rings_only_for_a_tab_that_is_not_on_screen() {
+        use uze_application::Chime;
+        assert!(rings_when_a_turn_ends_in(PaneId(2), Chime::OutOfSight));
+        assert!(
+            !rings_when_a_turn_ends_in(PaneId(1), Chime::OutOfSight),
+            "the operator watched this one finish"
+        );
+    }
+
+    #[test]
+    fn always_rings_for_the_tab_on_screen_too_and_silent_never_rings() {
+        use uze_application::Chime;
+        assert!(rings_when_a_turn_ends_in(PaneId(1), Chime::Always));
+        assert!(rings_when_a_turn_ends_in(PaneId(2), Chime::Always));
+        assert!(!rings_when_a_turn_ends_in(PaneId(1), Chime::Silent));
+        assert!(!rings_when_a_turn_ends_in(PaneId(2), Chime::Silent));
+    }
+
+    #[test]
+    fn a_pause_the_agent_resumes_from_never_rings() {
+        use uze_application::Chime;
+        let mut model = two_agent_session("/a", "/b");
+        let start = Instant::now();
+        model.note_agent_prompt_submission(PaneId(2), &identities_fixture(), Some("hello"));
+        let paused = start + AGENT_QUIET_AFTER + Duration::from_secs(1);
+        assert!(model.expire_agent_activity(paused));
+
+        // Back to work before the pause settled: the check went, and so
+        // does the ring it would have been.
+        let resumed = paused + CHIME_SETTLE / 2;
+        animate(&mut model, PaneId(2), resumed);
+        assert!(!model.take_ring(Chime::Always, resumed));
+        assert!(!model.take_ring(Chime::Always, paused + CHIME_SETTLE));
+    }
+
+    #[test]
+    fn a_tab_looked_at_before_its_turn_settles_does_not_ring_out_of_sight() {
+        use uze_application::Chime;
+        let mut model = two_agent_session("/a", "/b");
+        let start = Instant::now();
+        model.note_agent_prompt_submission(PaneId(2), &identities_fixture(), Some("hello"));
+        let ended = start + AGENT_QUIET_AFTER + Duration::from_secs(1);
+        model.expire_agent_activity(ended);
+
+        select_second_agent(&mut model);
+        model.expire_agent_activity(ended + Duration::from_secs(1));
+        assert!(!model.take_ring(Chime::OutOfSight, ended + CHIME_SETTLE));
+    }
+
+    #[test]
+    fn a_turn_whose_tab_closed_before_it_settled_does_not_ring() {
+        use uze_application::Chime;
+        let mut model = two_agent_session("/a", "/b");
+        let start = Instant::now();
+        model.note_agent_prompt_submission(PaneId(2), &identities_fixture(), Some("hello"));
+        let ended = start + AGENT_QUIET_AFTER + Duration::from_secs(1);
+        model.expire_agent_activity(ended);
+
+        model.session.as_mut().unwrap().workspace.spaces[0]
+            .tabs
+            .retain(|tab| tab.pane.id != PaneId(2));
+        model.expire_agent_activity(ended + Duration::from_secs(1));
+        assert!(!model.take_ring(Chime::Always, ended + CHIME_SETTLE));
+    }
+
+    #[test]
+    fn turns_settling_together_ring_once() {
+        use uze_application::Chime;
+        let mut model = two_agent_session("/a", "/b");
+        let start = Instant::now();
+        model.note_agent_prompt_submission(PaneId(1), &identities_fixture(), Some("one"));
+        model.note_agent_prompt_submission(PaneId(2), &identities_fixture(), Some("two"));
+        let ended = start + AGENT_QUIET_AFTER + Duration::from_secs(1);
+        model.expire_agent_activity(ended);
+        let settled = ended + CHIME_SETTLE;
+        assert!(model.take_ring(Chime::Always, settled));
+        assert!(
+            !model.take_ring(Chime::Always, settled),
+            "both turns were one ring"
+        );
+
+        model.unsettled_turns.insert(PaneId(2), ended);
+        assert!(
+            !model.take_ring(Chime::Always, settled + CHIME_COOLDOWN / 2),
+            "a ring inside the cooldown is a burst"
+        );
+        assert!(
+            !model.take_ring(Chime::Always, settled + CHIME_COOLDOWN),
+            "a turn that did not ring when it settled does not ring later"
         );
     }
 

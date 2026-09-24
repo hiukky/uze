@@ -242,10 +242,14 @@ fn chosen(home: &UzeHome) -> std::result::Result<Option<Loaded>, String> {
     let has_opinion = |app: &UzeApplication| {
         matches!(app.themes().glyphs(), Ok(Some(_))) || home.theme_overrides_path().exists()
     };
+    // A settings file that does not parse is reported, not read as empty:
+    // the theme it names is silently not in force, which is exactly the
+    // case that has to say so every time until it is fixed.
     let id = match app.themes().active() {
         Ok(Some(id)) => id,
         Ok(None) if has_opinion(&app) => "default".to_owned(),
-        _ => return Ok(None),
+        Ok(None) => return Ok(None),
+        Err(error) => return Err(error.to_string()),
     };
 
     resolve(&app, home, &id)

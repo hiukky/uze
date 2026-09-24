@@ -54,10 +54,13 @@ pub(crate) enum Intent {
     /// Draw every mark from this glyph set from now on. Independent of the
     /// theme in both directions — neither call reads the other's half.
     SelectGlyphSet(String),
-    /// Read the themes and the glyph sets the Appearance screen chooses
+    /// Ring the bell for these finished agent turns from now on, in the
+    /// running workspace as much as on the next launch.
+    SelectChime(uze_application::Chime),
+    /// Read the themes and the glyph sets the Settings screen chooses
     /// from. Sent on arriving there rather than per frame, so the list
     /// cannot change under the cursor between two frames.
-    LoadAppearance,
+    LoadSettings,
     Refresh,
     InspectPlugin(String),
     InspectMarketplacePlugin {
@@ -123,7 +126,8 @@ impl Intent {
             Self::PersistKeymap => "persist_keymap",
             Self::OpenThemePicker => "open_theme_picker",
             Self::SelectGlyphSet(_) => "select_glyph_set",
-            Self::LoadAppearance => "load_appearance",
+            Self::SelectChime(_) => "select_chime",
+            Self::LoadSettings => "load_settings",
             Self::SelectTheme(_) => "select_theme",
             Self::Refresh => "refresh",
             Self::InspectPlugin(_) => "inspect_plugin",
@@ -221,18 +225,25 @@ pub(crate) fn dispatch(
         Intent::SelectTheme(id) => match select_theme(home, &id) {
             Ok(()) => {
                 model.status = Status::Success(format!("Drawing in {id}"));
-                load_appearance(home, model);
+                load_settings(home, model);
             }
             Err(error) => model.status = Status::Error(error),
         },
         Intent::SelectGlyphSet(id) => match select_glyph_set(home, &id) {
             Ok(()) => {
                 model.status = Status::Success(format!("Drawing with the {id} glyphs"));
-                load_appearance(home, model);
+                load_settings(home, model);
             }
             Err(error) => model.status = Status::Error(error),
         },
-        Intent::LoadAppearance => load_appearance(home, model),
+        Intent::SelectChime(chime) => match select_chime(home, chime) {
+            Ok(()) => {
+                model.status = Status::Success(crate::ui::chime::outcome(chime).to_owned());
+                model.settings_chime = chime;
+            }
+            Err(error) => model.status = Status::Error(error),
+        },
+        Intent::LoadSettings => load_settings(home, model),
         Intent::PersistKeymap => {
             let file = uze_keys::difference_from_default(&uze_keys::active());
             let path = home.keymap_path();
@@ -1042,21 +1053,27 @@ const SWATCHES: &[uze_theme::Token] = &[
     uze_theme::Token::TextBright,
 ];
 
-/// Reads both lists the Appearance screen chooses from.
+/// Reads both lists the Settings screen chooses from.
 ///
 /// Cheap enough to read on this thread rather than a worker, for the same
 /// reason the theme picker reads its own: a JSON read and a directory
 /// listing, which is exactly the work `uze theme list` is budgeted for.
-fn load_appearance(home: &UzeHome, model: &mut TuiModel) {
-    model.appearance_read = true;
+fn load_settings(home: &UzeHome, model: &mut TuiModel) {
+    model.settings_read = true;
     let Ok(application) = tui_application(home.clone()) else {
         return;
     };
+    // The settings file is shared by every group here, so one that does
+    // not parse fails all three reads the same way: said once, by name,
+    // rather than showing a screen with nothing chosen and no reason.
+    if let Err(error) = application.themes().active() {
+        model.status = Status::Error(error.to_string());
+    }
     if let Ok(themes) = application.themes().list(uze_theme::builtin_names()) {
         // Resolved here rather than per frame: each one is a file read, and
         // a screen that re-read the whole themes directory every tick would
         // be paying a directory walk to draw six coloured cells.
-        model.appearance_palettes = themes
+        model.settings_palettes = themes
             .iter()
             .filter_map(|theme| {
                 let loaded = crate::theme::resolve(&application, home, &theme.id).ok()?;
@@ -1067,12 +1084,28 @@ fn load_appearance(home: &UzeHome, model: &mut TuiModel) {
                 Some((theme.id.clone(), colours))
             })
             .collect();
-        model.appearance_themes = themes;
+        model.settings_themes = themes;
     }
     if let Ok(sets) = application.themes().glyph_sets(uze_theme::glyph_sets()) {
-        model.appearance_glyph_sets = sets;
+        model.settings_glyph_sets = sets;
     }
-    model.settle_appearance_selection();
+    if let Ok(chime) = application.notifications().agent_finished() {
+        model.settings_chime = chime;
+    }
+    model.settle_settings_selection();
+}
+
+/// Records the choice and puts it in force in this process — the
+/// workspace under the modal reads it at the next finished turn.
+fn select_chime(home: &UzeHome, chime: uze_application::Chime) -> std::result::Result<(), String> {
+    tui_application(home.clone())
+        .and_then(|app| app.notifications().set_agent_finished(chime))
+        .map_err(|error| error.to_string())?;
+    crate::ui::chime::set(chime);
+    if chime != uze_application::Chime::Silent {
+        crate::ui::chime::preview();
+    }
+    Ok(())
 }
 
 fn select_theme(home: &UzeHome, id: &str) -> std::result::Result<(), String> {

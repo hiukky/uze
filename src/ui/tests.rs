@@ -216,6 +216,40 @@ fn model_with_data() -> TuiModel {
     model
 }
 
+/// A subtitle is a few words under a route's name, and the sidebar can be
+/// dragged down to its narrowest: every one has to be read whole there,
+/// not cut at the column's edge.
+#[test]
+fn every_route_subtitle_fits_the_narrowest_sidebar() {
+    use ratatui::{Terminal, backend::TestBackend};
+
+    let mut terminal = Terminal::new(TestBackend::new(100, 40)).unwrap();
+    let model = TuiModel {
+        sidebar_width: Some(super::MIN_SIDEBAR_WIDTH),
+        ..TuiModel::default()
+    };
+    let mut hits = Vec::new();
+    terminal
+        .draw(|frame| render(frame, frame.area(), &model, &mut hits))
+        .unwrap();
+    let buffer = terminal.backend().buffer();
+    let rows: Vec<String> = (0..buffer.area.height)
+        .map(|y| {
+            (0..super::MIN_SIDEBAR_WIDTH)
+                .map(|x| buffer[(x, y)].symbol())
+                .collect()
+        })
+        .collect();
+    for route in ROUTES {
+        assert!(
+            rows.iter().any(|row| row.contains(route.subtitle())),
+            "`{}` is cut in a {}-column sidebar",
+            route.subtitle(),
+            super::MIN_SIDEBAR_WIDTH
+        );
+    }
+}
+
 #[test]
 fn every_route_renders_without_panicking() {
     use ratatui::{Terminal, backend::TestBackend};
@@ -631,26 +665,26 @@ fn the_next_run_opens_on_the_screen_the_last_one_left() {
 }
 
 /// The management client reopens on the screen it was left on without
-/// passing through a route change — and Appearance, which reads its lists
+/// passing through a route change — and Settings, which reads its lists
 /// on arrival, used to open empty until it was clicked again.
 #[test]
-fn appearance_reopened_where_it_was_left_still_reads_its_lists() {
+fn settings_reopened_where_it_was_left_still_reads_its_lists() {
     let layout = uze_application::ManagementLayout {
-        route: Some(Route::Appearance.id().to_owned()),
+        route: Some(Route::Settings.id().to_owned()),
         ..uze_application::ManagementLayout::default()
     };
     let mut model = TuiModel::recall(None, &layout);
-    assert_eq!(model.route, Route::Appearance);
-    assert_eq!(model.appearance_intent(), Intent::LoadAppearance);
-    model.appearance_read = true;
+    assert_eq!(model.route, Route::Settings);
+    assert_eq!(model.settings_intent(), Intent::LoadSettings);
+    model.settings_read = true;
     assert_eq!(
-        model.appearance_intent(),
+        model.settings_intent(),
         Intent::None,
         "read once, not every frame — an empty machine included"
     );
     model.set_route(Route::Overview);
     assert_eq!(
-        model.appearance_intent(),
+        model.settings_intent(),
         Intent::None,
         "only that screen reads them"
     );
@@ -4732,21 +4766,21 @@ fn every_drawer_runs_the_full_height_of_its_screen() {
         Route::Extensions,
         Route::Harnesses,
         Route::Keys,
-        Route::Appearance,
+        Route::Settings,
     ] {
         let mut model = model_with_data();
         model.set_route(route);
         model.focus = Focus::Content;
-        model.appearance_themes = vec![uze_application::application::ThemeSummary {
+        model.settings_themes = vec![uze_application::application::ThemeSummary {
             id: "default".to_owned(),
             active: true,
             path: None,
         }];
-        model.appearance_glyph_sets = vec![uze_application::application::GlyphSetSummary {
+        model.settings_glyph_sets = vec![uze_application::application::GlyphSetSummary {
             id: "nerd".to_owned(),
             active: false,
         }];
-        model.settle_appearance_selection();
+        model.settle_settings_selection();
 
         let mut terminal = Terminal::new(TestBackend::new(140, 40)).unwrap();
         let mut hits = Vec::new();
@@ -4779,24 +4813,24 @@ fn every_drawer_runs_the_full_height_of_its_screen() {
 /// unreachable at once — the selection walked off the bottom and nothing
 /// followed it.
 #[test]
-fn the_appearance_catalog_follows_its_selection_down_a_narrow_column() {
+fn the_settings_catalog_follows_its_selection_down_a_narrow_column() {
     let mut model = model_with_data();
-    model.set_route(Route::Appearance);
+    model.set_route(Route::Settings);
     model.focus = Focus::Content;
-    model.appearance_themes = (0..8)
+    model.settings_themes = (0..8)
         .map(|index| uze_application::application::ThemeSummary {
             id: format!("theme-{index}"),
             active: index == 0,
             path: None,
         })
         .collect();
-    model.appearance_glyph_sets = (0..4)
+    model.settings_glyph_sets = (0..4)
         .map(|index| uze_application::application::GlyphSetSummary {
             id: format!("set-{index}"),
             active: false,
         })
         .collect();
-    model.settle_appearance_selection();
+    model.settle_settings_selection();
 
     // One card per line, and more lines than rows.
     let drawn = |model: &TuiModel| {
@@ -4809,14 +4843,14 @@ fn the_appearance_catalog_follows_its_selection_down_a_narrow_column() {
         let cards: Vec<usize> = hits
             .iter()
             .filter_map(|(_, hit)| match hit {
-                Hit::AppearanceRow(index) => Some(*index),
+                Hit::SettingsRow(index) => Some(*index),
                 _ => None,
             })
             .collect();
         (cards, rows)
     };
 
-    let last = model.appearance_rows().len() - 1;
+    let last = model.settings_rows().len() - 1;
     let (first_page, rows) = drawn(&model);
     assert!(!first_page.is_empty(), "the catalogue is drawn: {rows}");
     assert!(
@@ -4824,7 +4858,7 @@ fn the_appearance_catalog_follows_its_selection_down_a_narrow_column() {
         "the last card is past the first screenful: {rows}"
     );
 
-    model.appearance_selected = last;
+    model.settings_selected = last;
     let (followed, rows) = drawn(&model);
     assert!(
         followed.contains(&last),
@@ -4885,7 +4919,7 @@ fn a_question_is_answered_with_the_pointer_too() {
     );
 }
 
-/// The claim the Appearance screen exists to make: each glyph set is drawn
+/// The claim the Settings screen exists to make: each glyph set is drawn
 /// in *its own* glyphs, not in the ones currently in force. Without that,
 /// choosing a set is choosing a name and hoping — which is the guess the
 /// whole change removes, since no terminal can be asked what font it has.
@@ -4893,9 +4927,9 @@ fn a_question_is_answered_with_the_pointer_too() {
 fn each_glyph_set_is_previewed_in_its_own_glyphs() {
     let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
     let model = TuiModel {
-        route: Route::Appearance,
+        route: Route::Settings,
         focus: Focus::Content,
-        appearance_glyph_sets: uze_theme::glyph_sets()
+        settings_glyph_sets: uze_theme::glyph_sets()
             .iter()
             .map(|id| uze_application::application::GlyphSetSummary {
                 id: (*id).to_owned(),
@@ -4955,9 +4989,9 @@ fn each_glyph_set_is_previewed_in_its_own_glyphs() {
 #[test]
 fn the_fill_that_marks_what_is_in_force_leaves_the_frame_alone() {
     let mut model = TuiModel {
-        route: Route::Appearance,
+        route: Route::Settings,
         focus: Focus::Content,
-        appearance_glyph_sets: uze_theme::glyph_sets()
+        settings_glyph_sets: uze_theme::glyph_sets()
             .iter()
             .map(|id| uze_application::application::GlyphSetSummary {
                 id: (*id).to_owned(),
@@ -4966,19 +5000,19 @@ fn the_fill_that_marks_what_is_in_force_leaves_the_frame_alone() {
             .collect(),
         ..TuiModel::default()
     };
-    model.settle_appearance_selection();
+    model.settle_settings_selection();
     let in_force = model
-        .appearance_rows()
+        .settings_rows()
         .iter()
         .position(|row| {
             matches!(
                 row,
-                crate::ui::model::AppearanceRow::GlyphSet { active: true, .. }
+                crate::ui::model::SettingsRow::GlyphSet { active: true, .. }
             )
         })
         .expect("a set in force to draw");
     assert_ne!(
-        in_force, model.appearance_selected,
+        in_force, model.settings_selected,
         "the case this guards is the card in force that the keyboard is not on"
     );
 
@@ -4990,7 +5024,7 @@ fn the_fill_that_marks_what_is_in_force_leaves_the_frame_alone() {
 
     let card = hits
         .iter()
-        .find_map(|(rect, hit)| (*hit == Hit::AppearanceRow(in_force)).then_some(*rect))
+        .find_map(|(rect, hit)| (*hit == Hit::SettingsRow(in_force)).then_some(*rect))
         .expect("the set in force drew no card");
     let buffer = terminal.backend().buffer();
     let fill = crate::ui::theme::color(uze_theme::Token::SurfaceSelected);
@@ -5009,33 +5043,73 @@ fn the_fill_that_marks_what_is_in_force_leaves_the_frame_alone() {
 #[test]
 fn choosing_a_glyph_set_is_a_different_intent_from_choosing_a_theme() {
     let mut model = TuiModel {
-        route: Route::Appearance,
+        route: Route::Settings,
         focus: Focus::Content,
-        appearance_themes: vec![uze_application::application::ThemeSummary {
+        settings_themes: vec![uze_application::application::ThemeSummary {
             id: "dracula".to_owned(),
             active: false,
             path: None,
         }],
-        appearance_glyph_sets: vec![uze_application::application::GlyphSetSummary {
+        settings_glyph_sets: vec![uze_application::application::GlyphSetSummary {
             id: "nerd".to_owned(),
             active: false,
         }],
         ..TuiModel::default()
     };
-    model.settle_appearance_selection();
+    model.settle_settings_selection();
 
     // The list opens on the first *choice*, never on the heading above it.
     assert_eq!(
-        model.activate_appearance(),
+        model.activate_settings(),
         crate::ui::worker::Intent::SelectTheme("dracula".to_owned())
     );
 
     // Walking down crosses the second heading without stopping on it.
-    model.move_appearance_selection(1);
+    model.move_settings_selection(1);
     assert_eq!(
-        model.activate_appearance(),
+        model.activate_settings(),
         crate::ui::worker::Intent::SelectGlyphSet("nerd".to_owned()),
         "the glyph set was reached as if it were a theme"
+    );
+}
+
+#[test]
+fn the_chime_is_chosen_on_the_settings_screen_and_marks_the_one_in_force() {
+    use uze_application::Chime;
+    let mut model = TuiModel {
+        route: Route::Settings,
+        focus: Focus::Content,
+        settings_themes: vec![uze_application::application::ThemeSummary {
+            id: "dracula".to_owned(),
+            active: true,
+            path: None,
+        }],
+        settings_chime: Chime::OutOfSight,
+        ..TuiModel::default()
+    };
+    model.settle_settings_selection();
+
+    let chimes: Vec<(Chime, bool)> = model
+        .settings_rows()
+        .into_iter()
+        .filter_map(|row| match row {
+            crate::ui::model::SettingsRow::Chime { chime, active } => Some((chime, active)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        chimes,
+        vec![
+            (Chime::Silent, false),
+            (Chime::OutOfSight, true),
+            (Chime::Always, false),
+        ]
+    );
+
+    model.move_settings_selection(3);
+    assert_eq!(
+        model.activate_settings(),
+        crate::ui::worker::Intent::SelectChime(Chime::Always)
     );
 }
 
@@ -5043,22 +5117,22 @@ fn choosing_a_glyph_set_is_a_different_intent_from_choosing_a_theme() {
 /// nowhere to go: it stays put. It used to step past the heading forever,
 /// clamping back onto it at every step, and freeze the whole client.
 #[test]
-fn moving_up_from_the_first_appearance_choice_stays_put() {
+fn moving_up_from_the_first_settings_choice_stays_put() {
     let mut model = TuiModel {
-        route: Route::Appearance,
+        route: Route::Settings,
         focus: Focus::Content,
-        appearance_themes: vec![uze_application::application::ThemeSummary {
+        settings_themes: vec![uze_application::application::ThemeSummary {
             id: "dracula".to_owned(),
             active: false,
             path: None,
         }],
         ..TuiModel::default()
     };
-    model.settle_appearance_selection();
+    model.settle_settings_selection();
     let (done, finished) = std::sync::mpsc::channel();
     let mover = std::thread::spawn(move || {
-        model.move_appearance_selection(-1);
-        let _ = done.send(model.activate_appearance());
+        model.move_settings_selection(-1);
+        let _ = done.send(model.activate_settings());
     });
     let answered = finished.recv_timeout(std::time::Duration::from_secs(5));
     assert_eq!(
@@ -5069,39 +5143,39 @@ fn moving_up_from_the_first_appearance_choice_stays_put() {
     let _ = mover.join();
 }
 
-/// Coming back to Appearance builds the model afresh, so the selection has
+/// Coming back to Settings builds the model afresh, so the selection has
 /// to be settled again — on the theme in force, not on the first card.
 #[test]
-fn returning_to_appearance_lands_on_the_theme_in_force() {
+fn returning_to_settings_lands_on_the_theme_in_force() {
     let theme = |id: &str, active: bool| uze_application::application::ThemeSummary {
         id: id.to_owned(),
         active,
         path: None,
     };
     let mut model = TuiModel {
-        route: Route::Appearance,
+        route: Route::Settings,
         focus: Focus::Content,
-        appearance_themes: vec![
+        settings_themes: vec![
             theme("default", false),
             theme("dracula", false),
             theme("tokyo-night", true),
         ],
         ..TuiModel::default()
     };
-    model.settle_appearance_selection();
+    model.settle_settings_selection();
     assert_eq!(
-        model.activate_appearance(),
+        model.activate_settings(),
         crate::ui::worker::Intent::SelectTheme("tokyo-night".to_owned()),
         "the selection fell back to the first card"
     );
 }
 
 #[test]
-fn opening_appearance_asks_for_the_lists_it_chooses_from() {
+fn opening_settings_asks_for_the_lists_it_chooses_from() {
     let mut model = TuiModel::default();
     assert_eq!(
-        model.set_route(Route::Appearance),
-        crate::ui::worker::Intent::LoadAppearance
+        model.set_route(Route::Settings),
+        crate::ui::worker::Intent::LoadSettings
     );
     // Every other route asks for nothing on arrival, so this one is not
     // paying for a read it does not need.
@@ -5111,15 +5185,15 @@ fn opening_appearance_asks_for_the_lists_it_chooses_from() {
     );
 }
 
-/// Arriving is the only moment Appearance asks for its lists, so every way
+/// Arriving is the only moment Settings asks for its lists, so every way
 /// of arriving has to carry the ask. A gesture that dropped it left the
 /// screen showing its two headings and nothing under them — and leaving and
 /// coming back was no cure, because coming back was the gesture that dropped
 /// it.
 #[test]
-fn every_way_of_reaching_appearance_carries_the_ask() {
+fn every_way_of_reaching_settings_carries_the_ask() {
     let steps = uze_keys::Action::NextScreen;
-    let landing = Route::Appearance.index();
+    let landing = Route::Settings.index();
 
     let mut walked = TuiModel::default();
     let mut asked = None;
@@ -5132,8 +5206,8 @@ fn every_way_of_reaching_appearance_carries_the_ask() {
     }
     assert_eq!(
         asked,
-        Some(crate::ui::worker::Intent::LoadAppearance),
-        "walking the sidebar reached Appearance without asking for its lists"
+        Some(crate::ui::worker::Intent::LoadSettings),
+        "walking the sidebar reached Settings without asking for its lists"
     );
 
     let mut clicked = TuiModel::default();
@@ -5146,13 +5220,13 @@ fn every_way_of_reaching_appearance_carries_the_ask() {
     let (rect, _) = clicked
         .hits
         .iter()
-        .find(|(_, hit)| *hit == crate::ui::hit::Hit::Route(Route::Appearance))
-        .expect("Appearance is reachable from the sidebar")
+        .find(|(_, hit)| *hit == crate::ui::hit::Hit::Route(Route::Settings))
+        .expect("Settings is reachable from the sidebar")
         .clone();
     assert_eq!(
         clicked.click(rect.x + 1, rect.y),
-        crate::ui::worker::Intent::LoadAppearance,
-        "clicking into Appearance reached it without asking for its lists"
+        crate::ui::worker::Intent::LoadSettings,
+        "clicking into Settings reached it without asking for its lists"
     );
 }
 
@@ -5160,9 +5234,9 @@ fn every_way_of_reaching_appearance_carries_the_ask() {
 fn clicking_a_glyph_set_chooses_it() {
     let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
     let mut model = TuiModel {
-        route: Route::Appearance,
+        route: Route::Settings,
         focus: Focus::Content,
-        appearance_glyph_sets: vec![uze_application::application::GlyphSetSummary {
+        settings_glyph_sets: vec![uze_application::application::GlyphSetSummary {
             id: "ascii".to_owned(),
             active: false,
         }],
@@ -5174,15 +5248,15 @@ fn clicking_a_glyph_set_chooses_it() {
         .unwrap();
     model.hits = hits;
 
-    let rows = model.appearance_rows();
+    let rows = model.settings_rows();
     let index = rows
         .iter()
-        .position(|row| matches!(row, crate::ui::model::AppearanceRow::GlyphSet { .. }))
+        .position(|row| matches!(row, crate::ui::model::SettingsRow::GlyphSet { .. }))
         .expect("a set row");
     let (rect, _) = model
         .hits
         .iter()
-        .find(|(_, hit)| *hit == crate::ui::hit::Hit::AppearanceRow(index))
+        .find(|(_, hit)| *hit == crate::ui::hit::Hit::SettingsRow(index))
         .expect("the set row is clickable")
         .clone();
 

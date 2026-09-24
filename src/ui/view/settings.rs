@@ -1,6 +1,11 @@
-//! TUI view — Appearance route.
+//! TUI view — Settings route.
 //!
-//! What UZE looks like, as two choices rather than one: the palette, and —
+//! The choices `config.toml` holds, one group per section, so a setting
+//! added later has an obvious place and the file and the screen read the
+//! same way. Keys stays a screen of its own: another file, and a different
+//! kind of choosing.
+//!
+//! Appearance is two choices rather than one: the palette, and —
 //! chosen apart from it — the set of glyphs every mark is drawn from. A
 //! font is installed once and a palette is picked on a whim, so welding
 //! them together meant an operator with a patched font had to give up every
@@ -31,8 +36,9 @@ use ratatui::{
 };
 
 use super::super::hit::Hit;
-use super::super::model::{AppearanceRow, ResizablePanel, Route, TuiModel};
+use super::super::model::{ResizablePanel, Route, SettingsRow, TuiModel};
 use super::super::{content_area, render_screen_header};
+use crate::ui::chime;
 use crate::ui::theme::{self, Symbol, Token};
 use crate::ui::widget::{self, Scrollbar, Surface};
 
@@ -51,16 +57,16 @@ const PREVIEWED: &[Symbol] = &[
     Symbol::Prompt,
 ];
 
-pub(crate) fn render_appearance(
+pub(crate) fn render_settings(
     frame: &mut ratatui::Frame<'_>,
     area: Rect,
     model: &TuiModel,
     hits: &mut Vec<(Rect, Hit)>,
 ) {
     let area = content_area(area);
-    let content = render_screen_header(frame, area, Route::Appearance, None);
+    let content = render_screen_header(frame, area, Route::Settings, None);
 
-    let drawer_width = super::drawer_width(ResizablePanel::AppearanceDrawer, model, area);
+    let drawer_width = super::drawer_width(ResizablePanel::SettingsDrawer, model, area);
     let list_width = content.width.saturating_sub(drawer_width);
     let list_area = Rect::new(content.x, content.y, list_width, content.height);
 
@@ -130,7 +136,7 @@ fn render_catalog(
 
     // The window stays at the top until the selection passes the middle,
     // so reading down from the first card does not move the page.
-    let first = first_band(&bands, model.appearance_selected, area.height);
+    let first = first_band(&bands, model.settings_selected, area.height);
     let mut y = area.y;
     let skipped: u16 = bands.iter().take(first).map(Band::height).sum();
     for band in bands.iter().skip(first) {
@@ -152,7 +158,7 @@ fn render_catalog(
                     let width = CARD_WIDTH.min(area.right().saturating_sub(x));
                     let rect = Rect::new(x, y, width, CARD_HEIGHT);
                     render_row(frame, rect, model, *index);
-                    hits.push((rect, Hit::AppearanceRow(*index)));
+                    hits.push((rect, Hit::SettingsRow(*index)));
                 }
             }
         }
@@ -188,8 +194,8 @@ fn bands_of(model: &TuiModel, width: u16) -> Vec<Band<'_>> {
     let columns = usize::from(((width + CARD_GAP) / (CARD_WIDTH + CARD_GAP)).max(1));
     let mut bands = Vec::new();
     let mut line: Vec<usize> = Vec::new();
-    for (index, row) in model.appearance_rows().iter().enumerate() {
-        if let AppearanceRow::Heading(title) = row {
+    for (index, row) in model.settings_rows().iter().enumerate() {
+        if let SettingsRow::Heading(title) = row {
             if !line.is_empty() {
                 bands.push(Band::Cards(std::mem::take(&mut line)));
             }
@@ -244,17 +250,17 @@ fn first_band(bands: &[Band<'_>], selected: usize, height: u16) -> usize {
     first
 }
 
-/// One card of the catalogue, by its index into `appearance_rows`: which
+/// One card of the catalogue, by its index into `settings_rows`: which
 /// kind it is decides what is drawn under the name and what the preview
 /// line shows.
 fn render_row(frame: &mut ratatui::Frame<'_>, rect: Rect, model: &TuiModel, index: usize) {
-    let rows = model.appearance_rows();
+    let rows = model.settings_rows();
     let Some(row) = rows.get(index) else {
         return;
     };
-    let selected = index == model.appearance_selected;
+    let selected = index == model.settings_selected;
     match row {
-        AppearanceRow::Theme { id, active, path } => {
+        SettingsRow::Theme { id, active, path } => {
             let source = match path {
                 // The file's own name, not its path: a card has room for
                 // one, and the drawer beside it carries the other.
@@ -274,7 +280,7 @@ fn render_row(frame: &mut ratatui::Frame<'_>, rect: Rect, model: &TuiModel, inde
                 swatch_spans(model, id),
             );
         }
-        AppearanceRow::GlyphSet { id, active } => {
+        SettingsRow::GlyphSet { id, active } => {
             let room = usize::from(rect.width).saturating_sub(4);
             render_card(
                 frame,
@@ -286,8 +292,17 @@ fn render_row(frame: &mut ratatui::Frame<'_>, rect: Rect, model: &TuiModel, inde
                 preview_spans(id, room),
             );
         }
+        SettingsRow::Chime { chime, active } => render_card(
+            frame,
+            rect,
+            chime::label(*chime),
+            *active,
+            selected,
+            chime::tagline(*chime),
+            Vec::new(),
+        ),
         // Headings are bands of their own and never reach a card rect.
-        AppearanceRow::Heading(_) => {}
+        SettingsRow::Heading(_) => {}
     }
 }
 
@@ -357,7 +372,7 @@ fn render_card(
 /// with a typo in it has no palette to show, and inventing one here would
 /// hide exactly the mistake the author needs to see.
 fn swatch_spans(model: &TuiModel, id: &str) -> Vec<Span<'static>> {
-    let Some(colours) = model.appearance_palettes.get(id) else {
+    let Some(colours) = model.settings_palettes.get(id) else {
         return Vec::new();
     };
     colours
@@ -422,13 +437,7 @@ fn render_drawer(
     model: &TuiModel,
     hits: &mut Vec<(Rect, Hit)>,
 ) {
-    let inner = super::drawer(
-        frame,
-        content,
-        ResizablePanel::AppearanceDrawer,
-        model,
-        hits,
-    );
+    let inner = super::drawer(frame, content, ResizablePanel::SettingsDrawer, model, hits);
     let block = |label: &str| {
         Line::from(Span::styled(
             label.to_uppercase(),
@@ -450,8 +459,8 @@ fn render_drawer(
         ))
     };
 
-    let lines = match model.selected_appearance_row() {
-        Some(AppearanceRow::Theme { id, active, path }) => vec![
+    let lines = match model.selected_settings_row() {
+        Some(SettingsRow::Theme { id, active, path }) => vec![
             block("Theme"),
             title(id),
             prose(match &path {
@@ -479,7 +488,7 @@ fn render_drawer(
                 "No. Enter to draw in it."
             }),
         ],
-        Some(AppearanceRow::GlyphSet { id, active }) => vec![
+        Some(SettingsRow::GlyphSet { id, active }) => vec![
             block("Glyphs"),
             title(id.clone()),
             prose(glyph_set_note(&id)),
@@ -497,12 +506,32 @@ fn render_drawer(
                 "No. Enter to draw with it."
             }),
         ],
+        Some(SettingsRow::Chime { chime, active }) => vec![
+            block("Notifications"),
+            title(chime::label(chime).to_owned()),
+            prose(chime::note(chime)),
+            Line::from(""),
+            block("The sound"),
+            prose(
+                "The terminal's own bell, so your terminal decides what it \
+                 is — a tone, a flash, or nothing if its bell is off. Agents \
+                 finishing together ring once.",
+            ),
+            Line::from(""),
+            block("In force"),
+            prose(match (active, chime) {
+                (true, _) => "Yes.",
+                (false, uze_application::Chime::Silent) => "No. Enter to stop ringing.",
+                (false, _) => "No. Enter to choose it — it rings once so you hear it.",
+            }),
+        ],
         _ => vec![
-            block("Appearance"),
+            block("Settings"),
             Line::from(""),
             prose(
-                "Two choices, and neither changes the other: the palette, and \
-             the set every mark is drawn from.",
+                "What ~/.uze/config.toml holds, one group per section. Each \
+                 choice here writes only its own key, so the file is yours \
+                 to edit by hand too.",
             ),
         ],
     };

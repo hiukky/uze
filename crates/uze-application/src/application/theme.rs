@@ -7,7 +7,7 @@
 //! every token added later becomes a change to this crate.
 
 use serde::Serialize;
-use uze_core::{Result, theme_state};
+use uze_core::{Result, appearance};
 
 use super::services::Themes;
 
@@ -39,7 +39,7 @@ impl Themes<'_> {
     #[tracing::instrument(name = "themes.list", skip_all, err)]
     pub fn list(&self, builtin: &[&str]) -> Result<Vec<ThemeSummary>> {
         let active = self.active()?;
-        let written = theme_state::available(&self.0.home)?;
+        let written = appearance::available(&self.0.home)?;
         let shadowed: Vec<&str> = written.iter().map(|(id, _)| id.as_str()).collect();
         let summaries = builtin
             .iter()
@@ -64,14 +64,14 @@ impl Themes<'_> {
     /// The selected theme's id, or `None` while the operator has not chosen.
     #[tracing::instrument(name = "themes.active", skip_all, err)]
     pub fn active(&self) -> Result<Option<String>> {
-        theme_state::active(&self.0.home)
+        appearance::active(&self.0.home)
     }
 
     /// The file a written theme lives in, or `None` when the id names a
     /// built-in (or nothing at all).
     #[tracing::instrument(name = "themes.path_of", skip_all, fields(id = %id), err)]
     pub fn path_of(&self, id: &str) -> Result<Option<std::path::PathBuf>> {
-        Ok(theme_state::available(&self.0.home)?
+        Ok(appearance::available(&self.0.home)?
             .into_iter()
             .find(|(candidate, _)| candidate == id)
             .map(|(_, path)| path))
@@ -82,7 +82,7 @@ impl Themes<'_> {
     /// so by loading it.
     #[tracing::instrument(name = "themes.select", skip_all, fields(id = %id), err)]
     pub fn select(&self, id: &str) -> Result<()> {
-        theme_state::set_active(&self.0.home, id)
+        appearance::set_active(&self.0.home, id)
     }
 
     /// Every glyph set UZE carries, marking the selected one. Takes the
@@ -104,14 +104,14 @@ impl Themes<'_> {
     /// chosen — which draws the default set, not nothing.
     #[tracing::instrument(name = "themes.glyphs", skip_all, err)]
     pub fn glyphs(&self) -> Result<Option<String>> {
-        theme_state::glyphs(&self.0.home)
+        appearance::glyphs(&self.0.home)
     }
 
     /// Records the glyph set. Independent of [`Themes::select`] in both
     /// directions: neither call reads or writes the other's half.
     #[tracing::instrument(name = "themes.select_glyphs", skip_all, fields(id = %id), err)]
     pub fn select_glyphs(&self, id: &str) -> Result<()> {
-        theme_state::set_glyphs(&self.0.home, id)
+        appearance::set_glyphs(&self.0.home, id)
     }
 }
 

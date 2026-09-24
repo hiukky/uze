@@ -64,10 +64,10 @@ pub(crate) enum Hit {
     OfferedAction(uze_keys::Action),
     /// One line of the Keys screen.
     KeyRow(usize),
-    /// One line of the Appearance screen — a theme or a glyph set, by its
+    /// One line of the Settings screen — a theme or a glyph set, by its
     /// place in the list. Headings are drawn but never registered: a label
     /// has nothing to activate.
-    AppearanceRow(usize),
+    SettingsRow(usize),
     /// The Keys list's scroll track, carrying its own rectangle: a click
     /// anywhere on it jumps there, and a drag keeps jumping while the
     /// button is held. The rect travels with the hit because the drag has
@@ -276,10 +276,10 @@ impl TuiModel {
             // A click on a choice is the choice. There is nothing to
             // inspect first here the way a plugin row has: what the row
             // does is drawn on the row.
-            Hit::AppearanceRow(index) => {
-                self.appearance_selected = index;
+            Hit::SettingsRow(index) => {
+                self.settings_selected = index;
                 self.focus = Focus::Content;
-                self.activate_appearance()
+                self.activate_settings()
             }
             Hit::FocusFilter => {
                 self.filtering = true;

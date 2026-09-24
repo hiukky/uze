@@ -42,6 +42,7 @@ mod lifecycle;
 mod maintenance;
 mod marketplace;
 mod marketplace_catalogue;
+mod notifications;
 pub mod offers;
 mod overview;
 mod profile;

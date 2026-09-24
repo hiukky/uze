@@ -87,6 +87,18 @@ const CODE_MEASURE_FRESH: Duration = Duration::from_secs(30);
 /// seen at a glance, short enough that it reads as the press itself and
 /// never as a state the control got stuck in.
 const PRESS_FLASH: Duration = Duration::from_millis(140);
+/// The least time between two rings of the bell. Agents started together
+/// tend to finish together, and one sound says "go look" as well as four.
+const CHIME_COOLDOWN: Duration = Duration::from_secs(4);
+/// How long a finished turn must stay finished before it rings. The turn
+/// detector calls a turn over after [`AGENT_QUIET_AFTER`] without a
+/// repaint, which a long tool call or a pause to think also reaches; the
+/// sidebar can afford that, because a spinner that comes back costs
+/// nothing, but a bell that sounds on every pause is the one thing this
+/// feature must not be. A pause the agent resumes from inside this window
+/// never rings; one it does not — finished, or waiting on the operator —
+/// is exactly what the bell is for.
+const CHIME_SETTLE: Duration = Duration::from_secs(10);
 /// How long an agent pane must stay quiet before its work reads as
 /// finished. Counted in missed beats: at the once-a-second a harness
 /// keeps while it waits, this is five of them, which a phase change
@@ -1338,6 +1350,13 @@ pub(crate) fn attach_workspace(
             attach.model.absorb_manage_frame(metrics.manage);
             attach.model.dirty = false;
         }
+        if attach
+            .model
+            .take_ring(super::chime::current(), Instant::now())
+            | super::chime::take_preview()
+        {
+            terminal.ring();
+        }
         if event::poll(POLL).map_err(io_error)?
             && let Flow::Exit(exit) = attach.handle(event::read().map_err(io_error)?, &viewport)
         {
@@ -2528,6 +2547,11 @@ struct WorkspaceModel {
     /// Agent panes that went quiet since the last tick — the moment
     /// readiness is re-read.
     recently_quiet: Vec<PaneId>,
+    /// Agent panes whose turn ended and has not yet stayed ended for
+    /// [`CHIME_SETTLE`], by when it ended.
+    unsettled_turns: BTreeMap<PaneId, Instant>,
+    /// When the bell last rang, for [`CHIME_COOLDOWN`].
+    chimed_at: Option<Instant>,
     /// An agent's tab waiting for the space it belongs in to exist.
     ///
     /// `CreateSpace` answers on the session's own clock, and a `CreateTab`
@@ -3258,6 +3282,7 @@ impl WorkspaceModel {
             }
         }
         for pane in &expired {
+            self.unsettled_turns.insert(*pane, now);
             if *pane != focused {
                 self.remembered.completed_agent_panes.insert(*pane);
             }
@@ -3278,6 +3303,47 @@ impl WorkspaceModel {
         !expired.is_empty() || acknowledged
     }
 
+    /// Whether the bell rings now, under `chime`, for the turns that have
+    /// stayed ended for [`CHIME_SETTLE`].
+    ///
+    /// A settled turn is judged by what the operator sees *then*, not when
+    /// it ended: with [`Chime::OutOfSight`](uze_application::Chime) it rings
+    /// only while its tab still carries the check, so a tab looked at in
+    /// the meantime stays quiet. A turn is consumed once settled whether or
+    /// not it rang — one that did not ring when it settled must not ring
+    /// later, about something the operator has moved on from.
+    fn take_ring(&mut self, chime: uze_application::Chime, now: Instant) -> bool {
+        use uze_application::Chime;
+        if self.unsettled_turns.is_empty() {
+            return false;
+        }
+        let activity = &self.remembered.agent_activity;
+        let completed = &self.remembered.completed_agent_panes;
+        let mut due = false;
+        self.unsettled_turns.retain(|pane, ended| {
+            if activity.get(pane).is_some_and(AgentActivity::is_working) {
+                return false;
+            }
+            if now.duration_since(*ended) < CHIME_SETTLE {
+                return true;
+            }
+            due |= match chime {
+                Chime::Silent => false,
+                Chime::OutOfSight => completed.contains(pane),
+                Chime::Always => true,
+            };
+            false
+        });
+        let rested = self
+            .chimed_at
+            .is_none_or(|last| now.duration_since(last) >= CHIME_COOLDOWN);
+        let ring = due && rested;
+        if ring {
+            self.chimed_at = Some(now);
+        }
+        ring
+    }
+
     fn forget_closed_agent_panes(&mut self) {
         // Runs on every input tick, so it earns the early exit: with no
         // per-pane state held there is nothing to reconcile, and walking
@@ -3285,6 +3351,7 @@ impl WorkspaceModel {
         if self.remembered.agent_activity.is_empty()
             && self.remembered.completed_agent_panes.is_empty()
             && self.input_echo_until.is_empty()
+            && self.unsettled_turns.is_empty()
         {
             return;
         }
@@ -3299,6 +3366,9 @@ impl WorkspaceModel {
             .completed_agent_panes
             .retain(|pane| live.contains(pane));
         self.input_echo_until.retain(|pane, _| live.contains(pane));
+        // A closed tab's turn has nobody left to tell, and its id is free
+        // for a new pane to inherit the ring.
+        self.unsettled_turns.retain(|pane, _| live.contains(pane));
     }
 
     /// The root of the space `pane`'s tab belongs to.

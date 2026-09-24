@@ -102,6 +102,28 @@ the work ends. Outcomes are toasts, stacked top-right over the pane: they carry
 the seconds they have left, and the one that needs an answer stays until it gets
 one.
 
+## When an agent finishes
+
+An agent that finishes out of sight leaves a check on its tab in the sidebar
+until you look at it. It can also ring the terminal's bell — **Manage → Settings →
+Notifications**:
+
+| Choice | Rings for |
+| --- | --- |
+| `silent` | nothing — the default |
+| `out_of_sight` | a turn that ended in a tab you were not on |
+| `always` | every finished turn, the tab on screen included |
+
+The sound is your terminal's own bell, so the terminal decides what it is: a
+tone, a flash, or nothing if its bell is off. A turn rings only after staying
+finished for about ten seconds, so a pause the agent resumes from never rings,
+and agents finishing together ring once. The choice lives in `~/.uze/config.toml`:
+
+```toml
+[notifications]
+agent_finished = "out_of_sight"
+```
+
 ## Prompt history
 
 What you send to an agent tab is recorded per workspace, and the management view

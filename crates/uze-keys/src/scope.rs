@@ -131,9 +131,9 @@ scopes! {
         seals: false, text: false;
     /// The Keys screen itself.
     Keys => "keys", "Shortcuts", Management, seals: false, text: false;
-    /// The Appearance screen: the palette and the glyph set, each chosen
-    /// on its own.
-    Appearance => "appearance", "Appearance", Management, seals: false, text: false;
+    /// The Settings screen: the choices `config.toml` holds — palette,
+    /// glyph set, notifications — each chosen on its own.
+    Settings => "settings", "Settings", Management, seals: false, text: false;
 
     /// A list's live filter.
     Filter => "filter", "While searching", Management, seals: true, text: true;
