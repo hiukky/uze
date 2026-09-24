@@ -18,19 +18,38 @@ use super::marketplace::MarketplaceRequest;
 use super::services::Project;
 use super::*;
 
-/// The manifest's spelling of a marketplace the lock recorded. Both files
-/// name a source the same way, so this carries the keys across and adds
-/// the one thing only the manifest has: the list of plugins taken from it,
-/// left empty because `declare_plugin` pushes into whatever is already
+/// The manifest's spelling of a marketplace the project declares. Both
+/// files name a source the same way, so this carries the keys across and
+/// adds the one thing only the manifest has: the list of plugins taken from
+/// it, left empty because `declare_plugin` pushes into whatever is already
 /// declared rather than replacing it.
-fn declared_marketplace_for(lock: &ProjectLock, marketplace: &str) -> DeclaredMarketplace {
-    let locked = &lock.marketplaces[marketplace];
-    DeclaredMarketplace {
-        git: Some(locked.git.clone()),
-        path: None,
-        r#ref: locked.r#ref.clone(),
-        subdirectory: locked.subdirectory.clone(),
-        plugins: Vec::new(),
+///
+/// A marketplace linked to a checkout this machine develops pins nothing
+/// (`record_in_lock` leaves it out by design), so the lock has no entry to
+/// carry — the declared source is then what the machine registry knows: the
+/// checkout, as a local path. It does not reproduce on another machine, and
+/// `plan` says so; what it must never do is panic on the declaration it is
+/// obliged to write.
+fn declared_marketplace_for(
+    lock: &ProjectLock,
+    marketplace: &str,
+    checkout: Option<std::path::PathBuf>,
+) -> DeclaredMarketplace {
+    match lock.marketplaces.get(marketplace) {
+        Some(locked) => DeclaredMarketplace {
+            git: Some(locked.git.clone()),
+            path: None,
+            r#ref: locked.r#ref.clone(),
+            subdirectory: locked.subdirectory.clone(),
+            plugins: Vec::new(),
+        },
+        None => DeclaredMarketplace {
+            git: None,
+            path: checkout,
+            r#ref: None,
+            subdirectory: None,
+            plugins: Vec::new(),
+        },
     }
 }
 
@@ -221,11 +240,24 @@ impl Project<'_> {
         // to. Writing the lock alone would leave the manifest — the file a
         // person reads and edits — silently out of date.
         tracing::info!(target: uze_core::acquisition::git::STEP, step = "lock");
+        // A linked marketplace pins nothing, so the lock has no entry —
+        // the declaration names the checkout the registry link carries.
+        let checkout = uze_core::state::marketplace_get(&self.0.home, marketplace)?
+            .and_then(|record| record.link)
+            .or_else(|| {
+                uze_core::state::marketplace_get(&self.0.home, marketplace)
+                    .ok()
+                    .flatten()
+                    .and_then(|record| match record.source {
+                        uze_core::PackageSource::Local { path } => Some(path),
+                        _ => None,
+                    })
+            });
         manifest::declare_plugin(
             &canonical,
             plugin,
             marketplace,
-            &declared_marketplace_for(&lock, marketplace),
+            &declared_marketplace_for(&lock, marketplace, checkout),
         )?;
         project_lock::save_lock(&canonical, &lock)?;
 
