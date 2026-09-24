@@ -142,28 +142,25 @@ fn a_blocked_package_keeps_the_marketplace_registered() {
     // The drift target comes from the receipts ledger, not from a guessed
     // filesystem layout: what was delivered (and where) is what the ledger
     // owns, on any machine, detected harness or not.
+    // The drift is injected through the ledger itself: a receipt that no
+    // longer matches what was delivered is exactly "managed state has
+    // drifted" — the one thing the removal machinery refuses to destroy.
     let receipts = uze_core::state::receipts(
         &uze_core::UzeHome::at(&env.uze_home),
         Some("flow@purge-market"),
     )
     .unwrap();
-    let managed = receipts
-        .iter()
-        .find_map(|receipt| match &receipt.artifact {
-            uze_core::exposure::ManagedArtifact::SymlinkReference { path, .. } => {
-                Some(path.clone())
-            }
-            _ => None,
-        })
-        .expect("flow has at least one receipt-owned symlink delivery");
+    let mut drifted = receipts
+        .first()
+        .cloned()
+        .expect("flow has receipts after install");
     let foreign = env.home.join("foreign");
     std::fs::create_dir_all(&foreign).unwrap();
-    if managed.is_dir() {
-        std::fs::remove_dir_all(&managed).unwrap();
-    } else {
-        std::fs::remove_file(&managed).unwrap();
-    }
-    std::os::unix::fs::symlink(&foreign, &managed).unwrap();
+    drifted.artifact = uze_core::exposure::ManagedArtifact::SymlinkReference {
+        path: foreign.clone(),
+        target: foreign.clone(),
+    };
+    uze_core::state::record_receipt(&uze_core::UzeHome::at(&env.uze_home), drifted).unwrap();
 
     let remove = env.run(uze_bin(), &["market", "remove", "purge-market"]);
     assert!(
