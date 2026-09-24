@@ -24,6 +24,13 @@ Otherwise create one:
 uze agent market create <name> --at <directory> [--description "…"]
 ```
 
+Choose `--at` outside every checkout — the operator's home (say
+`~/marketplace-<name>`) is the natural place. A marketplace is machine
+state, shared by every project on it; one created inside a worktree slot
+dies with the slot, and one created inside any repository is a nested
+repository that dirties that checkout's status. Inside a project only when
+the marketplace is deliberately that repository's own, versioned with it.
+
 This scaffolds the directory as a Git repository (`marketplace.json`,
 `plugins/`, an initial commit), registers it with the machine, and links
 it — the link is the point: installs read the working tree, including
