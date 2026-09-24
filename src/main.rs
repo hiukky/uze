@@ -77,12 +77,12 @@ enum Command {
         #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
         format: OutputFormat,
     },
-    /// Choose what UZE looks like (machine-level)
+    /// Choose what UZE looks like
     Theme {
         #[command(subcommand)]
         action: ThemeAction,
     },
-    /// Manage marketplace sources (machine-level)
+    /// Manage marketplace sources
     Market {
         #[command(subcommand)]
         action: MarketAction,
