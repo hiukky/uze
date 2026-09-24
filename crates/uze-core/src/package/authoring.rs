@@ -289,14 +289,22 @@ pub fn scaffold_plugin(
                 source,
             }
         })?;
-        let guard = plugin_root.join("scripts").join("guard");
-        fs::create_dir_all(guard.parent().expect("the scripts directory")).map_err(|source| {
+        let scripts = plugin_root.join("scripts");
+        fs::create_dir_all(&scripts).map_err(|source| UzeError::Write {
+            path: plugin_root.clone(),
+            source,
+        })?;
+        let guard = scripts.join("guard");
+        fs::write(&guard, include_str!("authoring/guard.sh")).map_err(|source| {
             UzeError::Write {
-                path: plugin_root.clone(),
+                path: guard.clone(),
                 source,
             }
         })?;
-        fs::write(&guard, include_str!("authoring/guard.sh")).map_err(|source| {
+        // A hook command the harness cannot run is the 127 that fails the
+        // group silently; the stub ships runnable.
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&guard, fs::Permissions::from_mode(0o755)).map_err(|source| {
             UzeError::Write {
                 path: guard.clone(),
                 source,
@@ -308,6 +316,15 @@ pub fn scaffold_plugin(
         fs::write(&servers, include_str!("authoring/mcp.json")).map_err(|source| {
             UzeError::Write {
                 path: servers.clone(),
+                source,
+            }
+        })?;
+        // The stub the manifest's example key runs: the reference is real
+        // from the moment the scaffold exists, and check stays honest.
+        let server = plugin_root.join("scripts").join("example_server.py");
+        fs::write(&server, include_str!("authoring/example_server.py")).map_err(|source| {
+            UzeError::Write {
+                path: server.clone(),
                 source,
             }
         })?;
