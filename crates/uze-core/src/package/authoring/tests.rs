@@ -43,10 +43,12 @@ fn every_scaffold_passes_its_own_check() -> Result<()> {
             &market,
             "greet",
             Some("Says hello"),
-            hook,
-            mcp,
-            agent,
-            instructions,
+            &ScaffoldCapabilities {
+                hook,
+                mcp,
+                agent,
+                instructions,
+            },
         )?;
 
         let plugin_report = check_plugin(&plugin)?;
@@ -94,7 +96,7 @@ fn authoring_scaffold_meets_the_budget() -> Result<()> {
     let root = scratch("authoring-scaffold-budget");
     let market = scaffold_marketplace("tools", None, &root.join("market"))?;
     let started = std::time::Instant::now();
-    scaffold_plugin(&market, "greet", None, false, false, false, false)?;
+    scaffold_plugin(&market, "greet", None, &ScaffoldCapabilities::default())?;
     let elapsed = started.elapsed();
     assert!(
         elapsed < std::time::Duration::from_millis(200),
@@ -166,10 +168,10 @@ fn create_refuses_to_collide() -> Result<()> {
     );
 
     // An existing plugin is refused, never overwritten.
-    scaffold_plugin(&market, "greet", None, false, false, false, false)?;
-    assert!(scaffold_plugin(&market, "greet", None, false, false, false, false).is_err());
+    scaffold_plugin(&market, "greet", None, &ScaffoldCapabilities::default())?;
+    assert!(scaffold_plugin(&market, "greet", None, &ScaffoldCapabilities::default()).is_err());
     // A name outside the charset is refused by the same rule an id is held to.
-    assert!(scaffold_plugin(&market, "-flag", None, false, false, false, false).is_err());
+    assert!(scaffold_plugin(&market, "-flag", None, &ScaffoldCapabilities::default()).is_err());
     fs::remove_dir_all(&root).expect("teardown");
     Ok(())
 }
@@ -179,7 +181,7 @@ fn check_reports_what_install_would_refuse() -> Result<()> {
     let _git_identity = git_identity();
     let root = scratch("authoring-check-fail");
     let market = scaffold_marketplace("tools", None, &root.join("market"))?;
-    let plugin = scaffold_plugin(&market, "greet", None, false, false, false, false)?;
+    let plugin = scaffold_plugin(&market, "greet", None, &ScaffoldCapabilities::default())?;
 
     // A name the PackageId rule refuses is named before any install ran.
     fs::write(
@@ -220,7 +222,15 @@ fn the_marketplace_check_covers_its_plugins() -> Result<()> {
     let _git_identity = git_identity();
     let root = scratch("authoring-market-check");
     let market = scaffold_marketplace("tools", None, &root.join("market"))?;
-    let plugin = scaffold_plugin(&market, "greet", None, true, false, false)?;
+    let plugin = scaffold_plugin(
+        &market,
+        "greet",
+        None,
+        &ScaffoldCapabilities {
+            hook: true,
+            ..ScaffoldCapabilities::default()
+        },
+    )?;
     // A hook manifest violating the handler contract (out-of-bounds timeout)
     // is a finding located in that plugin.
     fs::write(

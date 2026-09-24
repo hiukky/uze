@@ -3017,10 +3017,12 @@ fn run_agent_plugin(app: &UzeApplication, action: AgentPluginAction) -> Result<(
                         &market,
                         &name,
                         description.as_deref(),
-                        hook,
-                        mcp,
-                        agent,
-                        instructions,
+                        uze_application::ScaffoldCapabilities {
+                            hook,
+                            mcp,
+                            agent,
+                            instructions,
+                        },
                     )
                 },
             )?;

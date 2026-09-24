@@ -21,6 +21,15 @@ use crate::package::acquisition::marketplace;
 use crate::package::store;
 use crate::{PackageId, Result, UzeError};
 
+/// The optional capability files a scaffold writes, one flag each.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct ScaffoldCapabilities {
+    pub hook: bool,
+    pub mcp: bool,
+    pub agent: bool,
+    pub instructions: bool,
+}
+
 /// The manifest every marketplace carries.
 const MARKETPLACE_MANIFEST: &str = "marketplace.json";
 
@@ -218,10 +227,7 @@ pub fn scaffold_plugin(
     market_root: &Path,
     name: &str,
     description: Option<&str>,
-    hook: bool,
-    mcp: bool,
-    agent: bool,
-    instructions: bool,
+    caps: &ScaffoldCapabilities,
 ) -> Result<PathBuf> {
     if !store::is_valid_package_name(name) {
         return Err(UzeError::InvalidPackageName {
@@ -274,6 +280,7 @@ pub fn scaffold_plugin(
     )
     .map_err(|source| UzeError::Write { path: skill.clone(), source })?;
 
+    let hook = caps.hook;
     if hook {
         let hooks = plugin_root.join("hooks.json");
         fs::write(&hooks, include_str!("authoring/hooks.json")).map_err(|source| {
@@ -296,7 +303,7 @@ pub fn scaffold_plugin(
             }
         })?;
     }
-    if mcp {
+    if caps.mcp {
         let servers = plugin_root.join("mcp.json");
         fs::write(&servers, include_str!("authoring/mcp.json")).map_err(|source| {
             UzeError::Write {
@@ -305,7 +312,7 @@ pub fn scaffold_plugin(
             }
         })?;
     }
-    if agent {
+    if caps.agent {
         let file = plugin_root.join("agents").join(format!("{name}.md"));
         fs::create_dir_all(file.parent().expect("the agents directory")).map_err(|source| {
             UzeError::Write {
@@ -320,7 +327,7 @@ pub fn scaffold_plugin(
             }
         })?;
     }
-    if instructions {
+    if caps.instructions {
         let file = plugin_root.join("AGENTS.md");
         fs::write(&file, include_str!("authoring/instructions.md")).map_err(|source| {
             UzeError::Write {

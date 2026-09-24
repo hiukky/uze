@@ -10,7 +10,11 @@
 
 use std::path::{Path, PathBuf};
 
-use uze_core::{PackageSource, Result, UzeError, authoring, project_root};
+use uze_core::{
+    PackageSource, Result, UzeError,
+    authoring::{self, ScaffoldCapabilities},
+    project_root,
+};
 
 use super::services::Project;
 
@@ -98,21 +102,10 @@ impl Project<'_> {
         market: &str,
         name: &str,
         description: Option<&str>,
-        hook: bool,
-        mcp: bool,
-        agent: bool,
-        instructions: bool,
+        caps: ScaffoldCapabilities,
     ) -> Result<PluginCreated> {
         let checkout = self.marketplace_checkout(market)?;
-        let root = authoring::scaffold_plugin(
-            &checkout,
-            name,
-            description,
-            hook,
-            mcp,
-            agent,
-            instructions,
-        )?;
+        let root = authoring::scaffold_plugin(&checkout, name, description, &caps)?;
         Ok(PluginCreated {
             name: name.to_owned(),
             market: market.to_owned(),

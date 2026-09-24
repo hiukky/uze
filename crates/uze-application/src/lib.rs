@@ -22,7 +22,7 @@ pub use uze_core::{
     UzeHome,
     // The authoring surface's check report: vocabulary a read model is
     // made of, so the CLI answers the same thing a `check` verb asks.
-    authoring::ValidationReport,
+    authoring::{ScaffoldCapabilities, ValidationReport},
     capability::CapabilityKind,
     client_layout::{
         ClientLayout, FirstStepsLayout, ManagementLayout, SidebarLayout, WorkspaceLayout,
