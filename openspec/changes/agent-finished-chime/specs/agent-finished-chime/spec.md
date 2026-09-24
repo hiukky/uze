@@ -7,13 +7,19 @@ workspace finished its turn, so work done out of sight is not found late.
 
 ### Requirement: The operator chooses which finished turns make a sound
 
-The workspace client SHALL offer three choices for a finished agent turn:
-Silent, Out of sight, and Always. A machine on which the operator never chose
+The operator SHALL have two ways to make the same choice, writing the same
+record: the workspace client's own control and the CLI —
+`uze config notification on|off|silent` (the grammar change names the CLI;
+this change carries the choice itself). Three choices for a finished agent
+turn exist: Silent, Out of sight, and Always, where `on` is Always and `off`
+is Out of sight. A machine on which the operator never chose
 SHALL behave as Silent. The choice SHALL be machine-scoped: it SHALL apply to
 every workspace on the machine and SHALL NOT be written into any project. It
 SHALL be kept in the operator's settings file, `config.toml` at the root of
 the UZE home, as a value the operator can also write by hand; a value UZE does
-not recognise SHALL behave as Silent.
+not recognise SHALL behave as Silent. `uze config notification test` SHALL
+ring once regardless of the choice in force, so the person can hear what
+their machine will sound like.
 
 #### Scenario: A fresh machine is silent
 
@@ -30,6 +36,18 @@ not recognise SHALL behave as Silent.
 
 - **WHEN** the operator chooses Always and then quits and relaunches `uze`
 - **THEN** Always is still the choice in force and is shown as such
+
+#### Scenario: The CLI sets the same choice the workspace client sets
+
+- **WHEN** the operator runs `uze config notification off`
+- **THEN** `config.toml` holds the value the workspace client's own control
+  would have written, and both surfaces show the same choice as in force
+
+#### Scenario: Test rings whatever the choice says
+
+- **WHEN** the operator runs `uze config notification test` on a machine
+  whose choice is Silent
+- **THEN** the bell rings once, and the choice in force is unchanged
 
 ### Requirement: The sound is the terminal's own bell
 

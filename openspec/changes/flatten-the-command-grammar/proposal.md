@@ -63,6 +63,25 @@ Two further defects make the current shape unsafe to build on:
   becomes a project by being the one you stood in.
 - **`--alias` / `--replace`** move to the root install form, keeping
   ADR-036's name-collision resolution reachable.
+- **`uze agent task` becomes `uze agent work`.** The thing an agent names is
+  *the work* — the word `name-an-agents-work` already speaks ("an agent's
+  work carries two names"), the branch it renames is `agent/<id>`, and the
+  checkout it names lives in a worktree. `task` is the word left without an
+  owner. The `name` verb is unchanged: `uze agent work name <type>/<subject>`.
+  No alias is kept; the agent's audience reads the projected `AGENTS.md`
+  region, which regenerates with the new spelling, and `docs/`,
+  `plugins/uze/skills/**` and the naming journey migrate with it.
+- **`uze theme` becomes `uze config`, named by what it configures.** The
+  verb's subject had outgrown its name: it chooses the machine's *authored
+  configuration*, which is what `config.toml` is. Three sub-surfaces, each
+  typed rather than a generic key/value store:
+  `uze config theme list|set|show`, `uze config icons [set]` (the glyphs
+  verb, given the name of what it actually chooses — which glyph set your
+  font can draw), and `uze config notification on|off|silent|test` — the
+  chime's first CLI surface, with `test` ringing once so the person can
+  hear what they chose. Machine-scoped throughout; `keys.json` keeps no
+  verb for now. **BREAKING**: `uze theme …` disappears with no alias, under
+  the same one-spelling rule as `plugin`.
 
 ## Capabilities
 

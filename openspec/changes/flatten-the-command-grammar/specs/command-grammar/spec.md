@@ -140,3 +140,48 @@ NOT exist, and no alias for its removed verbs SHALL be kept.
 - **WHEN** a command under the removed namespace is invoked
 - **THEN** it is not recognized, and the message names the verb that
   replaced it
+
+### Requirement: Configuration verbs name what they configure
+
+`uze theme` SHALL be replaced by `uze config`, whose sub-surfaces name the
+machine's authored configuration they set, each typed rather than a generic
+key/value store: `uze config theme list|set|show` (today's theme verbs),
+`uze config icons [set]` (today's `glyphs`, named by what it actually
+chooses — which glyph set the installed font can draw), and
+`uze config notification on|off|silent|test`. All three SHALL be
+machine-scoped and SHALL write the operator's own settings file
+(`config.toml`), never a project's.
+
+#### Scenario: The glyphs verb carries its real name
+- **WHEN** the person runs `uze config icons`
+- **THEN** the glyph sets UZE carries are listed, marking the active one —
+  the behavior `uze theme glyphs` had, under the name of what it chooses
+
+#### Scenario: The chime choice is made from the CLI
+- **WHEN** the person runs `uze config notification silent`
+- **THEN** the choice is recorded in `config.toml` exactly as the workspace
+  client's own control writes it, and `notification test` rings the chime
+  once so the person can hear what they chose
+
+#### Scenario: An unknown value reads as the default and is never written over
+- **WHEN** `config.toml` holds a value the grammar does not recognize
+- **THEN** it behaves as the documented default (Silent for the chime) and
+  the verb reports it rather than silently rewriting the file
+
+### Requirement: The agent grammar speaks of work
+
+`uze agent task` SHALL be spelled `uze agent work` — the thing an agent
+names is the work, whose checkout lives in a worktree and whose branch is
+`agent/<id>`. The `name` verb and its argument grammar are unchanged
+(`uze agent work name <type>/<subject>`), and no alias SHALL be kept. The
+agent's audience reads the projected `AGENTS.md` region, which SHALL carry
+the new spelling, and the naming journey SHALL follow it.
+
+#### Scenario: An agent names its work with the new spelling
+- **WHEN** an agent runs `uze agent work name feat/plugin-authoring`
+- **THEN** the work is named, the branch renamed, and the answer is
+  identical to what `task name` returned — only the noun changed
+
+#### Scenario: The old spelling is gone without an alias
+- **WHEN** `uze agent task name …` is invoked
+- **THEN** it is not recognized, and the message names `uze agent work`

@@ -37,6 +37,18 @@ design.md, "Ordering against the freshness change".
 - [ ] 2.8 `uze status` with no project is a machine read model, not
       `ProjectLockStatus::Absent` reported as a fault; `uze update` with no
       project re-resolves every installed package from its own source
+- [ ] 2.9 `AgentTaskAction` → `AgentWorkAction`: `uze agent work name`
+      spelling; the projected `AGENTS.md` region, `docs/observability.md`,
+      `docs/architecture/agent-lifecycle.mmd`, `plugins/uze/skills/**`
+      references and the journey `04-workspace/03-naming-the-work.yml` all
+      migrate; `uze agent task` is not recognized and its error names
+      `uze agent work`
+- [ ] 2.10 `ThemeAction` → `ConfigAction`: `uze config theme list|set|show`,
+      `uze config icons [set]` (the glyphs verb under its real name), and
+      `uze config notification on|off|silent|test` — the chime's first CLI
+      surface, writing the same `config.toml` record the TUI control writes
+      (`test` rings once, leaving the choice unchanged); classify every new
+      leaf in `command_performance.rs`
 
 ## 3. The rest of the workspace
 
@@ -65,6 +77,9 @@ design.md, "Ordering against the freshness change".
 - [ ] 4.5 New: `-m` inside a project installs and declares nothing —
       `agents.lock` byte-identical across the command
 - [ ] 4.6 `journey validate` passes and `journey list` reads correctly
+- [ ] 4.7 New: the chime choice made from the CLI is the choice the
+      workspace client shows (`uze config notification on` → the drawer's
+      card reflects it; `test` rings with the choice still Silent)
 
 ## 5. Gate
 
