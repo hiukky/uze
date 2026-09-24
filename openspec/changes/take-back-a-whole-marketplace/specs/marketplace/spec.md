@@ -21,6 +21,10 @@ The system SHALL list registered marketplaces, and `market remove <name>` SHALL 
 - **WHEN** `uze market remove <name>` runs with no package from it installed
 - **THEN** only the registry entry (and any link it carries) is removed
 
+#### Scenario: Remove marketplace
+- **WHEN** user runs `uze market remove <name>` and no plugin from it is installed
+- **THEN** registry entry is removed
+
 ## ADDED Requirements
 
 ### Requirement: Detach follows the receipt ledger, not detection
