@@ -4,7 +4,7 @@ The workspace client already decides when an agent's turn ends: repaint
 rhythm per pane, expired after a quiet window, in `expire_agent_activity`.
 That moment moves a background tab to *Completed* and drops the spinner on
 the focused one. Nothing listens to it for anything but the sidebar and a
-readiness re-read. The Manage modal's Appearance screen already chooses two
+readiness re-read. The Manage modal's Appearance screen (now Settings) already chose two
 machine-scoped things (theme, glyph set) as groups of cards, each persisted
 as a small record behind a `uze-application` service.
 
@@ -71,9 +71,11 @@ as a small record behind a `uze-application` service.
 - **Coalesced in the workspace**: the expiry pass raises one "due" flag; the
   loop rings after drawing when the flag is set and the last ring is older
   than the cooldown (a few seconds).
-- **Shown in Appearance**, as a third card group. A route of its own for one
-  choice would be a screen with nothing else on it; Appearance is already
-  "how this machine's client presents itself".
+- **A Settings screen, mirroring `config.toml`.** The Appearance route
+  becomes Settings, one card group per section (Theme, Glyphs,
+  Notifications), so the file and the screen read the same way and a later
+  setting has an obvious place. Keys stays its own screen: another file and
+  another kind of choosing. The key scope `appearance` becomes `settings`.
 
 ## Risks / Trade-offs
 

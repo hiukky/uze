@@ -89,6 +89,7 @@ decided by **what deleting it costs** — never by which module wrote it:
 |---|---|---|
 | bytes | `store/` | the packages, until they are acquired again |
 | record | `state/` | the operator: nothing else knows it |
+| authored | the root: `config.toml`, `keys.json`, `theme-overrides.json`, `themes/` | the operator's own text |
 | generated | `runtime/`, `shims/` | nothing — it is produced again |
 | remembered | `cache/` | nothing — it is observed again |
 
@@ -100,8 +101,10 @@ answer to "can I delete this" opposite for each.
 
 **Only records declare a shape.** Generated and remembered things are
 produced or observed again when they cannot be read; there is nothing in
-them to carry. A new document therefore declares its tier by where
-`UzeHome` puts it and, if it is a record, its shape and ladder by
+them to carry. Authored files are text a person writes, so they carry no
+shape either: they grow by additive keys, an unknown value reads as the
+default, and one that does not parse is reported and never written over.
+A new document therefore declares its tier by where `UzeHome` puts it and, if it is a record, its shape and ladder by
 implementing `uze_document::Shaped`. Nothing else is needed and nothing
 else is allowed: **every path UZE owns is named in `UzeHome`**, and
 `every_path_uze_owns_is_named_in_the_map` in

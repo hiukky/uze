@@ -6669,6 +6669,22 @@ mod workspace_tests {
     }
 
     #[test]
+    fn a_turn_whose_tab_closed_before_it_settled_does_not_ring() {
+        use uze_application::Chime;
+        let mut model = two_agent_session("/a", "/b");
+        let start = Instant::now();
+        model.note_agent_prompt_submission(PaneId(2), &identities_fixture(), Some("hello"));
+        let ended = start + AGENT_QUIET_AFTER + Duration::from_secs(1);
+        model.expire_agent_activity(ended);
+
+        model.session.as_mut().unwrap().workspace.spaces[0]
+            .tabs
+            .retain(|tab| tab.pane.id != PaneId(2));
+        model.expire_agent_activity(ended + Duration::from_secs(1));
+        assert!(!model.take_ring(Chime::Always, ended + CHIME_SETTLE));
+    }
+
+    #[test]
     fn turns_settling_together_ring_once() {
         use uze_application::Chime;
         let mut model = two_agent_session("/a", "/b");

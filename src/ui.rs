@@ -23,7 +23,7 @@
 //!   `TuiModel` (state), key/mouse handling, hit-testing, and the
 //!   intent/worker dispatch that runs product operations off-thread.
 //! - [`view`]: one file per management route (Overview, Plugins,
-//!   Extensions, Harnesses, Profiles, Keys, Appearance).
+//!   Extensions, Harnesses, Profiles, Keys, Settings).
 //! - `overlay`: the dialogs shared across management routes.
 
 use std::{

@@ -1,5 +1,5 @@
 //! The management surface — Overview, Plugins, Extensions, Harnesses,
-//! Profiles, Keys and Appearance — drawn as a modal over the workspace
+//! Profiles, Keys and Settings — drawn as a modal over the workspace
 //! client (`super::orchestrator`) rather than as a mode beside it. The
 //! workspace owns the frame, the event loop and the terminal session; this
 //! module owns what the modal keeps between openings
@@ -213,7 +213,7 @@ impl ManagementMemory {
         for missing in [
             model.drawer_inspect_intent(),
             model.profile_preview_intent(),
-            model.appearance_intent(),
+            model.settings_intent(),
         ] {
             if missing != Intent::None {
                 dispatch(missing, home, &self.sender, model);
@@ -436,9 +436,7 @@ pub(crate) fn render(
         Route::Harnesses => view::harnesses::render_harnesses(frame, layout.content, model, hits),
         Route::Profiles => view::profiles::render_profiles(frame, layout.content, model, hits),
         Route::Keys => view::keys::render_keys(frame, layout.content, model, hits),
-        Route::Appearance => {
-            view::appearance::render_appearance(frame, layout.content, model, hits)
-        }
+        Route::Settings => view::settings::render_settings(frame, layout.content, model, hits),
     }
 
     render_footer(frame, layout.footer, model, hits);
@@ -536,7 +534,7 @@ fn route_count(route: Route, model: &TuiModel) -> Option<usize> {
         ),
         Route::Profiles => Some(model.remembered.profiles.len()),
         Route::Keys => None,
-        Route::Appearance => None,
+        Route::Settings => None,
     }
 }
 

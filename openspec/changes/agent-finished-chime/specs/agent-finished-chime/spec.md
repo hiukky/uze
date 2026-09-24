@@ -97,14 +97,14 @@ window, so several agents finishing together make one sound, not a burst.
 
 ### Requirement: The choice is made in the Manage modal
 
-The Manage modal's Appearance screen SHALL list the three choices as a group
-of their own, marking the one in force. Choosing one SHALL take effect in the
+The Manage modal's Settings screen SHALL list the three choices as a group
+of their own, titled Notifications, marking the one in force. Choosing one SHALL take effect in the
 running workspace at once, without a restart, and choosing a ringing option
 SHALL ring once so the operator hears what they chose.
 
 #### Scenario: Choosing takes effect immediately
 
-- **WHEN** the operator selects Always in the Appearance screen and closes
+- **WHEN** the operator selects Always in the Settings screen and closes
   the modal
 - **THEN** the next finished turn rings, with no relaunch in between
 

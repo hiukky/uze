@@ -1,16 +1,18 @@
 //! The operator's own settings: one TOML file, one section per concern.
 //!
-//! Each choice used to be a JSON record of its own under `state/`, most of
-//! them a line long, in a directory an operator is right to treat as not
-//! theirs to edit. These are the opposite: choices someone makes and may
-//! want to make by hand, so they live beside `keys.json` and
-//! `theme-overrides.json` at the root, in a format with comments.
+//! Choices someone makes and may want to make by hand, so they live beside
+//! `keys.json` and `theme-overrides.json` at the root rather than under
+//! `state/`, in a format with comments.
 //!
 //! This module knows files and sections, never what a setting means: a
 //! concern (`appearance`, `notifications`) owns its section and reads
 //! and writes it through here. A write touches only the key it names and
 //! leaves the rest of the document — the operator's comments, ordering and
-//! whatever sections this build does not know — exactly as it was.
+//! whatever sections this build does not know — exactly as it was, down to
+//! the comment beside the value it replaces. A section may be written as a
+//! `[table]` or inline; both are TOML, and both are the operator's to pick.
+//! A file linked in from a dotfiles repository stays a link: the write goes
+//! through it to the file it points at.
 //!
 //! A file that does not parse is an error on read *and* on write: reading
 //! on as if it were empty would silently undo every choice in it, and
@@ -31,6 +33,7 @@ pub fn get(home: &UzeHome, section: &str, key: &str) -> Result<Option<String>> {
     let document = read(home)?;
     Ok(document
         .get(section)
+        .and_then(Item::as_table_like)
         .and_then(|table| table.get(key))
         .and_then(Item::as_str)
         .map(str::to_owned))
@@ -41,9 +44,18 @@ pub fn set(home: &UzeHome, section: &str, key: &str, setting: &str) -> Result<()
     let table = document
         .entry(section)
         .or_insert_with(|| Item::Table(Table::new()))
-        .as_table_mut()
+        .as_table_like_mut()
         .ok_or_else(|| malformed(home, format!("`{section}` is not a table")))?;
-    table.insert(key, value(setting));
+    match table.get_mut(key).and_then(Item::as_value_mut) {
+        Some(existing) => {
+            let decor = existing.decor().clone();
+            *existing = setting.into();
+            *existing.decor_mut() = decor;
+        }
+        None => {
+            table.insert(key, value(setting));
+        }
+    }
     write(home, &document)
 }
 
@@ -60,7 +72,11 @@ fn read(home: &UzeHome) -> Result<DocumentMut> {
 
 fn write(home: &UzeHome, document: &DocumentMut) -> Result<()> {
     home.ensure_layout()?;
-    crate::persistence::write_atomic(&home.config_path(), document.to_string().as_bytes())
+    let path = home.config_path();
+    // An atomic write renames over its target, which would replace a link
+    // with a regular file; writing to where the link leads keeps it one.
+    let target = fs::canonicalize(&path).unwrap_or(path);
+    crate::persistence::write_atomic(&target, document.to_string().as_bytes())
 }
 
 fn malformed(home: &UzeHome, reason: String) -> UzeError {
@@ -102,6 +118,66 @@ mod tests {
             get(&home, "notifications", "agent_finished").expect("readable"),
             Some("always".to_owned())
         );
+    }
+
+    #[test]
+    fn replacing_a_value_keeps_the_comment_beside_it() {
+        let home = home("config-decor");
+        fs::create_dir_all(home.config_path().parent().unwrap()).unwrap();
+        fs::write(
+            home.config_path(),
+            "[appearance]\ntheme = \"nocturne\" # dark\n",
+        )
+        .unwrap();
+
+        set(&home, "appearance", "theme", "dawn").expect("written");
+
+        assert_eq!(
+            fs::read_to_string(home.config_path()).unwrap(),
+            "[appearance]\ntheme = \"dawn\" # dark\n"
+        );
+    }
+
+    #[test]
+    fn an_inline_section_is_read_and_written_in_place() {
+        let home = home("config-inline");
+        fs::create_dir_all(home.config_path().parent().unwrap()).unwrap();
+        fs::write(
+            home.config_path(),
+            "appearance = { theme = \"nocturne\" }\n",
+        )
+        .unwrap();
+
+        assert_eq!(
+            get(&home, "appearance", "theme").expect("readable"),
+            Some("nocturne".to_owned())
+        );
+        set(&home, "appearance", "glyphs", "nerd").expect("written");
+        assert_eq!(
+            get(&home, "appearance", "glyphs").expect("readable"),
+            Some("nerd".to_owned())
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_linked_file_stays_linked() {
+        let home = home("config-link");
+        let dotfiles = uze_testkit::temp::scratch("config-link-dotfiles").join("config.toml");
+        fs::create_dir_all(dotfiles.parent().unwrap()).unwrap();
+        fs::write(&dotfiles, "").unwrap();
+        fs::create_dir_all(home.config_path().parent().unwrap()).unwrap();
+        std::os::unix::fs::symlink(&dotfiles, home.config_path()).unwrap();
+
+        set(&home, "notifications", "agent_finished", "always").expect("written");
+
+        assert!(
+            fs::symlink_metadata(home.config_path())
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        assert!(fs::read_to_string(&dotfiles).unwrap().contains("always"));
     }
 
     #[test]

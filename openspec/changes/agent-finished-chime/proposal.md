@@ -12,7 +12,8 @@ becoming one more thing that interrupts.
   ends, according to a machine-scoped choice: **Silent** (default), **Out of
   sight** (only a turn that ended in a tab not on screen), or **Always**.
 - Several turns ending close together ring once, not once each.
-- The choice is made in the Manage modal's Appearance screen, as a third
+- The Manage modal's Appearance screen becomes **Settings**, mirroring
+  `config.toml` one group per section; the choice is made there, as a third
   group of cards beside Theme and Glyphs; choosing a ringing option rings
   once as a preview.
 - The operator's settings move into one hand-editable file,
@@ -38,7 +39,8 @@ becoming one more thing that interrupts.
   writing its section there; `UzeHome::config_path()`.
 - `uze-application`: a `notifications()` service and the `Chime` re-export.
 - Docs: `appearance.mdx` (where the selection lives) and `workspace/index.mdx`.
-- `src/ui`: Appearance screen rows and drawer, a worker intent, the
+- `src/ui`: the Appearance route renamed Settings (key scope `appearance` →
+  `settings`), its rows and drawer, a worker intent, the
   workspace loop ringing through the terminal session.
 - No new dependency: the bell is a control character the host terminal
   already knows how to sound (or flash, or ignore, per its own settings).

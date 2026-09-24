@@ -14,7 +14,6 @@ use crate::ui::theme::{self, Symbol, Token};
 use crate::ui::widget::{Align, Button, Edge, Field, Rule, button_row};
 use uze_application::application::offers::ActionOffer;
 
-pub mod appearance;
 pub mod catalog;
 pub mod extensions;
 pub mod harnesses;
@@ -23,6 +22,7 @@ pub mod keys;
 pub mod overview;
 pub mod plugins;
 pub mod profiles;
+pub mod settings;
 
 pub(crate) const DRAWER_DEFAULT_WIDTH: u16 = 44;
 /// The narrowest a drawer, or the list beside it, is ever drawn.
@@ -263,7 +263,7 @@ mod drawer_tests {
     #[test]
     fn a_drawer_never_takes_more_than_half_the_content() {
         let model = TuiModel::default();
-        let panel = ResizablePanel::AppearanceDrawer;
+        let panel = ResizablePanel::SettingsDrawer;
         for width in [60u16, 80, 100, 140, 200] {
             let content = Rect::new(0, 0, width, 40);
             let drawn = drawer_width(panel, &model, content);

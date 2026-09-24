@@ -50,10 +50,11 @@ pub(crate) enum Route {
     /// *Shortcuts* on screen — "keys" is what a harness authenticates with,
     /// and the product already says shortcut everywhere else.
     Keys,
-    /// What UZE looks like: the palette, and — chosen apart from it — the
-    /// glyph set, each shown drawn in its own marks. The only way to answer
-    /// "can this terminal render that?" is to look at it.
-    Appearance,
+    /// The choices `config.toml` holds: the palette, the glyph set — each
+    /// shown drawn in its own marks, because the only way to answer "can
+    /// this terminal render that?" is to look at it — and when finished
+    /// agents ring.
+    Settings,
 }
 
 /// Sidebar order, and it is an argument rather than a list: what UZE
@@ -69,7 +70,7 @@ pub(crate) const ROUTES: [Route; 7] = [
     Route::Harnesses,
     Route::Extensions,
     Route::Keys,
-    Route::Appearance,
+    Route::Settings,
 ];
 
 /// Whether the Shortcuts screen has anything to say about a surface.
@@ -113,7 +114,7 @@ impl Route {
             Route::Harnesses => "Integrations",
             Route::Profiles => "Profiles",
             Route::Keys => "Shortcuts",
-            Route::Appearance => "Appearance",
+            Route::Settings => "Settings",
         }
     }
 
@@ -126,7 +127,7 @@ impl Route {
             Route::Harnesses => "detected agents",
             Route::Profiles => "autonomy · sandbox · model",
             Route::Keys => "what each key does",
-            Route::Appearance => "theme & glyphs",
+            Route::Settings => "theme, glyphs & notifications",
         }
     }
 
@@ -160,7 +161,7 @@ impl Route {
             // nowhere else, which is why hiding the screen hides it too.
             Route::Profiles => &[Scope::Profiles, Scope::ProfileEditor],
             Route::Keys => &[Scope::Keys],
-            Route::Appearance => &[Scope::Appearance],
+            Route::Settings => &[Scope::Settings],
         }
     }
 
@@ -213,7 +214,7 @@ impl Route {
             Route::Harnesses => "integrations",
             Route::Profiles => "profiles",
             Route::Keys => "keys",
-            Route::Appearance => "appearance",
+            Route::Settings => "settings",
         }
     }
 
@@ -247,7 +248,7 @@ pub(crate) enum ResizablePanel {
     HarnessDrawer,
     ProfileColumns,
     KeysDrawer,
-    AppearanceDrawer,
+    SettingsDrawer,
 }
 
 impl ResizablePanel {
@@ -258,7 +259,7 @@ impl ResizablePanel {
             Self::ExtensionDrawer => model.remembered.extension_screen.drawer_width,
             Self::HarnessDrawer => model.remembered.harness_screen.drawer_width,
             Self::KeysDrawer => model.key_screen.drawer_width,
-            Self::AppearanceDrawer => model.appearance_drawer_width,
+            Self::SettingsDrawer => model.settings_drawer_width,
             Self::ProfileColumns => model.profile_columns_width,
         }
     }
@@ -269,7 +270,7 @@ impl ResizablePanel {
             Self::ExtensionDrawer => &mut model.remembered.extension_screen.drawer_width,
             Self::HarnessDrawer => &mut model.remembered.harness_screen.drawer_width,
             Self::KeysDrawer => &mut model.key_screen.drawer_width,
-            Self::AppearanceDrawer => &mut model.appearance_drawer_width,
+            Self::SettingsDrawer => &mut model.settings_drawer_width,
             Self::ProfileColumns => &mut model.profile_columns_width,
         }
     }
@@ -385,11 +386,11 @@ impl KeyRow {
     }
 }
 
-/// One line of the Appearance screen. Two groups in one list, because the
+/// One line of the Settings screen. Two groups in one list, because the
 /// two choices are one question — what this machine looks like — even
 /// though neither decides the other.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum AppearanceRow {
+pub(crate) enum SettingsRow {
     /// A group's title. Never selectable: it is a label, not a choice.
     Heading(&'static str),
     Theme {
@@ -412,9 +413,9 @@ pub(crate) enum AppearanceRow {
     },
 }
 
-impl AppearanceRow {
+impl SettingsRow {
     pub(crate) fn selectable(&self) -> bool {
-        !matches!(self, AppearanceRow::Heading(_))
+        !matches!(self, SettingsRow::Heading(_))
     }
 }
 
@@ -561,25 +562,25 @@ pub(crate) struct TuiModel {
 
     /// The Keys list. Its drawer is always open, so only its width is read.
     pub(crate) key_screen: ListScreen,
-    /// The Appearance screen's selected row, and the lists it is choosing
+    /// The Settings screen's selected row, and the lists it is choosing
     /// from. Carried rather than read per frame for the reason
     /// [`Overlay::ThemePicker`] carries its own: the themes are a directory
     /// listing, and a list that changed between two frames would move the
     /// selection out from under the operator.
-    pub(crate) appearance_drawer_width: Option<u16>,
-    pub(crate) appearance_selected: usize,
-    pub(crate) appearance_themes: Vec<uze_application::application::ThemeSummary>,
-    pub(crate) appearance_glyph_sets: Vec<uze_application::application::GlyphSetSummary>,
-    pub(crate) appearance_chime: uze_application::Chime,
+    pub(crate) settings_drawer_width: Option<u16>,
+    pub(crate) settings_selected: usize,
+    pub(crate) settings_themes: Vec<uze_application::application::ThemeSummary>,
+    pub(crate) settings_glyph_sets: Vec<uze_application::application::GlyphSetSummary>,
+    pub(crate) settings_chime: uze_application::Chime,
     /// Each theme's own colours, by id — resolved once with the list rather
     /// than per frame, because resolving one reads files. A theme absent
     /// from here resolved to nothing drawable and shows no swatches, which
     /// is the honest answer for a file with a typo in it.
-    pub(crate) appearance_palettes: std::collections::BTreeMap<String, Vec<uze_theme::Rgb>>,
+    pub(crate) settings_palettes: std::collections::BTreeMap<String, Vec<uze_theme::Rgb>>,
     /// Whether the two lists have been read this visit — true even when a
     /// read found nothing, so an empty machine is not asked again every
     /// frame.
-    pub(crate) appearance_read: bool,
+    pub(crate) settings_read: bool,
     /// Why the last rebinding was refused, in words — a conflict, a chord
     /// that is another key, or one this terminal cannot send.
     pub(crate) keys_problem: Option<String>,
@@ -770,13 +771,13 @@ impl TuiModel {
             focus: Focus::Sidebar,
             overlay: Overlay::None,
             key_screen: ListScreen::default(),
-            appearance_drawer_width: None,
-            appearance_selected: 0,
-            appearance_themes: Vec::new(),
-            appearance_glyph_sets: Vec::new(),
-            appearance_chime: uze_application::Chime::default(),
-            appearance_palettes: std::collections::BTreeMap::new(),
-            appearance_read: false,
+            settings_drawer_width: None,
+            settings_selected: 0,
+            settings_themes: Vec::new(),
+            settings_glyph_sets: Vec::new(),
+            settings_chime: uze_application::Chime::default(),
+            settings_palettes: std::collections::BTreeMap::new(),
+            settings_read: false,
             keys_capture: false,
             keys_problem: None,
             keys_probe: None,
@@ -1167,14 +1168,14 @@ impl TuiModel {
 
     /// The list screen `route` is, if it is one: Plugins, Extensions,
     /// Integrations and Keys. The Overview is a report, Profiles is three
-    /// panels and Appearance a catalogue with headings.
+    /// panels and Settings a catalogue with headings.
     pub(crate) fn list(&self, route: Route) -> Option<&ListScreen> {
         match route {
             Route::Plugins => Some(&self.remembered.plugin_screen),
             Route::Extensions => Some(&self.remembered.extension_screen),
             Route::Harnesses => Some(&self.remembered.harness_screen),
             Route::Keys => Some(&self.key_screen),
-            Route::Overview | Route::Profiles | Route::Appearance => None,
+            Route::Overview | Route::Profiles | Route::Settings => None,
         }
     }
 
@@ -1184,7 +1185,7 @@ impl TuiModel {
             Route::Extensions => Some(&mut self.remembered.extension_screen),
             Route::Harnesses => Some(&mut self.remembered.harness_screen),
             Route::Keys => Some(&mut self.key_screen),
-            Route::Overview | Route::Profiles | Route::Appearance => None,
+            Route::Overview | Route::Profiles | Route::Settings => None,
         }
     }
 
@@ -1195,7 +1196,7 @@ impl TuiModel {
             Route::Extensions => self.extension_visible_indices().len(),
             Route::Harnesses => self.harness_visible_indices().len(),
             Route::Keys => self.key_rows().len(),
-            Route::Overview | Route::Profiles | Route::Appearance => 0,
+            Route::Overview | Route::Profiles | Route::Settings => 0,
         }
     }
 
@@ -1312,34 +1313,30 @@ impl TuiModel {
         }
     }
 
-    /// The Appearance screen's lines, both groups in reading order.
-    pub(crate) fn appearance_rows(&self) -> Vec<AppearanceRow> {
-        let mut rows = vec![AppearanceRow::Heading("Theme")];
+    /// The Settings screen's lines, both groups in reading order.
+    pub(crate) fn settings_rows(&self) -> Vec<SettingsRow> {
+        let mut rows = vec![SettingsRow::Heading("Theme")];
+        rows.extend(self.settings_themes.iter().map(|theme| SettingsRow::Theme {
+            id: theme.id.clone(),
+            active: theme.active,
+            path: theme.path.clone(),
+        }));
+        rows.push(SettingsRow::Heading("Glyphs"));
         rows.extend(
-            self.appearance_themes
+            self.settings_glyph_sets
                 .iter()
-                .map(|theme| AppearanceRow::Theme {
-                    id: theme.id.clone(),
-                    active: theme.active,
-                    path: theme.path.clone(),
-                }),
-        );
-        rows.push(AppearanceRow::Heading("Glyphs"));
-        rows.extend(
-            self.appearance_glyph_sets
-                .iter()
-                .map(|set| AppearanceRow::GlyphSet {
+                .map(|set| SettingsRow::GlyphSet {
                     id: set.id.clone(),
                     active: set.active,
                 }),
         );
-        rows.push(AppearanceRow::Heading("When an agent finishes"));
+        rows.push(SettingsRow::Heading("Notifications"));
         rows.extend(
             uze_application::Chime::ALL
                 .into_iter()
-                .map(|chime| AppearanceRow::Chime {
+                .map(|chime| SettingsRow::Chime {
                     chime,
-                    active: chime == self.appearance_chime,
+                    active: chime == self.settings_chime,
                 }),
         );
         rows
@@ -1347,9 +1344,9 @@ impl TuiModel {
 
     /// The row the keyboard is on, skipping headings — a selection that
     /// landed on a label would have nothing to activate.
-    pub(crate) fn selected_appearance_row(&self) -> Option<AppearanceRow> {
-        let rows = self.appearance_rows();
-        rows.get(self.appearance_selected)
+    pub(crate) fn selected_settings_row(&self) -> Option<SettingsRow> {
+        let rows = self.settings_rows();
+        rows.get(self.settings_selected)
             .filter(|row| row.selectable())
             .cloned()
     }
@@ -1509,15 +1506,15 @@ impl TuiModel {
         })
     }
 
-    /// The read the Appearance screen is missing, or `Intent::None`.
+    /// The read the Settings screen is missing, or `Intent::None`.
     ///
     /// Arriving asks for it (see [`Self::set_route`]), but arriving is not
     /// the only way onto the screen: the management modal reopens on the
     /// screen it was left on, restored without passing through a route
     /// change, and that screen used to stay empty until clicked again.
-    pub(crate) fn appearance_intent(&self) -> super::worker::Intent {
-        if self.route == Route::Appearance && !self.appearance_read {
-            super::worker::Intent::LoadAppearance
+    pub(crate) fn settings_intent(&self) -> super::worker::Intent {
+        if self.route == Route::Settings && !self.settings_read {
+            super::worker::Intent::LoadSettings
         } else {
             super::worker::Intent::None
         }
@@ -1635,17 +1632,17 @@ impl TuiModel {
         self.profile_preview_epoch = self.profile_preview_epoch.wrapping_add(1);
     }
 
-    /// Walks the Appearance list, stepping over headings rather than
+    /// Walks the Settings list, stepping over headings rather than
     /// landing on them: a selection sitting on a label has nothing to
     /// activate, and pressing Enter there would do nothing with no reason
     /// visible on screen.
-    pub(crate) fn move_appearance_selection(&mut self, delta: isize) {
-        let rows = self.appearance_rows();
+    pub(crate) fn move_settings_selection(&mut self, delta: isize) {
+        let rows = self.settings_rows();
         if rows.is_empty() || delta == 0 {
             return;
         }
         let step = delta.signum();
-        let mut index = self.appearance_selected.min(rows.len() - 1);
+        let mut index = self.settings_selected.min(rows.len() - 1);
         for _ in 0..delta.unsigned_abs() {
             let next_choice = std::iter::successors(Some(index), |row| {
                 row.checked_add_signed(step)
@@ -1658,7 +1655,7 @@ impl TuiModel {
                 None => break,
             }
         }
-        self.appearance_selected = index;
+        self.settings_selected = index;
     }
 
     /// Puts the selection on the theme in force, or on the first thing that
@@ -1668,32 +1665,28 @@ impl TuiModel {
     /// The theme in force rather than the first card, because the client
     /// forgets this screen's selection between visits: landing on `default`
     /// every time read as the chosen theme having been lost.
-    pub(crate) fn settle_appearance_selection(&mut self) {
-        let rows = self.appearance_rows();
+    pub(crate) fn settle_settings_selection(&mut self) {
+        let rows = self.settings_rows();
         if rows
-            .get(self.appearance_selected)
+            .get(self.settings_selected)
             .is_some_and(|row| row.selectable())
         {
             return;
         }
-        self.appearance_selected = rows
+        self.settings_selected = rows
             .iter()
-            .position(|row| matches!(row, AppearanceRow::Theme { active: true, .. }))
-            .or_else(|| rows.iter().position(AppearanceRow::selectable))
+            .position(|row| matches!(row, SettingsRow::Theme { active: true, .. }))
+            .or_else(|| rows.iter().position(SettingsRow::selectable))
             .unwrap_or(0);
     }
 
     /// Chooses whatever the selection is on. Which axis it belongs to is
     /// the row's own answer, so there is no mode to be in.
-    pub(crate) fn activate_appearance(&mut self) -> crate::ui::worker::Intent {
-        match self.selected_appearance_row() {
-            Some(AppearanceRow::Theme { id, .. }) => crate::ui::worker::Intent::SelectTheme(id),
-            Some(AppearanceRow::GlyphSet { id, .. }) => {
-                crate::ui::worker::Intent::SelectGlyphSet(id)
-            }
-            Some(AppearanceRow::Chime { chime, .. }) => {
-                crate::ui::worker::Intent::SelectChime(chime)
-            }
+    pub(crate) fn activate_settings(&mut self) -> crate::ui::worker::Intent {
+        match self.selected_settings_row() {
+            Some(SettingsRow::Theme { id, .. }) => crate::ui::worker::Intent::SelectTheme(id),
+            Some(SettingsRow::GlyphSet { id, .. }) => crate::ui::worker::Intent::SelectGlyphSet(id),
+            Some(SettingsRow::Chime { chime, .. }) => crate::ui::worker::Intent::SelectChime(chime),
             _ => crate::ui::worker::Intent::None,
         }
     }
@@ -1912,12 +1905,12 @@ impl TuiModel {
             self.overview_prompt_hovered = None;
         }
         self.route = route;
-        // Appearance reads its two lists on arrival rather than per frame:
+        // Settings reads its two lists on arrival rather than per frame:
         // a list that changed between two frames would move the selection
         // out from under the operator, which is the same reason the theme
         // picker carries its own.
-        if route == Route::Appearance {
-            return crate::ui::worker::Intent::LoadAppearance;
+        if route == Route::Settings {
+            return crate::ui::worker::Intent::LoadSettings;
         }
         crate::ui::worker::Intent::None
     }

@@ -25,7 +25,7 @@ uze theme glyphs        # the glyph sets, each drawn in its own glyphs
 uze theme glyphs nerd   # draw with that set from now on, whatever theme is on
 ```
 
-Inside the TUI, the **Appearance** route holds both lists; `t` still opens the
+Inside the TUI, the **Settings** route holds both lists; `t` still opens the
 quick theme picker from anywhere. Selecting redraws the next frame; no session,
 pane or agent is disturbed.
 
@@ -87,7 +87,7 @@ the font; and a cursor-position probe measures *width* rather than presence —
 a missing glyph and a present one both come back as one cell.
 
 So uze does not detect, and does not ask you to recall what you installed.
-`uze theme glyphs` and the Appearance route draw **each set in its own
+`uze theme glyphs` and the Settings route draw **each set in its own
 glyphs**, and you pick the row that looks right. A set your terminal cannot
 render shows as empty boxes before you choose it. The preview is the
 interface, and that is a decision rather than a gap.
@@ -124,7 +124,7 @@ won" is a question you can answer rather than guess at.
 ```
 
 `config.toml` is yours to edit by hand; `uze theme set`, `uze theme glyphs`
-and the Appearance screen write only their own keys and leave the rest of the
+and the Settings screen write only their own keys and leave the rest of the
 file — comments included — as it was:
 
 ```toml

@@ -3317,30 +3317,23 @@ impl WorkspaceModel {
         if self.unsettled_turns.is_empty() {
             return false;
         }
-        let resumed: Vec<PaneId> = self
-            .unsettled_turns
-            .keys()
-            .copied()
-            .filter(|pane| self.agent_is_working(*pane))
-            .collect();
-        for pane in resumed {
-            self.unsettled_turns.remove(&pane);
-        }
-        let settled: Vec<PaneId> = self
-            .unsettled_turns
-            .iter()
-            .filter(|(_, ended)| now.duration_since(**ended) >= CHIME_SETTLE)
-            .map(|(pane, _)| *pane)
-            .collect();
+        let activity = &self.remembered.agent_activity;
+        let completed = &self.remembered.completed_agent_panes;
         let mut due = false;
-        for pane in settled {
-            self.unsettled_turns.remove(&pane);
+        self.unsettled_turns.retain(|pane, ended| {
+            if activity.get(pane).is_some_and(AgentActivity::is_working) {
+                return false;
+            }
+            if now.duration_since(*ended) < CHIME_SETTLE {
+                return true;
+            }
             due |= match chime {
                 Chime::Silent => false,
-                Chime::OutOfSight => self.remembered.completed_agent_panes.contains(&pane),
+                Chime::OutOfSight => completed.contains(pane),
                 Chime::Always => true,
             };
-        }
+            false
+        });
         let rested = self
             .chimed_at
             .is_none_or(|last| now.duration_since(last) >= CHIME_COOLDOWN);
@@ -3358,6 +3351,7 @@ impl WorkspaceModel {
         if self.remembered.agent_activity.is_empty()
             && self.remembered.completed_agent_panes.is_empty()
             && self.input_echo_until.is_empty()
+            && self.unsettled_turns.is_empty()
         {
             return;
         }
@@ -3372,6 +3366,9 @@ impl WorkspaceModel {
             .completed_agent_panes
             .retain(|pane| live.contains(pane));
         self.input_echo_until.retain(|pane, _| live.contains(pane));
+        // A closed tab's turn has nobody left to tell, and its id is free
+        // for a new pane to inherit the ring.
+        self.unsettled_turns.retain(|pane, _| live.contains(pane));
     }
 
     /// The root of the space `pane`'s tab belongs to.

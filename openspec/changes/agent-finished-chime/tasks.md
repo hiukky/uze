@@ -16,7 +16,7 @@
 
 ## 3. Manage modal
 
-- [x] 3.1 Appearance rows: a "When an agent finishes" group with one card per choice, the active one marked
+- [x] 3.1 Settings rows (the Appearance route renamed): a "Notifications" group with one card per choice, the active one marked
 - [x] 3.2 Drawer text for a chime card
 - [x] 3.3 Worker intent: persist the choice, update the live cell, preview-ring a ringing choice
 - [x] 3.4 Model test: the group lists the three choices, marks the one in force, and Enter on one yields its intent

@@ -57,3 +57,40 @@ pub(crate) fn label(chime: Chime) -> &'static str {
         Chime::Always => "always",
     }
 }
+
+/// What a choice rings for, in the words a card has room for. The group
+/// is titled Notifications, so the agent has to be named here.
+pub(crate) fn tagline(chime: Chime) -> &'static str {
+    match chime {
+        Chime::Silent => "no sound",
+        Chime::OutOfSight => "an agent finishes in another tab",
+        Chime::Always => "any agent finishes",
+    }
+}
+
+/// When each choice rings, said where someone is deciding between them.
+pub(crate) fn note(chime: Chime) -> &'static str {
+    match chime {
+        Chime::Silent => {
+            "No sound. A tab whose agent finished out of sight still \
+             carries its check in the sidebar."
+        }
+        Chime::OutOfSight => {
+            "Rings when an agent finishes in a tab you are not looking at \
+             — the one you would otherwise find out about late."
+        }
+        Chime::Always => {
+            "Rings for every finished turn, the tab on screen included. \
+             For when you look away from the terminal, not just the tab."
+        }
+    }
+}
+
+/// What choosing it did, for the status line.
+pub(crate) fn outcome(chime: Chime) -> &'static str {
+    match chime {
+        Chime::Silent => "Finished agents stay silent",
+        Chime::OutOfSight => "Ringing for agents that finish out of sight",
+        Chime::Always => "Ringing whenever an agent finishes",
+    }
+}

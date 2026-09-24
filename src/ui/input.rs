@@ -143,7 +143,7 @@ impl TuiModel {
             Action::SwitchMode => Intent::CloseModal,
             Action::Quit => Intent::Quit,
             Action::Refresh => Intent::Refresh,
-            // Appearance is machine-wide, so it is not a route's own
+            // Settings is machine-wide, so it is not a route's own
             // action: every screen answers it the same way.
             Action::OpenThemePicker => Intent::OpenThemePicker,
             Action::SelectNext => self.move_by(1),
@@ -179,8 +179,8 @@ impl TuiModel {
                     self.keys_problem = None;
                     return Intent::None;
                 }
-                if self.route == Route::Appearance {
-                    return self.activate_appearance();
+                if self.route == Route::Settings {
+                    return self.activate_settings();
                 }
                 self.open_or_act()
             }
@@ -367,8 +367,8 @@ impl TuiModel {
                 self.keys_problem = None;
                 Intent::None
             }
-            Route::Appearance => {
-                self.move_appearance_selection(delta);
+            Route::Settings => {
+                self.move_settings_selection(delta);
                 Intent::None
             }
             // The Overview's only navigable list is its prompt history.
