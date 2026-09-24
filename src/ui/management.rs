@@ -732,7 +732,7 @@ fn route_row(
     if rect.height > 1 {
         frame.render_widget(
             Paragraph::new(Span::styled(
-                route.subtitle(),
+                text::elide(route.subtitle(), usize::from(text_width)),
                 raised(theme::fg(Token::TextDim)),
             )),
             Rect::new(text_x, rect.y + 1, text_width, 1),

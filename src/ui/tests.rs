@@ -216,6 +216,40 @@ fn model_with_data() -> TuiModel {
     model
 }
 
+/// A subtitle is a few words under a route's name, and the sidebar can be
+/// dragged down to its narrowest: every one has to be read whole there,
+/// not cut at the column's edge.
+#[test]
+fn every_route_subtitle_fits_the_narrowest_sidebar() {
+    use ratatui::{Terminal, backend::TestBackend};
+
+    let mut terminal = Terminal::new(TestBackend::new(100, 40)).unwrap();
+    let model = TuiModel {
+        sidebar_width: Some(super::MIN_SIDEBAR_WIDTH),
+        ..TuiModel::default()
+    };
+    let mut hits = Vec::new();
+    terminal
+        .draw(|frame| render(frame, frame.area(), &model, &mut hits))
+        .unwrap();
+    let buffer = terminal.backend().buffer();
+    let rows: Vec<String> = (0..buffer.area.height)
+        .map(|y| {
+            (0..super::MIN_SIDEBAR_WIDTH)
+                .map(|x| buffer[(x, y)].symbol())
+                .collect()
+        })
+        .collect();
+    for route in ROUTES {
+        assert!(
+            rows.iter().any(|row| row.contains(route.subtitle())),
+            "`{}` is cut in a {}-column sidebar",
+            route.subtitle(),
+            super::MIN_SIDEBAR_WIDTH
+        );
+    }
+}
+
 #[test]
 fn every_route_renders_without_panicking() {
     use ratatui::{Terminal, backend::TestBackend};
