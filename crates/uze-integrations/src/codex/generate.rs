@@ -68,7 +68,16 @@ pub(super) fn materialize_envelope(package: &StoredPackage, dir: &Path) -> Resul
     })?;
     materialize_generated_skills(package, &package_root, dir)?;
     if mcp_source.is_file() {
-        mirror_file(&mcp_source, &dir.join(".mcp.json"))?;
+        // The canonical manifest speaks the hook wrapper's `${PLUGIN_ROOT}`;
+        // Codex resolves no such variable — the delivered grammar is a
+        // concrete path, and the Store copy is what `${PLUGIN_ROOT}` means.
+        let bytes = fs::read(&mcp_source).map_err(|source| UzeError::Read {
+            path: mcp_source.clone(),
+            source,
+        })?;
+        let rewritten = String::from_utf8_lossy(&bytes)
+            .replace("${PLUGIN_ROOT}", &package_root.to_string_lossy());
+        write_file(&dir.join(".mcp.json"), rewritten.as_bytes())?;
     }
     Ok(())
 }
