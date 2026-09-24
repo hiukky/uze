@@ -198,6 +198,14 @@ pub(super) fn materialize_generated_plugin(
     if skills_source.is_dir() {
         uze_core::persistence::create_symlink(&skills_source, &dir.join("skills"))?;
     }
+    // The canonical manifest's MCP/Hook entries speak `${PLUGIN_ROOT}`, which
+    // in this envelope's grammar resolves here — so every auxiliary file
+    // tree the package carries (scripts above all) is delivered too, by the
+    // same symlink discipline as skills: the Store stays the one source.
+    let scripts_source = package.root.join("scripts");
+    if scripts_source.is_dir() {
+        uze_core::persistence::create_symlink(&scripts_source, &dir.join("scripts"))?;
+    }
     if canonical_mcp_servers(package).is_some() {
         let mcp = translated_mcp_config(package);
         fs::write(

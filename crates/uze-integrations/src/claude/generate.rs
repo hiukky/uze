@@ -57,6 +57,13 @@ pub(super) fn materialize_envelope(package: &StoredPackage, dir: &Path) -> Resul
     if package.root.join("skills").is_dir() {
         manifest["skills"] = serde_json::json!(["./skills"]);
     }
+    if package.root.join("scripts").is_dir() {
+        // The canonical manifest's MCP entries speak `${CLAUDE_PLUGIN_ROOT}`,
+        // which resolves here — the auxiliary file tree the package carries
+        // is delivered by the same symlink discipline as skills: the Store
+        // stays the one source.
+        uze_core::persistence::create_symlink(&package.root.join("scripts"), &dir.join("scripts"))?;
+    }
     if let Some(servers) = canonical_mcp_manifest_value(package) {
         // The canonical manifest speaks the hook wrapper's `${PLUGIN_ROOT}`;
         // Claude Code expands its own `${CLAUDE_PLUGIN_ROOT}` — carrying one
