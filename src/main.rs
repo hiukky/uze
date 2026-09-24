@@ -17,8 +17,8 @@ use uze_application::{
     application::{
         AddPluginReport, ContextPlan, ContextReconciliationReport, DoctorReport,
         HarnessContextDelivery, HarnessHealth, InstallReport, MachineStatusReport,
-        MarketplaceSummary, PluginInspection, Portability, ProjectContextStatus,
-        RemovePluginReport, RemoveProjectPluginReport, StatusReport,
+        MarketplaceRemovalReport, MarketplaceSummary, PluginInspection, Portability,
+        ProjectContextStatus, RemovePluginReport, RemoveProjectPluginReport, StatusReport,
     },
 };
 // `Chime` arrives through the facade's own re-export (see uze-application).
@@ -365,8 +365,17 @@ enum MarketAction {
         #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
         format: OutputFormat,
     },
-    /// Remove a marketplace (blocked while plugins from it are installed).
-    Remove { name: String },
+    /// Take a marketplace and everything it delivered off this machine
+    ///
+    /// Every package the Store holds from it is removed first, each through
+    /// the same teardown a per-package removal runs; a package whose
+    /// teardown is blocked keeps the marketplace registered, named in the
+    /// answer.
+    Remove {
+        name: String,
+        #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
+        format: OutputFormat,
+    },
     /// Read a marketplace from a checkout on this machine you develop.
     ///
     /// Machine scope: nothing is written into any project's files, and the
@@ -1700,9 +1709,17 @@ fn run_market(app: &UzeApplication, action: MarketAction) -> Result<()> {
                 render_market_list(marketplaces)
             });
         }
-        MarketAction::Remove { name } => {
-            app.marketplace().remove(&name)?;
-            println!("Removed marketplace {name}");
+        MarketAction::Remove { name, format } => {
+            let report = app.marketplace().remove(&name)?;
+            emit(format, &report, render_market_removal);
+            if !report.record_removed {
+                return Err(uze_application::UzeError::LifecycleBlocked(format!(
+                    "marketplace `{}` could not be taken off the machine entirely; \
+                     it is still registered — clear the block above and run \
+                     `uze market remove {name}` again",
+                    report.marketplace
+                )));
+            }
         }
         MarketAction::Link { name, checkout } => {
             let checkout = checkout
@@ -3466,6 +3483,44 @@ fn render_market_list(marketplaces: &[MarketplaceSummary]) -> String {
             })
             .collect(),
     ));
+    text.push('\n');
+    text
+}
+
+/// The marketplace teardown's answer, in product terms: each package it
+/// took off the machine, each block, and where the registry entry ended.
+fn render_market_removal(report: &MarketplaceRemovalReport) -> String {
+    let mut text = progress::report_title(
+        "Marketplace removed",
+        Some(&format!(
+            "{} — {} package(s) taken off the machine",
+            report.marketplace,
+            report.removed.len()
+        )),
+    );
+    text.push('\n');
+    for package in &report.removed {
+        text.push_str(&format!(
+            "{} Removed {}\n",
+            progress::success_icon(),
+            progress::title(package)
+        ));
+    }
+    if report.blocked.is_empty() && !report.record_removed {
+        text.push_str(&progress::label("registry entry removed\n"));
+    }
+    if !report.blocked.is_empty() {
+        text.push_str(&progress::report_section("Blocked"));
+        for block in &report.blocked {
+            text.push_str(&format!(
+                "  {}\n",
+                progress::warning_text(format!("{}: {}", block.package, block.reason))
+            ));
+        }
+        text.push_str(&progress::label(
+            "the marketplace stays registered until these come off\n",
+        ));
+    }
     text.push('\n');
     text
 }

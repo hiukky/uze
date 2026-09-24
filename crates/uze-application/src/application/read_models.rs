@@ -180,6 +180,26 @@ pub struct MarketplaceRegistration {
     pub resolves_here_only: bool,
 }
 
+/// A marketplace teardown's answer: what came off, what was blocked, and
+/// whether the registry entry went with them. The record is removed last —
+/// a blocked package keeps the marketplace registered, so the leftovers it
+/// still holds stay reachable (`market remove` again once the block is
+/// cleared).
+#[derive(Clone, Debug, Serialize)]
+pub struct MarketplaceRemovalReport {
+    pub marketplace: String,
+    pub removed: Vec<String>,
+    pub blocked: Vec<BlockedPackageRemoval>,
+    pub record_removed: bool,
+}
+
+/// One package the teardown could not take off the machine, and why.
+#[derive(Clone, Debug, Serialize)]
+pub struct BlockedPackageRemoval {
+    pub package: String,
+    pub reason: String,
+}
+
 #[derive(Clone, Debug, Serialize)]
 pub struct MarketplaceSummary {
     pub name: String,

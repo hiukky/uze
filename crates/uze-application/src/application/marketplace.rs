@@ -477,13 +477,59 @@ impl Marketplace<'_> {
     }
 
     #[tracing::instrument(name = "marketplace.remove", skip_all, fields(name = %name), err)]
-    pub fn remove(&self, name: &str) -> Result<()> {
+    pub fn remove(&self, name: &str) -> Result<MarketplaceRemovalReport> {
         if name == BUILT_IN_MARKETPLACE {
             return Err(UzeError::ReservedMarketplace(name.to_owned()));
         }
-        uze_core::state::marketplace_remove(&self.0.home, name)?;
-        self.0.marketplace_catalogues.invalidate(name);
-        Ok(())
+        let _mutation = uze_core::persistence::MutationLock::acquire(&self.0.home)?;
+        // Taking a marketplace off the machine takes what it delivered with
+        // it: every package the Store holds from this marketplace goes
+        // through the same teardown a per-package removal runs —
+        // inspect-before-detach, receipt-owned, drift safety. The lock is
+        // held here, so the inner, lock-free teardown path is what runs;
+        // `Plugins::remove` would refuse the re-entrant acquisition.
+        let installed: Vec<String> = self
+            .0
+            .installed_packages()
+            .into_iter()
+            .filter(|package| package.id.marketplace() == name)
+            .map(|package| package.id.as_str().to_owned())
+            .collect();
+        let mut removed = Vec::new();
+        let mut blocked = Vec::new();
+        for id in &installed {
+            match self.0.plugins().detach_and_remove(id, false) {
+                Ok(RemovePluginReport::Removed { plugin, .. })
+                | Ok(RemovePluginReport::AlreadyAbsent { plugin }) => removed.push(plugin),
+                Ok(RemovePluginReport::Blocked { report, plan }) => {
+                    blocked.push(BlockedPackageRemoval {
+                        package: id.clone(),
+                        reason: format!(
+                            "{} was blocked ({plan:?}); its bytes were left in place",
+                            report.package_id
+                        ),
+                    });
+                }
+                Err(error) => blocked.push(BlockedPackageRemoval {
+                    package: id.clone(),
+                    reason: error.to_string(),
+                }),
+            }
+        }
+        // The registry entry goes last: a marketplace that could not be
+        // emptied stays registered, so the leftovers it still holds are
+        // reachable — `market remove` again after the block is cleared.
+        let record_removed = blocked.is_empty();
+        if record_removed {
+            uze_core::state::marketplace_remove(&self.0.home, name)?;
+            self.0.marketplace_catalogues.invalidate(name);
+        }
+        Ok(MarketplaceRemovalReport {
+            marketplace: name.to_owned(),
+            removed,
+            blocked,
+            record_removed,
+        })
     }
 
     #[tracing::instrument(name = "marketplace.list", skip_all, err)]
