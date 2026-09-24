@@ -305,8 +305,18 @@ impl Marketplace<'_> {
         // answers the name, and it is also what every later read and every
         // install of one of its plugins works from. A local source is read
         // where it is — its author is editing it.
-        let name = match &source {
-            PackageSource::Git { .. } => self.0.marketplace_catalogues.adopt(&source)?.0,
+        let registered = uze_core::state::marketplace_list(&self.0.home)?
+            .into_iter()
+            .find(|(_, record)| record.source.same_source(&source))
+            .map(|(name, _)| name);
+        let name = match (&source, registered) {
+            // Already registered: a fetch into its mirror, reached the way it
+            // was last reached, rather than a clone from nothing.
+            (PackageSource::Git { .. }, Some(name)) => {
+                self.0.marketplace_catalogues.refresh(&name, &source)?;
+                name
+            }
+            (PackageSource::Git { .. }, None) => self.0.marketplace_catalogues.adopt(&source)?.0,
             _ => {
                 let checkout = acquisition::acquire(&source)?;
                 read_in_place(checkout.root())?.manifest.name

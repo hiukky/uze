@@ -268,6 +268,46 @@ pub fn read_file(directory: &Path, commit: &str, path: &str) -> Result<Vec<u8>> 
     run_as(reach_of(directory), &["show", &target], Some(directory)).map(String::into_bytes)
 }
 
+/// Brings every blob the checkout of `subdirectory` at `commit` will need
+/// in one fetch.
+///
+/// Left to itself, a checkout in a blobless mirror asks the remote for the
+/// blobs it lacks as it meets them — a connection each, which over SSH is a
+/// handshake each: nine seconds for a plugin of a few dozen files where one
+/// fetch takes two. Best effort: if this fails, the checkout still fetches
+/// what it needs, only slower.
+fn prefetch(directory: &Path, commit: &str, subdirectory: Option<&str>) {
+    let tree = match subdirectory.filter(|path| *path != ".") {
+        Some(path) => format!("{commit}:{path}"),
+        None => format!("{commit}^{{tree}}"),
+    };
+    let Ok(listing) = run(
+        &["rev-list", "--objects", "--missing=print", &tree],
+        Some(directory),
+    ) else {
+        return;
+    };
+    let missing: Vec<&str> = listing
+        .lines()
+        .filter_map(|line| line.strip_prefix('?'))
+        .collect();
+    if missing.is_empty() {
+        return;
+    }
+    let mut arguments = vec![
+        "-c",
+        "fetch.negotiationAlgorithm=noop",
+        "fetch",
+        "origin",
+        "--no-tags",
+        "--no-write-fetch-head",
+        "--recurse-submodules=no",
+        NO_BLOBS,
+    ];
+    arguments.extend(missing);
+    let _ = run_as(reach_of(directory), &arguments, Some(directory));
+}
+
 /// How many commits `head` is ahead of `pinned`.
 ///
 /// `None` when the two do not share history in a way this can answer —
@@ -314,6 +354,7 @@ pub fn materialize_subdirectory(
         path: destination.to_path_buf(),
         source,
     })?;
+    prefetch(directory, commit, subdirectory);
     // `--work-tree` writes the tree out without the mirror ever gaining one
     // of its own, and the pathspec confines it to the plugin's directory.
     let work_tree = format!("--work-tree={}", destination.display());

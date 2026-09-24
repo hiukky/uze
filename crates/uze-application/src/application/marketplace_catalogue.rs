@@ -212,6 +212,18 @@ impl MarketplaceCatalogues {
         Ok(catalogue)
     }
 
+    /// Brings `name`'s mirror up to date from `source` now, whatever the age
+    /// of its entry: registering a marketplace again is how an operator asks
+    /// for that, and it costs a fetch into the mirror this machine already
+    /// has rather than a clone.
+    pub fn refresh(&self, name: &str, source: &PackageSource) -> Result<Catalogue> {
+        let catalogue = self.refill(name, source)?;
+        self.memo
+            .borrow_mut()
+            .insert(name.to_owned(), catalogue.clone());
+        Ok(catalogue)
+    }
+
     /// Forgets `name` in both tiers.
     pub fn invalidate(&self, name: &str) {
         self.memo.borrow_mut().remove(name);
