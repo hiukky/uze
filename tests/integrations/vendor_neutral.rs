@@ -6,7 +6,7 @@
 //! `IntegrationPort` seam with fake integrations, so they hold for a harness
 //! that does not exist yet.
 
-use std::{cell::RefCell, collections::BTreeSet, fs, path::PathBuf};
+use std::{collections::BTreeSet, fs, path::PathBuf, sync::Mutex};
 
 use uze_application::UzeApplication;
 use uze_core::{
@@ -54,7 +54,7 @@ struct PublishingIntegration {
     /// Set to make publication fail, so the caller can assert that a failed
     /// view never invalidates an installation.
     fail: bool,
-    calls: RefCell<Vec<Vec<String>>>,
+    calls: Mutex<Vec<Vec<String>>>,
 }
 
 impl PublishingIntegration {
@@ -62,7 +62,7 @@ impl PublishingIntegration {
         Self {
             root,
             fail: false,
-            calls: RefCell::new(Vec::new()),
+            calls: Mutex::new(Vec::new()),
         }
     }
 
@@ -120,7 +120,7 @@ impl IntegrationPort for PublishingIntegration {
 
     fn republish_packages(&self, packages: &[StoredPackage]) -> Result<(), uze_core::UzeError> {
         let names = Self::publishable(packages);
-        self.calls.borrow_mut().push(names.clone());
+        self.calls.lock().unwrap().push(names.clone());
         if self.fail {
             return Err(uze_core::UzeError::ExposureUnavailable(
                 "fake publication failure".to_owned(),

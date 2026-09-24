@@ -1,7 +1,7 @@
 version: 1
 marketplaces:
   ai:
-    git: git@github.com:hiukky/ai.git
+    git: https://github.com/hiukky/ai
     revision: 02d2c9831eb619821c574622a78bbc5f6189485a
 plugins:
   git:

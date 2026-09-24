@@ -30,6 +30,7 @@ pub mod assertions;
 pub mod env;
 pub mod fake_harness;
 pub mod fixtures;
+pub mod forge;
 pub mod git;
 pub mod marketplace;
 pub mod process;

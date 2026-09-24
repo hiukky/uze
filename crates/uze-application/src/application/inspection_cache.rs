@@ -38,7 +38,6 @@
 //! authorize destroying a vendor artifact that drifted.
 
 use std::{
-    cell::RefCell,
     collections::HashMap,
     fs,
     path::PathBuf,
@@ -103,14 +102,14 @@ impl OnDiskCache {
 /// CLIs, ADR 018 decision 1).
 pub struct InspectionCache {
     path: PathBuf,
-    memo: RefCell<HashMap<String, CachedInspection>>,
+    memo: std::sync::Mutex<HashMap<String, CachedInspection>>,
 }
 
 impl InspectionCache {
     pub fn new(home: &UzeHome) -> Self {
         Self {
             path: home.inspection_cache_path(),
-            memo: RefCell::new(HashMap::new()),
+            memo: std::sync::Mutex::new(HashMap::new()),
         }
     }
 
@@ -118,7 +117,11 @@ impl InspectionCache {
     /// current fingerprint. Never re-inspects — that is the caller's job on
     /// a miss. TTL-expired, fingerprint-mismatched, or absent → `None`.
     pub fn get(&self, ledger_key: &str, fingerprint: Option<&str>) -> Option<AttachmentInspection> {
-        if let Some(entry) = self.memo.borrow().get(ledger_key)
+        if let Some(entry) = self
+            .memo
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(ledger_key)
             && fingerprint_matches(entry, fingerprint)
         {
             return Some(AttachmentInspection {
@@ -143,7 +146,8 @@ impl InspectionCache {
             reason: entry.reason.clone(),
         };
         self.memo
-            .borrow_mut()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .insert(ledger_key.to_owned(), entry.clone());
         Some(inspection)
     }
@@ -167,7 +171,8 @@ impl InspectionCache {
             fingerprint,
         };
         self.memo
-            .borrow_mut()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .insert(ledger_key.to_owned(), entry.clone());
         let mut on_disk = OnDiskCache::load(&self.path);
         on_disk.entries.insert(ledger_key.to_owned(), entry);
@@ -178,7 +183,10 @@ impl InspectionCache {
     /// inspection must never outlive the mutation that changed the state
     /// it describes.
     pub fn invalidate(&self) {
-        self.memo.borrow_mut().clear();
+        self.memo
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clear();
         let _ = fs::remove_file(&self.path);
     }
 }
@@ -367,7 +375,7 @@ mod tests {
     fn missing_or_corrupt_cache_file_is_fail_open() {
         let cache = InspectionCache {
             path: PathBuf::from("/nonexistent/inspection.json"),
-            memo: RefCell::new(HashMap::new()),
+            memo: std::sync::Mutex::new(HashMap::new()),
         };
         assert!(cache.get("k", None).is_none());
 
@@ -376,7 +384,7 @@ mod tests {
         fs::write(&path, b"not json").unwrap();
         let cache = InspectionCache {
             path,
-            memo: RefCell::new(HashMap::new()),
+            memo: std::sync::Mutex::new(HashMap::new()),
         };
         assert!(cache.get("k", None).is_none());
     }

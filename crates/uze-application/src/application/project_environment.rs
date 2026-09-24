@@ -130,7 +130,7 @@ impl Project<'_> {
         };
         if let Ok(Some(registered)) = uze_core::state::marketplace_get(&self.0.home, marketplace)
             && let Ok(local) = uze_core::acquisition::marketplace::repository_of(&registered.source)
-            && local.identity == locked.git
+            && uze_core::acquisition::forge::same_repository(&local.identity, &locked.git)
         {
             repository.fetch = local.fetch;
         }
@@ -144,6 +144,8 @@ impl Project<'_> {
             super::marketplace::MirrorAt {
                 home: &self.0.home,
                 marketplace,
+                recent: Some(super::marketplace::RECENT),
+                fetched: &self.0.mirrors_fetched,
             },
         )
     }
@@ -157,6 +159,7 @@ impl Project<'_> {
         root: &Path,
         authority: &dyn TrustAuthority,
     ) -> Result<AddPluginReport> {
+        self.0.begin_operation();
         let canonical = project_root::resolve_project_root(root)?;
         // The marketplace built into UZE is not a project's to declare:
         // its plugins are installed for every project by the machine's own
@@ -182,7 +185,10 @@ impl Project<'_> {
         // the machine registry another is a question only a person can
         // settle.
         if let Some(recorded) = lock.marketplaces.get(marketplace)
-            && recorded.git != request.repository.identity
+            && !uze_core::acquisition::forge::same_repository(
+                &recorded.git,
+                &request.repository.identity,
+            )
         {
             return Err(UzeError::MarketplaceSourceConflict {
                 marketplace: marketplace.to_owned(),
@@ -209,6 +215,7 @@ impl Project<'_> {
         // what the project meant, and the lock is what that meant resolved
         // to. Writing the lock alone would leave the manifest — the file a
         // person reads and edits — silently out of date.
+        tracing::info!(target: uze_core::acquisition::git::STEP, step = "lock");
         manifest::declare_plugin(
             &canonical,
             plugin,
@@ -277,6 +284,7 @@ impl Project<'_> {
         plugin: Option<&str>,
         authority: &dyn TrustAuthority,
     ) -> Result<UpdateReport> {
+        self.0.begin_operation();
         let canonical = project_root::resolve_project_root(root)?;
         let manifest = manifest::load(&canonical)?.unwrap_or_default();
         let mut lock = project_lock::load_lock(&canonical)?.unwrap_or_default();
@@ -293,6 +301,16 @@ impl Project<'_> {
                 plugin: wanted.to_owned(),
             });
         }
+
+        let wanted: Vec<(String, MarketplaceRequest)> = declared
+            .iter()
+            .filter_map(|(_, marketplace)| {
+                let declared = manifest.marketplaces.get(marketplace)?;
+                let source = Self::declared_fetch_source(&canonical, marketplace, declared).ok()?;
+                Some((marketplace.clone(), MarketplaceRequest::of(&source).ok()?))
+            })
+            .collect();
+        super::marketplace::prefetch_mirrors(&self.0.home, &self.0.mirrors_fetched, &wanted, None);
 
         // No mutation lock here: `Plugins::update` takes one per plugin and
         // it is not reentrant. The lock file this writes is a project file,
@@ -341,6 +359,8 @@ impl Project<'_> {
                     super::marketplace::MirrorAt {
                         home: &self.0.home,
                         marketplace: &marketplace,
+                        recent: None,
+                        fetched: &self.0.mirrors_fetched,
                     },
                 )?;
                 match self
@@ -452,6 +472,7 @@ impl Project<'_> {
     /// primitive to build one on).
     #[tracing::instrument(name = "project.install", skip_all, fields(root = %root.display()), err)]
     pub fn install(&self, root: &Path, authority: &dyn TrustAuthority) -> Result<InstallReport> {
+        self.0.begin_operation();
         let canonical = project_root::resolve_project_root(root)?;
         // `install` is an explicit act of setting this project up, so it is
         // the right moment to create the file a person edits — unlike
@@ -464,6 +485,55 @@ impl Project<'_> {
         let _mutation = uze_core::persistence::MutationLock::acquire(&self.0.home)?;
         let mut installed_plugins = Vec::new();
         let mut skipped: Vec<SkippedPlugin> = Vec::new();
+
+        // Every marketplace this install is about to read, fetched at once:
+        // what the manifest declares and the lock does not answer for, and
+        // what the lock records that the Store does not hold yet.
+        let declared: Vec<(String, MarketplaceRequest)> =
+            project_lock::stale_against(&manifest, &lock)
+                .iter()
+                .filter_map(|stale| {
+                    let declared = manifest.marketplaces.get(&stale.marketplace)?;
+                    let source =
+                        Self::declared_fetch_source(&canonical, &stale.marketplace, declared)
+                            .ok()?;
+                    Some((
+                        stale.marketplace.clone(),
+                        MarketplaceRequest::of(&source).ok()?,
+                    ))
+                })
+                .collect();
+        super::marketplace::prefetch_mirrors(
+            &self.0.home,
+            &self.0.mirrors_fetched,
+            &declared,
+            Some(super::marketplace::RECENT),
+        );
+        let locked: Vec<(String, MarketplaceRequest)> = self
+            .0
+            .locked_plugins_missing(&lock)
+            .into_iter()
+            .filter_map(|(_, plugin)| {
+                let recorded = lock.marketplaces.get(&plugin.marketplace)?;
+                Some((
+                    plugin.marketplace.clone(),
+                    MarketplaceRequest {
+                        repository: uze_core::acquisition::marketplace::MarketplaceRepository {
+                            fetch: recorded.git.clone(),
+                            identity: recorded.git.clone(),
+                        },
+                        reference: Some(recorded.revision.clone()),
+                        subdirectory: recorded.subdirectory.clone(),
+                    },
+                ))
+            })
+            .collect();
+        super::marketplace::prefetch_mirrors(
+            &self.0.home,
+            &self.0.mirrors_fetched,
+            &locked,
+            Some(super::marketplace::RECENT),
+        );
 
         // Resolution comes first: `agents.yaml` is what the project asked
         // for and the lock is only what asking produced, so a declaration
@@ -633,7 +703,7 @@ impl Project<'_> {
     ) -> Result<()> {
         if let Some(registered) = uze_core::state::marketplace_get(&self.0.home, marketplace)? {
             let known = uze_core::acquisition::marketplace::repository_of(&registered.source)?;
-            if known.identity == identity {
+            if uze_core::acquisition::forge::same_repository(&known.identity, identity) {
                 return Ok(());
             }
             return Err(UzeError::MarketplaceConflict {
@@ -698,6 +768,8 @@ impl Project<'_> {
             super::marketplace::MirrorAt {
                 home: &self.0.home,
                 marketplace,
+                recent: Some(super::marketplace::RECENT),
+                fetched: &self.0.mirrors_fetched,
             },
         )?;
         self.0.plugins().install_materialized(

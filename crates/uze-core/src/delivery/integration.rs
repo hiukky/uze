@@ -146,7 +146,7 @@ pub struct ObservationContext<'a> {
     pub preceded_by: Option<&'a SessionId>,
 }
 
-pub trait IntegrationPort {
+pub trait IntegrationPort: Send + Sync {
     fn id(&self) -> &'static str;
 
     /// The name a person recognizes — shown anywhere a harness is displayed

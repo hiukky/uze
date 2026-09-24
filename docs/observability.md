@@ -91,8 +91,22 @@ tail -f ~/.uze/cache/logs/uze.*.log
 
 `UZE_LOG` is both the switch and the filter: it is what puts a *command's*
 text on stderr, and it raises or narrows the journal's own level along
-with the exporter's. For a one-shot command with it unset, nothing
-subscribes and a span costs a branch.
+with the exporter's. For a one-shot command with it unset, the only thing
+subscribed is the step layer below, filtered to its own target, so every
+other span costs a branch.
+
+## Steps: what a person watching a command sees
+
+An operation says what it is doing as `info` events on the `uze::step`
+target — a `step` field and its subject (`step="reach"`, `repository`,
+`via`; `step="download"`, `files`; `step="deliver"`, `harness`; …), never a
+sentence. `src/steps.rs` carries them, on a layer of their own that is
+always installed, to the one listener the running surface registers: the
+CLI puts each on its spinner line and leaves every finished one above it,
+checked, with how long it took; `--verbose` adds every failed attempt with
+why.
+The words live beside the spinner (`src/progress.rs`); a new step is an
+event in the domain and a line in `describe`.
 
 ## Reading it on a dashboard
 

@@ -132,6 +132,13 @@ const RULES: &[Rule] = &[
              prompt) — the opposite of `uze-git`, which drives the operator's own \
              checkout and must let their configuration apply",
             ),
+            (
+                "crates/uze-testkit/src/forge.rs",
+                "test infrastructure playing the *server*: it runs `git http-backend` \
+             as CGI for a loopback forge, which needs the CGI environment and \
+             binary stdin and stdout that neither client contract has, and it \
+             reaches no repository on anyone's behalf",
+            ),
         ],
         budget: &[],
     },

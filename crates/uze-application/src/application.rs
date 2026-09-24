@@ -108,9 +108,21 @@ pub struct UzeApplication {
     detection_cache: DetectionCache,
     inspection_cache: crate::application::inspection_cache::InspectionCache,
     marketplace_catalogues: marketplace_catalogue::MarketplaceCatalogues,
+    /// Mirrors this command already brought up to date. One command asks a
+    /// remote one question once: updating three plugins from one
+    /// marketplace fetched it three times, a second apart.
+    mirrors_fetched: std::sync::Mutex<Vec<PathBuf>>,
 }
 
 impl UzeApplication {
+    /// Starts one operation: what the last one fetched is not fresh for
+    /// this one, whose own fetches are.
+    pub(crate) fn begin_operation(&self) {
+        if let Ok(mut fetched) = self.mirrors_fetched.lock() {
+            fetched.clear();
+        }
+    }
+
     /// Production composition. The integration set comes from
     /// `IntegrationRegistry::builtin` — the one place that knows which
     /// harnesses exist; this layer only knows there are integrations.
@@ -172,6 +184,7 @@ impl UzeApplication {
             detection_cache: DetectionCache::new(&home),
             inspection_cache: inspection_cache::InspectionCache::new(&home),
             marketplace_catalogues: marketplace_catalogue::MarketplaceCatalogues::new(&home),
+            mirrors_fetched: std::sync::Mutex::new(Vec::new()),
             home,
             integrations,
             preference_adapters,

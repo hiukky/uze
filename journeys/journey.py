@@ -702,7 +702,14 @@ class Runner:
 
     def resolve(self, value):
         if isinstance(value, str):
-            names = {**self.world.vars(), "uze": str(self.binary)}
+            # `{python}` is the interpreter running this suite: a world's PATH
+            # reaches only the system's, which on macOS is a shim that may
+            # never answer from a sealed environment.
+            names = {
+                **self.world.vars(),
+                "uze": str(self.binary),
+                "python": sys.executable,
+            }
 
             def swap(match):
                 return names.get(match.group(1), match.group(0))

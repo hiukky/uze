@@ -29,7 +29,6 @@
 //! was the last time the remote answered.
 
 use std::{
-    cell::RefCell,
     collections::HashMap,
     fs,
     path::{Path, PathBuf},
@@ -47,7 +46,7 @@ use uze_core::{
 /// How long a catalogue stands for before a read clones the remote again.
 /// Shorter than the detection cache's day: a marketplace has a person on
 /// the other end pushing to it, and nothing here can see that happen.
-const MAX_AGE: Duration = Duration::from_secs(60 * 60);
+pub(crate) const MAX_AGE: Duration = Duration::from_secs(60 * 60);
 
 const META_FILE: &str = "catalogue.json";
 /// The mirror itself: a bare, blobless clone.
@@ -146,14 +145,14 @@ struct Meta {
 
 pub struct MarketplaceCatalogues {
     root: PathBuf,
-    memo: RefCell<HashMap<String, Catalogue>>,
+    memo: std::sync::Mutex<HashMap<String, Catalogue>>,
 }
 
 impl MarketplaceCatalogues {
     pub fn new(home: &UzeHome) -> Self {
         Self {
             root: home.marketplace_cache_dir(),
-            memo: RefCell::new(HashMap::new()),
+            memo: std::sync::Mutex::new(HashMap::new()),
         }
     }
 
@@ -161,7 +160,12 @@ impl MarketplaceCatalogues {
     /// answered from the cache while its entry stands, and refilled by
     /// cloning when it does not; a local source is read where it is.
     pub fn read(&self, name: &str, source: &PackageSource) -> Result<Catalogue> {
-        if let Some(catalogue) = self.memo.borrow().get(name) {
+        if let Some(catalogue) = self
+            .memo
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(name)
+        {
             return Ok(catalogue.clone());
         }
         let catalogue = match source {
@@ -180,7 +184,8 @@ impl MarketplaceCatalogues {
             },
         };
         self.memo
-            .borrow_mut()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .insert(name.to_owned(), catalogue.clone());
         Ok(catalogue)
     }
@@ -197,7 +202,12 @@ impl MarketplaceCatalogues {
     /// the client opens. An answer here is as old as the last one of those,
     /// which is what the established-at date beside it is for.
     pub fn read_as_it_stands(&self, name: &str, source: &PackageSource) -> Result<Catalogue> {
-        if let Some(catalogue) = self.memo.borrow().get(name) {
+        if let Some(catalogue) = self
+            .memo
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(name)
+        {
             return Ok(catalogue.clone());
         }
         let catalogue = match source {
@@ -207,14 +217,31 @@ impl MarketplaceCatalogues {
                 .ok_or_else(|| UzeError::UnknownMarketplace(name.to_owned()))?,
         };
         self.memo
-            .borrow_mut()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(name.to_owned(), catalogue.clone());
+        Ok(catalogue)
+    }
+
+    /// Brings `name`'s mirror up to date from `source` now, whatever the age
+    /// of its entry: registering a marketplace again is how an operator asks
+    /// for that, and it costs a fetch into the mirror this machine already
+    /// has rather than a clone.
+    pub fn refresh(&self, name: &str, source: &PackageSource) -> Result<Catalogue> {
+        let catalogue = self.refill(name, source)?;
+        self.memo
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .insert(name.to_owned(), catalogue.clone());
         Ok(catalogue)
     }
 
     /// Forgets `name` in both tiers.
     pub fn invalidate(&self, name: &str) {
-        self.memo.borrow_mut().remove(name);
+        self.memo
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(name);
         let _ = fs::remove_dir_all(self.entry_dir(name));
     }
 
@@ -233,7 +260,7 @@ impl MarketplaceCatalogues {
         let entry = self.entry_dir(name);
         let repository = entry.join(REPOSITORY_DIR);
         super::marketplace::naming_the_marketplace(
-            acquisition::mirror::ensure(url, &repository),
+            acquisition::mirror::ensure(url, &acquisition::forge::canonical(url), &repository),
             name,
             url,
         )?;
@@ -268,6 +295,7 @@ impl MarketplaceCatalogues {
     }
 
     fn manifest_at(&self, repository: &Path, commit: &str) -> Result<MarketplaceManifest> {
+        tracing::info!(target: uze_core::acquisition::git::STEP, step = "catalogue");
         let bytes = acquisition::mirror::read_file(repository, commit, MARKETPLACE_MANIFEST_NAME)?;
         acquisition::marketplace::parse_manifest(&bytes)
     }
@@ -288,7 +316,7 @@ impl MarketplaceCatalogues {
             now_unix_nanos()
         ));
         let adopted = (|| {
-            acquisition::mirror::ensure(url, &staging)?;
+            acquisition::mirror::ensure(url, &acquisition::forge::canonical(url), &staging)?;
             let commit = acquisition::mirror::resolve(&staging, reference.as_deref())?;
             let manifest = self.manifest_at(&staging, &commit)?;
             Ok((manifest.name.clone(), manifest, commit))
@@ -343,7 +371,8 @@ impl MarketplaceCatalogues {
             },
         };
         self.memo
-            .borrow_mut()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .insert(name.clone(), catalogue.clone());
         Ok((name, catalogue))
     }
@@ -358,7 +387,7 @@ impl MarketplaceCatalogues {
     ) -> Option<Catalogue> {
         let entry = self.entry_dir(name);
         let meta: Meta = serde_json::from_slice(&fs::read(entry.join(META_FILE)).ok()?).ok()?;
-        if &meta.source != source {
+        if !meta.source.same_source(source) {
             return None;
         }
         let age_nanos = now_unix_nanos().saturating_sub(meta.cached_at_unix_nanos);

@@ -27,6 +27,7 @@ pub use uze_core::{
     context::PlannedAction,
     conversation::Claim,
     features::{ALL_FEATURES, Feature},
+    hosts::HostEntry,
     integration::{AttachmentState, PublicationStatus},
     landing::Forge,
     naming::{

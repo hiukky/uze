@@ -375,6 +375,30 @@ fn plugin_list_and_inspect_meet_the_budget() {
 }
 
 #[test]
+fn market_host_meets_the_budget() {
+    let root = uze_testkit::temp::scratch("budget-market-host");
+    let home = UzeHome::at(root.join("uze"));
+    let application = || UzeApplication::new(home.clone(), Vec::new());
+
+    let runs: Vec<Duration> = (0..ATTEMPTS)
+        .map(|_| {
+            let _measuring = meter();
+            let app = application();
+            let started = Instant::now();
+            app.marketplace()
+                .define_host("work", "https://git.acme.io")
+                .unwrap();
+            app.marketplace().set_default_host("work").unwrap();
+            assert!(!app.marketplace().hosts().unwrap().is_empty());
+            app.marketplace().remove_host("work").unwrap();
+            started.elapsed()
+        })
+        .collect();
+    assert_best_within_budget("market host", &runs);
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
 fn market_list_and_inspect_meet_the_budget_without_the_repository() {
     let world = World::build("budget-market-reads");
     world.within_budget("market list", |app| app.marketplace().list());

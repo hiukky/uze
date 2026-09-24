@@ -259,7 +259,9 @@ whose world says `first_run: true`. A journey that only runs commands, or
 that opens the previous release first, gets the machine that left it.
 
 A journey addresses the world through `{world}`, `{home}`, `{uze_home}`,
-`{project}`, `{repo}` and `{uze}` — plus `{shell_rc}`, which is the file the
+`{project}`, `{repo}`, `{uze}` and `{python}` (the interpreter running the
+suite, for a journey that stands a server up in its world) — plus
+`{shell_rc}`, which is the file the
 world's shell actually reads its startup from. That one is a placeholder
 rather than a path because the answer differs by platform: bash reads
 `.bashrc` for the interactive non-login shell a Linux terminal opens, and

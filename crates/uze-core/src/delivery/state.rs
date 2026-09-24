@@ -150,7 +150,16 @@ pub fn forget_receipt(home: &UzeHome, receipt: &AttachmentReceipt) -> Result<()>
     })
 }
 
+/// One change to the ledger at a time within this process: delivery reaches
+/// every harness at once, and two threads reading and rewriting one file
+/// would each lose the other's receipt. Another process is kept out by the
+/// machine mutation lock every writer already holds.
+static LEDGER: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 fn update_receipts(home: &UzeHome, change: impl FnOnce(&mut Vec<AttachmentReceipt>)) -> Result<()> {
+    let _one_at_a_time = LEDGER
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let path = attachments_path(home);
     let mut ledger: AttachmentLedger = read_json_or_default(&path)?;
     change(&mut ledger.receipts);
@@ -284,8 +293,16 @@ pub fn marketplace_add(
     home.ensure_layout()?;
     let path = home.marketplaces_path();
     let mut registry: MarketplaceRegistry = read_json_or_default(&path)?;
-    if let Some(existing) = registry.marketplaces.get(name) {
+    if let Some(existing) = registry.marketplaces.get_mut(name) {
         if existing.source == source {
+            return Ok(false);
+        }
+        // The same repository in another spelling is the same marketplace:
+        // the entry takes the spelling it is given now, which is the
+        // canonical one, and nothing conflicts.
+        if existing.source.same_source(&source) {
+            existing.source = source;
+            write_json(&path, &registry)?;
             return Ok(false);
         }
         return Err(UzeError::MarketplaceConflict {
@@ -307,32 +324,6 @@ pub fn marketplace_add(
     Ok(true)
 }
 
-/// Whether two identities name the same repository.
-///
-/// Equal strings are the common answer. The other one that must be yes:
-/// the same directory spelled two honest ways — `file:///srv/market` when
-/// it was registered as a URL, and `/srv/market` when a checkout with no
-/// remote answers for itself. Refusing that pair would refuse linking a
-/// marketplace to the very directory it was registered from.
-///
-/// Deliberately not a general URL comparison. Two *remote* identities that
-/// differ are treated as different, because deciding that
-/// `git@host:a/b.git` and `https://host/a/b` are one repository is a claim
-/// about a host, and this layer names none.
-fn same_repository(left: &str, right: &str) -> bool {
-    if left == right {
-        return true;
-    }
-    let as_local = |identity: &str| {
-        let path = identity.strip_prefix("file://").unwrap_or(identity);
-        std::path::Path::new(path).canonicalize().ok()
-    };
-    match (as_local(left), as_local(right)) {
-        (Some(left), Some(right)) => left == right,
-        _ => false,
-    }
-}
-
 /// Records that this machine reads `name` from `checkout`.
 ///
 /// Refuses a checkout that is a different repository from the one the
@@ -351,7 +342,7 @@ pub fn marketplace_link(home: &UzeHome, name: &str, checkout: &std::path::Path) 
     let local = crate::acquisition::marketplace::repository_of(&crate::PackageSource::Local {
         path: checkout.to_path_buf(),
     })?;
-    if !same_repository(&local.identity, &registered.identity) {
+    if !crate::acquisition::forge::same_repository(&local.identity, &registered.identity) {
         return Err(crate::UzeError::MarketplaceConflict {
             name: name.to_owned(),
             existing: registered.identity,

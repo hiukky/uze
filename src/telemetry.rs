@@ -132,7 +132,12 @@ pub fn init(sink: Sink) -> Telemetry {
     let filter = std::env::var(LOG_FILTER).ok();
     let endpoint = otlp_endpoint();
     let journals = matches!(sink, Sink::Journal { .. });
+    // Steps are always carried: they are what a person watching a command
+    // sees it doing, whatever else is switched on.
     if filter.is_none() && endpoint.is_none() && !journals {
+        let _ = tracing_subscriber::registry()
+            .with(crate::steps::layer())
+            .try_init();
         return Telemetry::default();
     }
     // `info` is what a journal nobody configured carries: the actions, the
@@ -140,10 +145,12 @@ pub fn init(sink: Sink) -> Telemetry {
     // level this trace was instrumented at. `UZE_LOG` raises or narrows
     // it for both the journal and stderr — one switch, so a person cannot
     // be reading one level and telling somebody about another.
-    let env_filter = filter
-        .as_deref()
-        .and_then(|directives| EnvFilter::try_new(directives).ok())
-        .unwrap_or_else(|| EnvFilter::new("info"));
+    let env_filter = || {
+        filter
+            .as_deref()
+            .and_then(|directives| EnvFilter::try_new(directives).ok())
+            .unwrap_or_else(|| EnvFilter::new("info"))
+    };
     let (text, journal) = match (journals, filter.is_some()) {
         (false, false) => (None, None),
         _ => {
@@ -151,12 +158,16 @@ pub fn init(sink: Sink) -> Telemetry {
             (Some(layer), guard)
         }
     };
-    let registry = tracing_subscriber::registry().with(env_filter).with(text);
+    let registry = tracing_subscriber::registry()
+        .with(crate::steps::layer())
+        .with(text.with_filter(env_filter()));
     #[cfg(feature = "telemetry")]
     if let Some(endpoint) = endpoint {
         use opentelemetry::trace::TracerProvider as _;
         let provider = otlp::provider(&endpoint);
-        let layer = tracing_opentelemetry::layer().with_tracer(provider.tracer("uze"));
+        let layer = tracing_opentelemetry::layer()
+            .with_tracer(provider.tracer("uze"))
+            .with_filter(env_filter());
         let _ = registry.with(layer).try_init();
         return Telemetry {
             provider: Some(provider),

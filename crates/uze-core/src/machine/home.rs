@@ -141,6 +141,13 @@ impl UzeHome {
         self.state_dir().join("marketplaces.json")
     }
 
+    /// The host aliases the operator added, and which one a bare
+    /// `owner/repo` resolves against. A record: nothing else knows which
+    /// forge a person meant by `work:`.
+    pub fn hosts_path(&self) -> PathBuf {
+        self.state_dir().join("hosts.json")
+    }
+
     /// UZE-owned Profiles/Preferences (durable user intent, never
     /// reconstructable from a harness's own config — hence `state_dir()`,
     /// not `cache_dir()`). Harness-specific files are projections of this,

@@ -80,6 +80,13 @@ pub(crate) trait MarketplaceDialect {
 
     fn marketplace_exists(executable: &Path, home: &Path, root: &Path) -> bool;
     fn add_marketplace(executable: &Path, home: &Path, root: &Path) -> Result<()>;
+    /// Whether the harness already has `selector` installed, for a harness
+    /// whose install is not relied on to be idempotent. Asked alongside
+    /// [`Self::marketplace_exists`], since the two are independent reads of
+    /// the same CLI.
+    fn plugin_installed(_executable: &Path, _home: &Path, _selector: &str) -> bool {
+        false
+    }
     fn install_plugin(executable: &Path, home: &Path, selector: &str) -> Result<()>;
     fn inspect_plugin(
         executable: &Path,
@@ -454,15 +461,26 @@ pub(crate) fn attach_package<D: MarketplaceDialect>(
         )
     };
     let root = marketplace_root::<D>(uze_home, origin);
-    if !D::marketplace_exists(executable, command_home, &root) {
-        D::add_marketplace(executable, command_home, &root)?;
-    }
     let selector = format!(
         "{}@{}",
         package.active_name.as_str(),
         origin.marketplace_name()
     );
-    D::install_plugin(executable, command_home, &selector)?;
+    // Two independent questions to one CLI, each a process start of its
+    // own: asked at once, they cost the slower of the two.
+    let parent = tracing::Span::current();
+    let (known, installed) = std::thread::scope(|scope| {
+        let known = scope
+            .spawn(|| parent.in_scope(|| D::marketplace_exists(executable, command_home, &root)));
+        let installed = D::plugin_installed(executable, command_home, &selector);
+        (known.join().unwrap_or(false), installed)
+    });
+    if !known {
+        D::add_marketplace(executable, command_home, &root)?;
+    }
+    if !installed {
+        D::install_plugin(executable, command_home, &selector)?;
+    }
     let mut detail: BTreeMap<String, serde_json::Value> = [
         ("marketplace_root".to_owned(), serde_json::json!(root)),
         ("package_root".to_owned(), serde_json::json!(package_root)),

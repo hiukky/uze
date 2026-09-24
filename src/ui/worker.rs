@@ -417,11 +417,12 @@ pub(crate) fn dispatch(
                 sender.clone(),
                 model.context_root.clone(),
                 move |app| {
-                    app.marketplace().add(&source).map(|added| {
-                        if added {
-                            format!("Added marketplace from {source}")
+                    app.marketplace().register(&source).map(|registration| {
+                        let identity = registration.identity;
+                        if registration.added {
+                            format!("Added marketplace from {identity}")
                         } else {
-                            format!("Marketplace from {source} is already added")
+                            format!("Marketplace from {identity} is already added")
                         }
                     })
                 },

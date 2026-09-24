@@ -136,6 +136,13 @@ impl UzeApplication {
             } => (detachable_receipts, already_missing_receipts),
             plan => return Ok(ReceiptTeardown::Refused { report, plan }),
         };
+        // Grouped by harness, and each harness undone in a thread of its
+        // own: a vendor CLI's uninstall is its own process start and work,
+        // and one harness's receipts stay in the order they were recorded.
+        let mut by_harness: Vec<(
+            &dyn IntegrationPort,
+            Vec<&uze_core::integration::AttachmentReceipt>,
+        )> = Vec::new();
         for reconciled in &report.receipts {
             if reconciled.inspection.state != AttachmentState::Matched {
                 continue;
@@ -150,7 +157,52 @@ impl UzeApplication {
                     plan: PackageRemovalPlan::BlockedByInspection,
                 });
             };
-            if integration.detach_receipt(&reconciled.receipt)?.state != AttachmentState::Missing {
+            match by_harness
+                .iter_mut()
+                .find(|(known, _)| known.id() == integration.id())
+            {
+                Some((_, receipts)) => receipts.push(&reconciled.receipt),
+                None => by_harness.push((integration.as_ref(), vec![&reconciled.receipt])),
+            }
+        }
+        if !by_harness.is_empty() {
+            let names: Vec<&str> = by_harness
+                .iter()
+                .map(|(integration, _)| integration.id())
+                .collect();
+            tracing::info!(
+                target: uze_core::acquisition::git::STEP,
+                step = "detach",
+                harness = names.join(", ")
+            );
+        }
+        let parent = tracing::Span::current();
+        let detached: Vec<Result<bool>> = std::thread::scope(|scope| {
+            let running: Vec<_> = by_harness
+                .iter()
+                .map(|(integration, receipts)| {
+                    let parent = parent.clone();
+                    scope.spawn(move || {
+                        parent.in_scope(|| {
+                            for receipt in receipts {
+                                if integration.detach_receipt(receipt)?.state
+                                    != AttachmentState::Missing
+                                {
+                                    return Ok(false);
+                                }
+                            }
+                            Ok(true)
+                        })
+                    })
+                })
+                .collect();
+            running
+                .into_iter()
+                .map(|harness| harness.join().expect("a detach thread does not panic"))
+                .collect()
+        });
+        for gone in detached {
+            if !gone? {
                 let report = self.reconcile(package_id);
                 let plan = plan_remove(&report);
                 return Ok(ReceiptTeardown::Incomplete { report, plan });

@@ -107,11 +107,13 @@ scenes:
         say: the repository the marketplace was registered from disappears
     then:
       - cmd:
-          run: "{uze} plugin install flow@demo"
+          run: "{uze} plugin update flow"
           exit: 1
         about: |
-          a plugin that is not on this disk cannot be acquired from a
-          repository that is gone, and UZE says so rather than half-trying
+          an update asks the repository where its ref is now, and one that is
+          gone cannot answer: UZE says so rather than half-trying. (Installing
+          again would answer from the mirror fetched a moment ago — a copy
+          that stands without its source, which is the point of keeping one.)
       - file: "{uze_home}/store/plugins/demo/flow/plugin.json"
         exists: true
         about: |
