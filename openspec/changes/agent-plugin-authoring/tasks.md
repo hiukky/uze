@@ -23,7 +23,7 @@
 
 ## 4. The `AGENTS.md` audience region and the Skill
 
-- [ ] 4.1 Grow the region UZE projects into `AGENTS.md` (`crates/uze-core/src/project/` context) with the authoring verbs and their loop, in the same voice as the existing `agent task name`/`agent context` documentation
+- [ ] 4.1 Grow the region UZE projects into `AGENTS.md` (`crates/uze-core/src/project/` context) with the authoring verbs and their loop, in the same voice as the existing `agent work name`/`agent context` documentation
 - [ ] 4.2 Author `plugins/uze/skills/author/SKILL.md` (`invoke: {model: true, user: true}`): the decision tree (create vs. select via `market list`), scaffold, capability flags, check-before-install, install from the linked marketplace, iterate, publish by pushing
 - [ ] 4.3 Update the root `marketplace.json` entry (the official plugin's description) for the authoring mention
 - [ ] 4.4 Regenerate the project's own projected `AGENTS.md` region and verify the Skill validates as canonical skill frontmatter (its own plugin passes `check`)

@@ -18,7 +18,7 @@ journey instead of a page of documentation read from `uze-testkit` sources.
 - **A hidden, agent-facing authoring surface** — new deterministic verbs under
   `uze agent …` (the audience already documented in the region UZE projects
   into `AGENTS.md`; hidden from `uze --help` by the same rule that hides
-  `agent task name` and `agent context`). Every verb is deterministic: same
+  `agent work name` and `agent context`). Every verb is deterministic: same
   inputs, same artifacts, no interactive prompt, JSON or plain output, and a
   non-zero exit carrying the reason when validation fails.
 - **`uze agent market create <name>`** — scaffolds a new marketplace as a Git
