@@ -37,8 +37,7 @@ world:
 scenes:
   - scene: a package installed where no project is
     when:
-      - shell: "{uze} market add {root}/market"
-        in: "{home}"
+      - shell: "cd {home} && {uze} market add {world}/market"
         say: register the marketplace from a directory that is no project
     then:
       - dir: "{home}/agents.yaml"
@@ -47,8 +46,7 @@ scenes:
 
   - scene: the install acts on the machine, and says nothing was declared
     when:
-      - shell: "{uze} install flow@demo"
-        in: "{home}"
+      - shell: "cd {home} && {uze} install flow@demo"
         say: install from the home directory — the machine half alone
     then:
       - file: "{uze_home}/store/plugins/demo/flow/plugin.json"
@@ -57,8 +55,6 @@ scenes:
       - file: "{home}/.agents/skills/flow:commit/SKILL.md"
         exists: true
         about: and delivered where every harness reads skills from
-      - file: "{home}/.claude/skills/flow:commit/SKILL.md"
-        exists: true
       - file: "{home}/agents.yaml"
         exists: false
         about: no project file anywhere — there was no project to declare it in

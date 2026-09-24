@@ -28,7 +28,7 @@ fn scratch(label: &str) -> PathBuf {
 /// from what the parsers accept, because a drift is this test failing.
 #[test]
 fn every_scaffold_passes_its_own_check() -> Result<()> {
-    git_identity();
+    let _git_identity = git_identity();
     for (hook, mcp, instructions) in [
         (false, false, false),
         (true, false, false),
@@ -104,7 +104,7 @@ fn authoring_scaffold_meets_the_budget() -> Result<()> {
 
 #[test]
 fn create_refuses_to_collide() -> Result<()> {
-    git_identity();
+    let _git_identity = git_identity();
     let root = scratch("authoring-refusal");
     let market = scaffold_marketplace("tools", None, &root.join("market"))?;
     // The same name again from a different directory is refused only at the
@@ -129,7 +129,7 @@ fn create_refuses_to_collide() -> Result<()> {
 
 #[test]
 fn check_reports_what_install_would_refuse() -> Result<()> {
-    git_identity();
+    let _git_identity = git_identity();
     let root = scratch("authoring-check-fail");
     let market = scaffold_marketplace("tools", None, &root.join("market"))?;
     let plugin = scaffold_plugin(&market, "greet", None, false, false, false)?;
@@ -170,7 +170,7 @@ fn check_reports_what_install_would_refuse() -> Result<()> {
 
 #[test]
 fn the_marketplace_check_covers_its_plugins() -> Result<()> {
-    git_identity();
+    let _git_identity = git_identity();
     let root = scratch("authoring-market-check");
     let market = scaffold_marketplace("tools", None, &root.join("market"))?;
     let plugin = scaffold_plugin(&market, "greet", None, true, false, false)?;

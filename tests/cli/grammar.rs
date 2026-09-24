@@ -174,7 +174,9 @@ fn status_is_the_builtin() {
     let output = uze(&home).args(["status"]).output().unwrap();
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("Project"));
+    // A temp home is no project, so `status` answers the machine read
+    // model — the absence of a project is an answer, not a fault.
+    assert!(stdout.contains("Machine status"), "{stdout}");
     let _ = std::fs::remove_dir_all(home);
 }
 
@@ -337,7 +339,7 @@ fn every_public_help_route_uses_the_uze_renderer_and_dash_help_is_rejected() {
     }
     for (command, title) in [
         ("market", "UZE market"),
-        ("plugin", "UZE plugin"),
+        ("config", "UZE config"),
         ("setup", "UZE setup"),
     ] {
         let output = uze(&home).args([command, "--help"]).output().unwrap();

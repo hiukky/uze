@@ -412,6 +412,15 @@ impl Marketplace<'_> {
         uze_core::state::marketplace_add(&self.0.home, &name, source.clone())
     }
 
+    /// [`Self::register`], for a caller that already holds a typed source.
+    ///
+    /// A local directory that is not a repository yet still registers —
+    /// its installs will say what it lacks — and names only itself.
+    #[tracing::instrument(name = "marketplace.register_source", skip_all, err)]
+    pub fn register_typed_source(&self, source: &PackageSource) -> Result<bool> {
+        self.register_source(source)
+    }
+
     /// The host aliases this machine resolves, built-ins first.
     #[tracing::instrument(name = "marketplace.hosts", skip_all, err)]
     pub fn hosts(&self) -> Result<Vec<uze_core::hosts::HostEntry>> {

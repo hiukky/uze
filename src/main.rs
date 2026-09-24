@@ -554,10 +554,11 @@ fn argv_lossy() -> Vec<String> {
 /// naming its replacement is a removal the next caller repeats wrong.
 fn removed_spelling(argv: &[String]) -> Option<String> {
     let spoken = |words: &[&str]| {
-        words
-            .iter()
-            .zip(argv.iter().map(String::as_str))
-            .all(|(word, given)| word.eq_ignore_ascii_case(given))
+        words.len() == argv.len()
+            && words
+                .iter()
+                .zip(argv.iter().map(String::as_str))
+                .all(|(word, given)| word.eq_ignore_ascii_case(given))
     };
     if argv.first().is_some_and(|first| first == "plugin") {
         return Some(
@@ -1422,11 +1423,11 @@ fn run_config(app: &UzeApplication, home: &UzeHome, action: ConfigAction) -> Res
                 } else {
                     println!(
                         "{}",
-                        progress::key_value("Finished turns ring", chime_label(chime).to_owned())
+                        progress::key_value("Finished turns ring", chime_label(chime))
                     );
                 }
             }
-            Some(state) if state == "test" => {
+            Some("test") => {
                 // Ring once, whatever the choice in force: the answer to
                 // "does this machine actually speak?" asked where the
                 // choice was just made. The choice itself is untouched.

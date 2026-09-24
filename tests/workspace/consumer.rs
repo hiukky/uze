@@ -62,7 +62,7 @@ impl Fixture {
             project_root: base.join("project"),
             marketplace_root: base.join("market"),
         };
-        fs::create_dir_all(&fixture.project_root).unwrap();
+        fs::create_dir_all(fixture.project_root.join(".git")).unwrap();
         write_marketplace(&fixture.marketplace_root, "test-market", "flow");
         fixture
     }
@@ -465,7 +465,7 @@ fn a_plugin_from_a_git_marketplace_is_pinned_to_a_commit_and_a_digest() {
 
     let base = uze_testkit::temp::scratch("git-market-pin-base");
     let (home, project) = (base.join("home"), base.join("project"));
-    fs::create_dir_all(&project).unwrap();
+    fs::create_dir_all(project.join(".git")).unwrap();
     uze_core::state::marketplace_add(
         &UzeHome::at(&home),
         "git-market",
@@ -499,7 +499,7 @@ fn reproduction_reads_the_locked_commit_after_the_marketplace_moved() {
 
     let base = uze_testkit::temp::scratch("git-market-moved-base");
     let (home, project) = (base.join("home"), base.join("project"));
-    fs::create_dir_all(&project).unwrap();
+    fs::create_dir_all(project.join(".git")).unwrap();
     uze_core::state::marketplace_add(
         &UzeHome::at(&home),
         "git-market",
@@ -537,7 +537,7 @@ fn reproduction_refuses_bytes_that_are_not_the_bytes_the_lock_pinned() {
 
     let base = uze_testkit::temp::scratch("git-market-tampered-base");
     let (home, project) = (base.join("home"), base.join("project"));
-    fs::create_dir_all(&project).unwrap();
+    fs::create_dir_all(project.join(".git")).unwrap();
     uze_core::state::marketplace_add(
         &UzeHome::at(&home),
         "git-market",
@@ -810,7 +810,7 @@ fn project_root_resolution_is_deterministic_from_a_subdirectory() {
     let nested = fx.project_root.join("a/b/c");
     fs::create_dir_all(&nested).unwrap();
     let resolved = project_root::resolve_project_root(&nested).unwrap();
-    assert_eq!(resolved, fx.project_root.canonicalize().unwrap());
+    assert_eq!(resolved, Some(fx.project_root.canonicalize().unwrap()));
 }
 
 /// Drift along the chain a project's environment passes through, and what

@@ -914,8 +914,8 @@ fn a_blocked_removal_reports_and_fails() {
             .env("HOME", &home)
             .env("PATH", &path)
             .args([
-                "plugin",
                 "remove",
+                "-m",
                 "uze-agent-skill-conformance",
                 "--format",
                 format,
@@ -961,22 +961,22 @@ fn a_blocked_update_reports_and_fails() {
         .env("HOME", &home)
         .env("PATH", &path)
         .args([
-            "plugin",
             "update",
+            "-m",
             "uze-agent-skill-conformance",
             "--format",
             "json",
         ])
         .output()
         .unwrap();
-    let stdout = String::from_utf8_lossy(&update.stdout);
+    let stderr = String::from_utf8_lossy(&update.stderr);
     assert!(
-        stdout.contains("Blocked"),
-        "the report must still say what happened, got: {stdout}"
+        stderr.contains("blocked"),
+        "the report must still say what happened, got: {stderr}"
     );
     assert!(
         !update.status.success(),
-        "a blocked update reported success: {stdout}"
+        "a blocked update reported success: {stderr}"
     );
 
     let _ = std::fs::remove_dir_all(home);

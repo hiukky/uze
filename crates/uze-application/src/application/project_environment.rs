@@ -487,6 +487,7 @@ impl Project<'_> {
                 .collect(),
         };
         let mut outcomes = Vec::new();
+        let mut held_back: Option<(String, (ReconciliationReport, PackageRemovalPlan))> = None;
         for id in targets {
             match self.0.plugins().update(&id, authority) {
                 Ok(UpdatePluginReport::Updated { .. }) => {
@@ -500,11 +501,12 @@ impl Project<'_> {
                         revision,
                     });
                 }
-                Ok(UpdatePluginReport::Blocked { .. }) => {
-                    outcomes.push(UpdateOutcome::Held {
-                        plugin: id,
-                        reason: "managed state has drifted; nothing was changed".to_owned(),
-                    });
+                Ok(UpdatePluginReport::Blocked { report, plan }) => {
+                    // A blocked update is reported *and* failed: the exit
+                    // status is the contract a script reads (`update -m x
+                    // && …` must never be told the update happened).
+                    held_back = Some((id, (report, plan)));
+                    break;
                 }
                 Err(UzeError::TrustRequired { detail, .. }) => {
                     outcomes.push(UpdateOutcome::Held {
@@ -517,6 +519,12 @@ impl Project<'_> {
                 }
                 Err(error) => return Err(error),
             }
+        }
+        if let Some((_, (report, plan))) = held_back {
+            return Err(UzeError::LifecycleBlocked(format!(
+                "update of `{}` was blocked ({plan:?}); nothing was changed",
+                report.package_id
+            )));
         }
         Ok(UpdateReport {
             reconciled: false,

@@ -96,7 +96,7 @@ mod tests {
         assert_eq!(market[0], "market");
         assert_eq!(market[1], "add");
         assert!(market[2].ends_with("market"));
-        assert_eq!(install, vec!["plugin", "install", "demo@test"]);
+        assert_eq!(install, vec!["install", "-m", "demo@test"]);
         let marketplace: serde_json::Value = serde_json::from_str(
             &fs::read_to_string(root.join("market/marketplace.json")).unwrap(),
         )

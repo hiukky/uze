@@ -29,7 +29,7 @@ fn status_reports_healthy_with_zero_issues_once_reconciled() {
     let application = app(&root, true);
     install(&application, fixture_a());
     let project = root.join("project");
-    fs::create_dir_all(&project).unwrap();
+    fs::create_dir_all(project.join(".git")).unwrap();
     application.context().reconcile(&project).unwrap();
 
     let status = application.health().status(&project).unwrap();
@@ -45,7 +45,7 @@ fn status_surfaces_a_missing_bridge_as_an_issue_before_reconcile() {
     let application = app(&root, true);
     install(&application, fixture_a());
     let project = root.join("project");
-    fs::create_dir_all(&project).unwrap();
+    fs::create_dir_all(project.join(".git")).unwrap();
 
     let status = application.health().status(&project).unwrap();
     assert!(!status.issues.is_empty());
@@ -64,7 +64,7 @@ fn status_distinguishes_installed_from_contributing_here() {
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("plugins/uze"),
     );
     let project = root.join("project");
-    fs::create_dir_all(&project).unwrap();
+    fs::create_dir_all(project.join(".git")).unwrap();
     application.context().reconcile(&project).unwrap();
 
     let status = application.health().status(&project).unwrap();
@@ -184,7 +184,7 @@ fn context_inspect_never_writes_anything_in_a_populated_project() {
     let application = app(&root, true);
     install(&application, fixture_a());
     let project = root.join("project");
-    fs::create_dir_all(&project).unwrap();
+    fs::create_dir_all(project.join(".git")).unwrap();
     // Reconcile once so there's real managed state to inspect.
     application.context().reconcile(&project).unwrap();
 
@@ -204,7 +204,7 @@ fn context_plan_never_writes_anything() {
     let application = app(&root, true);
     install(&application, fixture_a());
     let project = root.join("project");
-    fs::create_dir_all(&project).unwrap();
+    fs::create_dir_all(project.join(".git")).unwrap();
 
     // Before any reconcile at all — the state with the most "would create"
     // actions, and therefore the state most tempting to accidentally write.
@@ -225,7 +225,7 @@ fn a_project_with_only_claude_md_is_vendor_locked() {
     let root = temp("claude-only");
     let application = app(&root, true);
     let project = root.join("project");
-    fs::create_dir_all(&project).unwrap();
+    fs::create_dir_all(project.join(".git")).unwrap();
     fs::write(project.join("CLAUDE.md"), "# My Claude-only instructions\n").unwrap();
 
     let before = snapshot(&project);
@@ -247,7 +247,7 @@ fn agents_md_plus_a_bridging_claude_md_is_portable() {
     let application = app(&root, true);
     install(&application, fixture_a());
     let project = root.join("project");
-    fs::create_dir_all(&project).unwrap();
+    fs::create_dir_all(project.join(".git")).unwrap();
     application.context().reconcile(&project).unwrap();
 
     let status = application.context().inspect(&project).unwrap();
@@ -267,7 +267,7 @@ fn an_absent_bridge_harness_shows_not_detected_not_a_gap() {
     let application = app(&root, false); // Claude Code absent
     install(&application, fixture_a());
     let project = root.join("project");
-    fs::create_dir_all(&project).unwrap();
+    fs::create_dir_all(project.join(".git")).unwrap();
     application.context().reconcile(&project).unwrap();
 
     let status = application.context().inspect(&project).unwrap();
@@ -287,7 +287,7 @@ fn scenario_a_manual_claude_md_survives_untouched() {
     let root = temp("scenario-a");
     let application = app(&root, true);
     let project = root.join("project");
-    fs::create_dir_all(&project).unwrap();
+    fs::create_dir_all(project.join(".git")).unwrap();
     fs::write(
         project.join("CLAUDE.md"),
         "My hand-written Claude instructions.\n",
@@ -315,7 +315,7 @@ fn scenario_c_unrecognized_vendor_file_survives_untouched() {
     let root = temp("scenario-c");
     let application = app(&root, true);
     let project = root.join("project");
-    fs::create_dir_all(&project).unwrap();
+    fs::create_dir_all(project.join(".git")).unwrap();
     fs::write(
         project.join("VENDOR-NOTES.md"),
         "Notes, unrelated to UZE.\n",
@@ -334,7 +334,7 @@ fn scenario_d_manual_agents_md_with_no_packages_is_left_alone() {
     let root = temp("scenario-d");
     let application = app(&root, false);
     let project = root.join("project");
-    fs::create_dir_all(&project).unwrap();
+    fs::create_dir_all(project.join(".git")).unwrap();
     fs::write(project.join("AGENTS.md"), "My own project conventions.\n").unwrap();
 
     let before = fs::read(project.join("AGENTS.md")).unwrap();
@@ -361,7 +361,7 @@ fn scenario_e_manual_agents_md_plus_uze_region_coexist() {
     let application = app(&root, false);
     install(&application, fixture_a());
     let project = root.join("project");
-    fs::create_dir_all(&project).unwrap();
+    fs::create_dir_all(project.join(".git")).unwrap();
     fs::write(
         project.join("AGENTS.md"),
         "# My own conventions\n\nAlways write tests.\n",
@@ -393,7 +393,7 @@ fn scenario_f_manual_claude_md_content_plus_bridge_coexist() {
     let application = app(&root, true);
     install(&application, fixture_a());
     let project = root.join("project");
-    fs::create_dir_all(&project).unwrap();
+    fs::create_dir_all(project.join(".git")).unwrap();
     fs::write(
         project.join("CLAUDE.md"),
         "## My personal Claude workflow notes\n",
@@ -435,7 +435,7 @@ fn all_recognized_files_together_are_fully_portable() {
     let application = app(&root, true);
     install(&application, fixture_a());
     let project = root.join("project");
-    fs::create_dir_all(&project).unwrap();
+    fs::create_dir_all(project.join(".git")).unwrap();
     fs::write(project.join("CLAUDE.md"), "## My Claude workflow notes\n").unwrap();
 
     application.context().reconcile(&project).unwrap();
@@ -468,7 +468,7 @@ fn context_operations_never_alter_the_installed_package_set() {
     let application = app(&root, true);
     install(&application, fixture_a());
     let project = root.join("project");
-    fs::create_dir_all(&project).unwrap();
+    fs::create_dir_all(project.join(".git")).unwrap();
 
     let before = application.plugins().list().unwrap();
     application.context().inspect(&project).unwrap();

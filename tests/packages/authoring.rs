@@ -7,9 +7,7 @@
 //! (`package::authoring::tests`); this suite proves the *orchestration*:
 //! what the machine registry and the Store carry once the verbs have run.
 
-use std::{fs, path::PathBuf, process::Command};
-
-use uze_testkit::marketplace::marketplace_install_args;
+use std::{fs, process::Command};
 
 fn uze_bin() -> &'static str {
     env!("CARGO_BIN_EXE_uze")
@@ -165,16 +163,10 @@ fn a_scaffolded_plugin_is_installable_before_any_second_commit() {
 
     // And it installs: the linked marketplace reads the working tree, so
     // nothing has been committed since the scaffold's initial commit.
-    let (market_args, mut install_args) = marketplace_install_args(&root, &plugin_root);
-    // marketplace_install_args stages its own marketplace; the one the
-    // scaffold made is already registered, so only the install runs.
-    let _ = market_args;
-    install_args = vec![
-        "install".to_owned(),
-        "-m".to_owned(),
-        "greet@tools".to_owned(),
-    ];
-    let install = uze(&root).args(&install_args).output().unwrap();
+    let install = uze(&root)
+        .args(["install", "-m", "greet@tools"])
+        .output()
+        .unwrap();
     assert!(
         install.status.success(),
         "install from the linked marketplace failed: {}",

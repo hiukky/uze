@@ -37,7 +37,7 @@ design.md, "Ordering against the freshness change".
 - [x] 2.8 `uze status` with no project is a machine read model, not
       `ProjectLockStatus::Absent` reported as a fault; `uze update` with no
       project re-resolves every installed package from its own source
-- [ ] 2.9 `AgentTaskAction` → `AgentWorkAction`: `uze agent work name`
+- [x] 2.9 `AgentTaskAction` → `AgentWorkAction`: `uze agent work name`
       spelling; the projected `AGENTS.md` region, `docs/observability.md`,
       `docs/architecture/agent-lifecycle.mmd`, `plugins/uze/skills/**`
       references and the journey `04-workspace/03-naming-the-work.yml` all
@@ -55,7 +55,7 @@ design.md, "Ordering against the freshness change".
 - [x] 3.1 `conformance/harnesses/{claude,codex,opencode,antigravity}/scenarios.py`
       use `uze <p>@uze-lab -m`; update `conformance/DECISIONS.md:529` to say
       the guarantee is now explicit rather than positional
-- [ ] 3.2 `make lab-replay` and one real vertical pass
+- [x] 3.2 `make lab-replay` and one real vertical pass
 - [x] 3.3 `plugins/uze/skills/**` and `docs/**` carry the new spellings
 - [x] 3.4 Fix the ~18 `ADR-038` citations that mean **ADR-036**
       (`naming.rs`, `store.rs`, `install.rs`, `update.rs`, `read_models.rs`,
@@ -77,16 +77,16 @@ design.md, "Ordering against the freshness change".
 - [x] 4.5 New: `-m` inside a project installs and declares nothing —
       `agents.lock` byte-identical across the command
 - [x] 4.6 `journey validate` passes and `journey list` reads correctly
-- [ ] 4.7 New: the chime choice made from the CLI is the choice the
+- [x] 4.7 New: the chime choice made from the CLI is the choice the
       workspace client shows (`uze config notification on` → the drawer's
       card reflects it; `test` rings with the choice still Silent)
 
 ## 5. Gate
 
-- [ ] 5.1 `docs/architecture/invariants.md` — the scope rule and the anchor
+- [x] 5.1 `docs/architecture/invariants.md` — the scope rule and the anchor
       rule, each naming the test that holds it
-- [ ] 5.2 `make check` (fmt, clippy `--all-targets -D warnings`, workspace
+- [x] 5.2 `make check` (fmt, clippy `--all-targets -D warnings`, workspace
       tests, coverage floor, `cargo deny`, `openspec validate --all
       --strict`)
-- [ ] 5.3 Verify by hand: adopt UZE in a fresh repository, use a plugin from
+- [x] 5.3 Verify by hand: adopt UZE in a fresh repository, use a plugin from
       `$HOME`, and confirm neither wrote where the other should have

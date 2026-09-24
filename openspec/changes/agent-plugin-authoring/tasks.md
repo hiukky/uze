@@ -32,4 +32,4 @@
 
 - [x] 5.1 `tests/packages/authoring.rs`: scaffold→register→link contract, born-linked delivery (install before a second commit), refusal cases, check reports (clean and each finding class)
 - [x] 5.2 A product journey in `journeys/02-packages`: agent performs create → plugin create → check → install from the linked marketplace; every check reads the filesystem and the Store, never UZE's own report — written in the post-flatten grammar
-- [ ] 5.3 `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, the full workspace suite, and the architecture suite green (no new spawn convention; no vendor names in core)
+- [x] 5.3 `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, the full workspace suite, and the architecture suite green (no new spawn convention; no vendor names in core)

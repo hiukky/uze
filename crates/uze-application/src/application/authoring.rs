@@ -8,9 +8,9 @@
 //! directory it was scaffolded in, so installs read the author's working
 //! tree — including not-yet-committed files — from the first moment.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
-use uze_core::{Result, UzeError, authoring};
+use uze_core::{PackageSource, Result, UzeError, authoring};
 
 use super::services::Project;
 
@@ -28,14 +28,18 @@ impl Project<'_> {
         &self,
         name: &str,
         description: Option<&str>,
-        at: &PathBuf,
+        at: &Path,
     ) -> Result<MarketplaceCreated> {
         let root = authoring::scaffold_marketplace(name, description, at)?;
         let _mutation = uze_core::persistence::MutationLock::acquire(&self.0.home)?;
-        // The same `market add` path an operator's registration takes —
+        // The same registration path an operator's `market add` takes —
         // the manifest is validated the same way, and the marketplace is
-        // named by what the manifest itself says.
-        self.0.marketplace().add(&root.to_string_lossy())?;
+        // named by what the manifest itself says. The source is handed
+        // over typed: an author's directory is a local path, never a
+        // shorthand to guess at.
+        self.0
+            .marketplace()
+            .register_typed_source(&PackageSource::Local { path: root.clone() })?;
         uze_core::state::marketplace_link(&self.0.home, name, &root)?;
         self.0.marketplace_catalogues.invalidate(name);
         Ok(MarketplaceCreated {
@@ -88,11 +92,7 @@ impl Project<'_> {
     /// The offline check: what the authored artifact would deliver, and
     /// every finding the install would have surfaced.
     #[tracing::instrument(name = "authoring.check", skip_all, fields(path = %path.display()), err)]
-    pub fn check(
-        &self,
-        path: &PathBuf,
-        as_marketplace: bool,
-    ) -> Result<authoring::ValidationReport> {
+    pub fn check(&self, path: &Path, as_marketplace: bool) -> Result<authoring::ValidationReport> {
         if as_marketplace {
             authoring::check_marketplace(path)
         } else {

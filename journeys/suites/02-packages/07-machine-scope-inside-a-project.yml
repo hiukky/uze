@@ -38,7 +38,7 @@ world:
 scenes:
   - scene: the project has a lock, and the command is about to leave it alone
     when:
-      - shell: "{uze} market add {root}/market"
+      - shell: "{uze} market add {world}/market"
       - shell: "{uze} install flow@demo"
         say: declare the package the project's own way first
     then:

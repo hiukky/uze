@@ -56,7 +56,7 @@ fn remove_lifecycle_cleans_artifacts_and_keeps_project_lock_untouched() {
 
     let list = env.run_ok(uze_bin(), &["status", "-m", "--format", "json"]);
     let json: serde_json::Value = serde_json::from_slice(&list.stdout).expect("json list");
-    let ids: Vec<&str> = json
+    let ids: Vec<&str> = json["packages"]
         .as_array()
         .unwrap()
         .iter()

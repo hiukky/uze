@@ -129,7 +129,7 @@ fn a_single_package_composes_agents_md_and_bridges_only_present_harnesses() {
     install(&application, fixture_a());
 
     let project = root.join("project");
-    fs::create_dir_all(&project).unwrap();
+    fs::create_dir_all(project.join(".git")).unwrap();
     // A: baseline — before reconciling, UZE has written nothing into the project.
     assert!(!project.join("AGENTS.md").exists());
     assert!(!project.join("CLAUDE.md").exists());
@@ -167,7 +167,7 @@ fn an_absent_bridge_harness_receives_no_bridge_file_at_all() {
     let application = app(&root, false);
     install(&application, fixture_a());
     let project = root.join("project");
-    fs::create_dir_all(&project).unwrap();
+    fs::create_dir_all(project.join(".git")).unwrap();
 
     let _report = application.context().reconcile(&project).unwrap();
     assert!(
@@ -185,7 +185,7 @@ fn editing_outside_the_managed_region_stays_matched_editing_inside_becomes_drift
     let application = app(&root, false);
     install(&application, fixture_a());
     let project = root.join("project");
-    fs::create_dir_all(&project).unwrap();
+    fs::create_dir_all(project.join(".git")).unwrap();
     application.context().reconcile(&project).unwrap();
 
     // F: user prose appended around the managed region.
@@ -228,7 +228,7 @@ fn a_matched_region_can_be_cleanly_removed_preserving_user_content() {
     let application = app(&root, false);
     install(&application, fixture_a());
     let project = root.join("project");
-    fs::create_dir_all(&project).unwrap();
+    fs::create_dir_all(project.join(".git")).unwrap();
     let agents_md = project.join("AGENTS.md");
     fs::write(&agents_md, "user text A\n").unwrap();
     application.context().reconcile(&project).unwrap();
@@ -262,7 +262,7 @@ fn a_still_installed_packages_drifted_region_is_reported_and_never_rewritten() {
     let application = app(&root, false);
     install(&application, fixture_a());
     let project = root.join("project");
-    fs::create_dir_all(&project).unwrap();
+    fs::create_dir_all(project.join(".git")).unwrap();
     application.context().reconcile(&project).unwrap();
 
     let agents_md = project.join("AGENTS.md");
@@ -290,7 +290,7 @@ fn an_orphaned_regions_cleanup_is_structural_not_content_verified_but_still_refu
     let application = app(&root, false);
     install(&application, fixture_a());
     let project = root.join("project");
-    fs::create_dir_all(&project).unwrap();
+    fs::create_dir_all(project.join(".git")).unwrap();
     application.context().reconcile(&project).unwrap();
 
     // Even content edited post-hoc inside an about-to-be-orphaned region is
@@ -329,7 +329,7 @@ fn a_drifted_bridge_line_blocks_its_own_removal_even_after_the_last_package_is_g
     let application = app(&root, true);
     install(&application, fixture_a());
     let project = root.join("project");
-    fs::create_dir_all(&project).unwrap();
+    fs::create_dir_all(project.join(".git")).unwrap();
     application.context().reconcile(&project).unwrap();
 
     let claude_md = project.join("CLAUDE.md");
@@ -360,7 +360,7 @@ fn two_packages_share_one_agents_md_and_exactly_one_bridge_per_harness() {
     install(&application, fixture_a());
     install(&application, fixture_b());
     let project = root.join("project");
-    fs::create_dir_all(&project).unwrap();
+    fs::create_dir_all(project.join(".git")).unwrap();
 
     let report = application.context().reconcile(&project).unwrap();
     assert_eq!(report.packages.len(), 2);
@@ -438,7 +438,7 @@ fn reconciling_repeatedly_never_duplicates_regions_or_bridges() {
     let application = app(&root, true);
     install(&application, fixture_a());
     let project = root.join("project");
-    fs::create_dir_all(&project).unwrap();
+    fs::create_dir_all(project.join(".git")).unwrap();
 
     application.context().reconcile(&project).unwrap();
     let after_first = fs::read_to_string(project.join("AGENTS.md")).unwrap();
@@ -476,7 +476,7 @@ fn reconcile_never_touches_the_project_when_no_package_provides_instructions() {
     let root = temp("no-instructions");
     let application = app(&root, true);
     let project = root.join("project");
-    fs::create_dir_all(&project).unwrap();
+    fs::create_dir_all(project.join(".git")).unwrap();
     fs::write(project.join("AGENTS.md"), "just my own notes\n").unwrap();
 
     let report = application.context().reconcile(&project).unwrap();
@@ -500,7 +500,7 @@ fn a_foreign_looking_managed_region_outside_our_naming_shape_is_left_untouched()
     let root = temp("foreign-region");
     let application = app(&root, false);
     let project = root.join("project");
-    fs::create_dir_all(&project).unwrap();
+    fs::create_dir_all(project.join(".git")).unwrap();
     fs::write(
         project.join("AGENTS.md"),
         "<!-- uze:begin some-other-concern -->\nnot ours\n<!-- uze:end some-other-concern -->\n",
