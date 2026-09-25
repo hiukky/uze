@@ -13,6 +13,7 @@ use std::path::{Path, PathBuf};
 use uze_core::{
     PackageSource, Result, UzeError,
     authoring::{self, ScaffoldCapabilities},
+    manifest::BUILT_IN_MARKETPLACE,
     project_root,
 };
 
@@ -34,8 +35,9 @@ impl Project<'_> {
         description: Option<&str>,
         at: &Path,
     ) -> Result<MarketplaceCreated> {
-        let root = authoring::scaffold_marketplace(name, description, at)?;
         let _mutation = uze_core::persistence::MutationLock::acquire(&self.0.home)?;
+        self.refuse_a_taken_name(name)?;
+        let root = authoring::scaffold_marketplace(name, description, at)?;
         // The same registration path an operator's `market add` takes —
         // the manifest is validated the same way, and the marketplace is
         // named by what the manifest itself says. The source is handed
@@ -79,9 +81,15 @@ impl Project<'_> {
                     .to_owned(),
             });
         };
+        let _mutation = uze_core::persistence::MutationLock::acquire(&self.0.home)?;
+        self.refuse_a_taken_name(name)?;
+        // The link needs a revision to read; asked now, a project with no
+        // commit is told so before it carries a manifest it cannot use.
+        uze_core::acquisition::marketplace::repository_of(&PackageSource::Local {
+            path: canonical.clone(),
+        })?;
         let (root, _) =
             authoring::scaffold_local_marketplace(name, description, &canonical, plugins_dir)?;
-        let _mutation = uze_core::persistence::MutationLock::acquire(&self.0.home)?;
         self.0
             .marketplace()
             .register_typed_source(&PackageSource::Local { path: root.clone() })?;
@@ -92,6 +100,22 @@ impl Project<'_> {
             root,
             committed: false,
         })
+    }
+
+    /// A scaffold names a marketplace the registry does not know yet: the
+    /// registration after it would otherwise fail with the directory
+    /// already written and committed.
+    fn refuse_a_taken_name(&self, name: &str) -> Result<()> {
+        if name == BUILT_IN_MARKETPLACE {
+            return Err(UzeError::ReservedMarketplace(name.to_owned()));
+        }
+        if uze_core::state::marketplace_get(&self.0.home, name)?.is_some() {
+            return Err(UzeError::MarketplaceScaffold(format!(
+                "`{name}` is already registered on this machine — choose another name, or \
+                 author into it with `uze agent plugin create <plugin> --market {name}`"
+            )));
+        }
+        Ok(())
     }
 
     /// Scaffolds one plugin inside a marketplace this machine knows by

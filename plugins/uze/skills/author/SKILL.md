@@ -50,10 +50,14 @@ uze agent market create <name> --local [--plugins-dir <dir>]
 ```
 
 This writes `marketplace.json` at the project root and the plugins in
-`plugins/` — the layout this repository itself is one in. No Git state is
-written and no commit is made: the project's own flow carries them, so an
-author working in an isolated checkout reaches the marketplace through
-delivery, like every other piece of project content. A project that
+`--plugins-dir` (default `plugins/`) — the layout this repository itself is
+one in. A directory other than the default is recorded in the manifest, so
+every later `plugin create` puts its plugin there too. The project needs a
+commit first: the marketplace is linked to it, and a link reads a
+repository with at least one revision. No Git state is written and no
+commit is made: the project's own flow carries them, so an author working
+in an isolated checkout reaches the marketplace through delivery, like
+every other piece of project content. A project that
 already carries a `marketplace.json` is refused with that fact — add the
 plugin to it directly.
 
@@ -61,21 +65,26 @@ plugin to it directly.
 
 ```bash
 uze agent plugin create <name> --market <market> [--description "…"] \
-    [--hook] [--mcp] [--instructions]
+    [--hook] [--mcp] [--agent] [--instructions]
 ```
 
 The default is a skill plugin: `plugin.json` plus
 `skills/<name>/SKILL.md` — edit the skill body, and choose the
 `invoke:` policy deliberately (who may trigger it). `--hook` adds a
 portable `hooks.json` and a handler stub obeying the `HOOK_*`/exit-code
-contract; `--mcp` adds an `mcp.json` with one server stub; `--instructions`
-adds a prose contribution the project's `AGENTS.md` composes when it
-reconciles. Every generated file carries commented field documentation.
+contract; `--mcp` adds an `mcp.json` and a working stdio server stub under
+`scripts/` (keep its stdout for the protocol alone — log to stderr);
+`--agent` adds an agent definition under `agents/<name>.md`;
+`--instructions` adds a prose contribution the project's `AGENTS.md`
+composes when it reconciles. Every generated file carries commented field
+documentation. A file the plugin ships is named `${PLUGIN_ROOT}/…` in
+`hooks.json` and `mcp.json` alike — UZE resolves it to the installed copy
+for every harness; anything else is reached through `PATH`.
 
 ## 3. Check, always before install
 
 ```bash
-uze agent plugin check <plugins/<name>>
+uze agent plugin check <the plugin's directory>
 uze agent market check <market directory>
 ```
 

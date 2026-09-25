@@ -179,6 +179,18 @@ fn a_blocked_package_keeps_the_marketplace_registered() {
         String::from_utf8_lossy(&list.stdout).contains("purge-market"),
         "the marketplace stays registered while a leftover remains"
     );
+
+    let store = uze_core::UzeHome::at(&env.uze_home)
+        .plugins_dir()
+        .join("purge-market");
+    assert!(
+        store.join("flow").is_dir(),
+        "the blocked package keeps its Store bytes"
+    );
+    assert!(
+        !store.join("uze-mcp-conformance").exists(),
+        "the package whose teardown was not blocked came off the Store"
+    );
 }
 
 #[test]

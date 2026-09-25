@@ -482,6 +482,9 @@ impl Marketplace<'_> {
             return Err(UzeError::ReservedMarketplace(name.to_owned()));
         }
         let _mutation = uze_core::persistence::MutationLock::acquire(&self.0.home)?;
+        // Removal changes vendor-visible state; cached inspection verdicts
+        // must not outlive it (ADR 018).
+        self.0.inspection_cache.invalidate();
         // Taking a marketplace off the machine takes what it delivered with
         // it: every package the Store holds from this marketplace goes
         // through the same teardown a per-package removal runs —
@@ -1005,5 +1008,40 @@ mod mirror_tests {
         );
 
         fs::remove_dir_all(&home_root).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod removal_tests {
+    use crate::UzeApplication;
+    use uze_core::integration::{AttachmentInspection, AttachmentState};
+    use uze_core::{PackageSource, UzeHome};
+
+    #[test]
+    fn removing_a_marketplace_invalidates_the_inspection_cache() {
+        let base = uze_testkit::temp::scratch("market-remove-invalidates");
+        let home = UzeHome::at(base.join("home"));
+        let application = UzeApplication::new(home.clone(), Vec::new());
+        uze_core::state::marketplace_add(
+            &home,
+            "tools",
+            PackageSource::Local {
+                path: base.join("tools"),
+            },
+        )
+        .unwrap();
+        let matched = AttachmentInspection {
+            state: AttachmentState::Matched,
+            reason: String::new(),
+        };
+        application.inspection_cache.put("ledger", &matched, None);
+
+        application.marketplace().remove("tools").unwrap();
+
+        assert!(
+            application.inspection_cache.get("ledger", None).is_none(),
+            "a verdict cached before the removal must not outlive it"
+        );
+        std::fs::remove_dir_all(&base).ok();
     }
 }

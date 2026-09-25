@@ -5,6 +5,7 @@ name: {SKILL_NAME}
 
 # Two lines that decide who finds this skill: the long text is what the
 # model matches an invocation against, so say what it is for, not what it is.
+# Keep it double-quoted: in plain text a `: ` breaks the value and ` #` starts a comment.
 description: {SKILL_DESCRIPTION}
 
 # Who may invoke this skill (ADR-030). `model: true` lets the model pick it
@@ -17,11 +18,9 @@ description: {SKILL_DESCRIPTION}
 invoke:
   model: true
   user: true
-
-# Everything below this line is the skill's body, read only when it runs.
-# Instructions here weigh against the work the skill is asked for.
 ---
 Replace this paragraph with what the skill actually does, in the order a
 reader needs it: the situation it answers, the steps it performs, and what
-it must never do. Keep it short — it is loaded when the skill is invoked,
-not before.
+it must never do. Everything below the closing `---` is the skill's body,
+read only when it runs, and its instructions weigh against the work the
+skill is asked for — keep it short.

@@ -8,8 +8,8 @@ about: |
   offline check is the licence to install; and the install reads the
   working tree, so nothing has to be committed for the bytes to reach a
   harness. Every `then` here reads the filesystem, Git and the machine's
-  own registry — UZE's report is the subject of a `cmd` step, never the
-  source of truth.
+  own registry file — UZE's report is the subject of a `cmd` step, never
+  the source of truth.
 
 world:
   project: demo-app
@@ -31,10 +31,9 @@ scenes:
           run: "sh -c 'git -C {world}/tools-market rev-parse --verify HEAD'"
           exit: 0
         about: Git is where the identity contract is actually kept — one commit, made
-      - cmd:
-          run: "{uze} market list --format json"
-          stdout_contains: "\"tools\""
-        about: the machine registry answers for the name
+      - file: "{uze_home}/state/marketplaces.json"
+        contains: "\"tools\""
+        about: the machine registry carries the name
 
   - scene: the plugin scaffold is installable immediately
     when:
@@ -67,8 +66,8 @@ scenes:
         exists: true
         about: the skill reached every harness's mechanism
       - cmd:
-          run: "sh -c 'git -C {world}/tools-market rev-list --count HEAD'"
-          stdout_contains: "1"
+          run: "sh -c 'test \"$(git -C {world}/tools-market rev-list --count HEAD)\" = 1'"
+          exit: 0
         about: and only the scaffold's initial commit ever existed
 
   - scene: a finding is an answer, before anything was ever installed
@@ -82,7 +81,6 @@ scenes:
           run: "{uze} agent plugin check {world}/tools-market/plugins/greet"
           exit: 1
         about: the finding is a non-zero answer a script can read
-      - cmd:
-          run: "{uze} status -m --format json"
-          stdout_excludes: "\"-flag\""
+      - dir: "{uze_home}/store/plugins/tools/-flag"
+        exists: false
         about: and nothing was installed by any of it

@@ -25,42 +25,35 @@ fn scratch(label: &str) -> PathBuf {
 }
 
 /// The load-bearing invariant: **every layout this module writes passes its
-/// own check.** The templates' commented field documentation cannot drift
-/// from what the parsers accept, because a drift is this test failing.
+/// own check** — every combination of capability flags, and a description
+/// carrying what plain YAML would misread. The templates' commented field
+/// documentation cannot drift from what the parsers accept, because a drift
+/// is this test failing.
 #[test]
 fn every_scaffold_passes_its_own_check() -> Result<()> {
     let _git_identity = git_identity();
-    for (hook, mcp, agent, instructions) in [
-        (false, false, false, false),
-        (true, false, false, false),
-        (false, true, false, false),
-        (true, true, true, true),
-    ] {
-        let label = format!("authoring-scaffold-{hook}{mcp}{instructions}");
-        let root = scratch(&label);
+    let description = r#"Deploys: things "fast" — it's #1"#;
+    for flags in 0..16_u8 {
+        let caps = ScaffoldCapabilities {
+            hook: flags & 1 != 0,
+            mcp: flags & 2 != 0,
+            agent: flags & 4 != 0,
+            instructions: flags & 8 != 0,
+        };
+        let root = scratch(&format!("authoring-scaffold-{flags}"));
         let market = scaffold_marketplace("tools", Some("Test tools"), &root.join("market"))?;
-        let plugin = scaffold_plugin(
-            &market,
-            "greet",
-            Some("Says hello"),
-            &ScaffoldCapabilities {
-                hook,
-                mcp,
-                agent,
-                instructions,
-            },
-        )?;
+        let plugin = scaffold_plugin(&market, "greet", Some(description), &caps)?;
 
         let plugin_report = check_plugin(&plugin)?;
         assert!(
             plugin_report.is_clean(),
-            "hook={hook} mcp={mcp} instructions={instructions}: {:?}",
+            "{caps:?}: {:?}",
             plugin_report.findings
         );
         let market_report = check_marketplace(&market)?;
         assert!(
             market_report.is_clean(),
-            "hook={hook} mcp={mcp}: {:?}",
+            "{caps:?}: {:?}",
             market_report.findings
         );
         assert!(market_report.delivers.iter().any(|d| d == "greet"));
@@ -74,6 +67,35 @@ fn every_scaffold_passes_its_own_check() -> Result<()> {
         assert_eq!(manifest.plugins.len(), 1);
         fs::remove_dir_all(&root).expect("teardown");
     }
+    Ok(())
+}
+
+#[test]
+fn the_skill_description_survives_yaml_verbatim() -> Result<()> {
+    let _git_identity = git_identity();
+    let root = scratch("authoring-description");
+    let market = scaffold_marketplace("tools", None, &root.join("market"))?;
+    let description = r#"Deploys: things "fast" — it's #1"#;
+    let plugin = scaffold_plugin(
+        &market,
+        "greet",
+        Some(description),
+        &ScaffoldCapabilities::default(),
+    )?;
+    let skill = fs::read_to_string(plugin.join("skills/greet/SKILL.md")).unwrap();
+    let head = skill
+        .strip_prefix("---\n")
+        .and_then(|rest| rest.split("\n---\n").next())
+        .unwrap();
+    let frontmatter: serde_yaml::Value =
+        from_str_with_config(head, &ParserConfig::serde_yaml_compat()).unwrap();
+    assert_eq!(
+        frontmatter
+            .get("description")
+            .and_then(serde_yaml::Value::as_str),
+        Some(description)
+    );
+    fs::remove_dir_all(&root).expect("teardown");
     Ok(())
 }
 
@@ -235,15 +257,179 @@ fn the_marketplace_check_covers_its_plugins() -> Result<()> {
     // is a finding located in that plugin.
     fs::write(
         plugin.join("hooks.json"),
-        r#"{ "hooks": { "PreToolUse": [ { "id": "x", "matcher": "shell", "effect": "deny", "hooks": [ { "type": "command", "command": "${PLUGIN_ROOT}/scripts/guard", "timeout": 99999 } ] } ] } }"#,
+        r#"{ "hooks": { "PreToolUse": [ { "id": "x", "matcher": "shell", "effect": "deny", "hooks": [ { "type": "command", "command": "${PLUGIN_ROOT}/scripts/guard", "timeout": 301 } ] } ] } }"#,
     )
     .unwrap();
     let report = check_marketplace(&market)?;
     assert!(
-        !report.is_clean(),
-        "an out-of-bounds handler timeout must be found, not delivered: {:?}",
-        report.delivers
+        report
+            .findings
+            .iter()
+            .any(|finding| finding.starts_with("greet") && finding.contains("between 1 and 300")),
+        "an out-of-bounds handler timeout is found in its plugin, not delivered: {:?}",
+        report.findings
     );
+    fs::remove_dir_all(&root).expect("teardown");
+    Ok(())
+}
+
+#[test]
+fn an_empty_at_directory_is_accepted() -> Result<()> {
+    let _git_identity = git_identity();
+    let root = scratch("authoring-empty-at");
+    let at = root.join("market");
+    fs::create_dir_all(&at).unwrap();
+    scaffold_marketplace("tools", None, &at)?;
+    assert!(at.join("marketplace.json").is_file());
+    fs::remove_dir_all(&root).expect("teardown");
+    Ok(())
+}
+
+#[test]
+fn a_missing_git_identity_is_refused_before_any_write() {
+    let mut environment = uze_testkit::env::scope();
+    let empty = scratch("authoring-no-identity-config").join("gitconfig");
+    fs::write(&empty, "").unwrap();
+    environment.set("GIT_CONFIG_GLOBAL", &empty);
+    environment.set("GIT_CONFIG_SYSTEM", &empty);
+    let root = scratch("authoring-no-identity");
+    let at = root.join("market");
+
+    let refused = scaffold_marketplace("tools", None, &at);
+
+    assert!(refused.is_err(), "no identity, no commit, no scaffold");
+    assert!(!at.exists(), "the refusal wrote nothing");
+    fs::remove_dir_all(&root).expect("teardown");
+}
+
+#[test]
+fn a_name_the_manifest_already_carries_is_refused_before_any_write() -> Result<()> {
+    let _git_identity = git_identity();
+    let root = scratch("authoring-ghost");
+    let market = scaffold_marketplace("tools", None, &root.join("market"))?;
+    fs::write(
+        market.join("marketplace.json"),
+        r#"{ "name": "tools", "plugins": [ { "name": "ghost", "source": "./elsewhere" } ] }"#,
+    )
+    .unwrap();
+
+    let refused = scaffold_plugin(&market, "ghost", None, &ScaffoldCapabilities::default());
+
+    assert!(refused.is_err());
+    assert!(
+        !market.join("plugins/ghost").exists(),
+        "the refusal wrote nothing"
+    );
+    fs::remove_dir_all(&root).expect("teardown");
+    Ok(())
+}
+
+/// The plugins directory a local marketplace chose is where every later
+/// plugin goes — recorded in the manifest while it has no entry to say so.
+#[test]
+fn a_plugin_goes_where_the_marketplace_keeps_its_plugins() -> Result<()> {
+    let root = scratch("authoring-plugins-dir");
+    let project = root.join("project");
+    fs::create_dir_all(&project).unwrap();
+    scaffold_local_marketplace("tools", None, &project, "tools-plugins")?;
+
+    let first = scaffold_plugin(&project, "greet", None, &ScaffoldCapabilities::default())?;
+    assert_eq!(first, project.join("tools-plugins/greet"));
+
+    // With an entry to read, the recorded key is no longer the only answer.
+    let mut manifest = read_json(&project.join("marketplace.json"))?;
+    manifest
+        .as_object_mut()
+        .unwrap()
+        .remove(PLUGINS_DIRECTORY_KEY);
+    write_json(&project.join("marketplace.json"), &manifest)?;
+    let second = scaffold_plugin(&project, "wave", None, &ScaffoldCapabilities::default())?;
+    assert_eq!(second, project.join("tools-plugins/wave"));
+
+    let report = check_marketplace(&project)?;
+    assert!(report.is_clean(), "{:?}", report.findings);
+    assert_eq!(report.delivers, ["greet", "wave"]);
+    fs::remove_dir_all(&root).expect("teardown");
+    Ok(())
+}
+
+#[test]
+fn check_reports_a_skill_a_harness_could_not_read() -> Result<()> {
+    let _git_identity = git_identity();
+    let root = scratch("authoring-check-skill");
+    let market = scaffold_marketplace("tools", None, &root.join("market"))?;
+    let plugin = scaffold_plugin(&market, "greet", None, &ScaffoldCapabilities::default())?;
+    let skill = plugin.join("skills/greet/SKILL.md");
+
+    for (body, fault) in [
+        ("Just prose, no frontmatter.\n", "no frontmatter"),
+        (
+            "---\nname: greet\ndescription: Deploys: things fast\n---\nbody\n",
+            "not valid YAML",
+        ),
+        ("---\nname: greet\n---\nbody\n", "no `description`"),
+    ] {
+        fs::write(&skill, body).unwrap();
+        let report = check_plugin(&plugin)?;
+        assert!(
+            report
+                .findings
+                .iter()
+                .any(|finding| finding.contains("SKILL.md") && finding.contains(fault)),
+            "{fault}: {:?}",
+            report.findings
+        );
+    }
+    fs::remove_dir_all(&root).expect("teardown");
+    Ok(())
+}
+
+#[test]
+fn check_reports_a_reference_outside_the_plugin() -> Result<()> {
+    let _git_identity = git_identity();
+    let root = scratch("authoring-check-escape");
+    let market = scaffold_marketplace("tools", None, &root.join("market"))?;
+    let plugin = scaffold_plugin(
+        &market,
+        "greet",
+        None,
+        &ScaffoldCapabilities {
+            hook: true,
+            mcp: true,
+            ..ScaffoldCapabilities::default()
+        },
+    )?;
+
+    for (file, body, reference) in [
+        (
+            "hooks.json",
+            r#"{ "hooks": { "PreToolUse": [ { "id": "x", "matcher": "shell", "effect": "deny", "hooks": [ { "type": "command", "command": "${PLUGIN_ROOT}/../guard" } ] } ] } }"#,
+            "${PLUGIN_ROOT}/../guard",
+        ),
+        (
+            "hooks.json",
+            r#"{ "hooks": { "PreToolUse": [ { "id": "x", "matcher": "shell", "effect": "deny", "hooks": [ { "type": "command", "command": "sh /opt/guard" } ] } ] } }"#,
+            "/opt/guard",
+        ),
+        (
+            "mcp.json",
+            r#"{ "mcpServers": { "example": { "command": "python3", "args": ["../server.py"] } } }"#,
+            "../server.py",
+        ),
+    ] {
+        let original = fs::read(plugin.join(file)).unwrap();
+        fs::write(plugin.join(file), body).unwrap();
+        let report = check_plugin(&plugin)?;
+        assert!(
+            report
+                .findings
+                .iter()
+                .any(|finding| finding.contains(file) && finding.contains(reference)),
+            "{reference}: {:?}",
+            report.findings
+        );
+        fs::write(plugin.join(file), original).unwrap();
+    }
     fs::remove_dir_all(&root).expect("teardown");
     Ok(())
 }

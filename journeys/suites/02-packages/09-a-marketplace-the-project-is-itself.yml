@@ -26,13 +26,12 @@ scenes:
       - dir: "{project}/plugins"
         exists: true
       - cmd:
-          run: "sh -c 'git -C {project} rev-list --count HEAD'"
-          stdout_contains: "3"
+          run: "sh -c 'test \"$(git -C {project} rev-list --count HEAD)\" = 3'"
+          exit: 0
         about: the scaffold committed nothing — the project's history is untouched
-      - cmd:
-          run: "{uze} market list --format json"
-          stdout_contains: "\"tools\""
-        about: the machine registry answers for the name, linked to the project root
+      - file: "{uze_home}/state/marketplaces.json"
+        contains: "\"tools\""
+        about: the machine registry carries the name
 
   - scene: a plugin authored into it is installable from the working tree
     when:
