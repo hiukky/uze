@@ -1,4 +1,4 @@
-//! Tests for the "+ new" space root picker.
+//! Tests for the "+ space" root picker.
 //!
 //! Every case works on real directories under a disposable temp root and
 //! addresses them absolutely, so nothing here depends on the developer's

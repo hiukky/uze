@@ -5102,14 +5102,14 @@ mod workspace_tests {
             rows[1]
         );
         assert!(
-            header.contains("new"),
+            header.contains("+ space"),
             "the way to grow the column rides the header: {header:?}"
         );
         let rule = header
             .find(&theme::glyph(crate::ui::theme::Symbol::TreeColumnDivider))
             .expect("a rule between the two controls");
         assert!(
-            header[..rule].contains("new"),
+            header[..rule].contains("+ space"),
             "with the rule between them: {header:?}"
         );
     }
@@ -5134,11 +5134,22 @@ mod workspace_tests {
                 .unwrap();
             let buffer = terminal.backend().buffer().clone();
             let header = buffer_rows(&buffer)[0].clone();
-            let column = header.find("new").expect("the control is drawn") as u16;
+            let column = header.find("+ space").expect("the control is drawn") as u16;
             buffer[(column, 0)].fg
         };
         let mut model = agent_with_task(WorkStateView::Ready, 1);
-        assert_eq!(hue_of_new(&mut model), theme::color(Token::Accent));
+        assert_eq!(
+            hue_of_new(&mut model),
+            theme::color(Token::AccentMuted),
+            "held back at rest"
+        );
+
+        model.hovered = Some(WorkspaceHit::NewSpace);
+        assert_eq!(
+            hue_of_new(&mut model),
+            theme::color(Token::Accent),
+            "the pointer restores the accent"
+        );
 
         model.root_picker = Some(RootPicker::opened_in("~", None));
 

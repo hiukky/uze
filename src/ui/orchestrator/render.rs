@@ -554,12 +554,17 @@ pub(super) fn render_sidebar(
         // as one pair of controls.
         // Muted while the prompt it opens is open: the word is where that
         // prompt came from, and in the accent beside it, it reads as a
-        // second way in rather than as the one already taken.
-        let new = "new";
+        // second way in rather than as the one already taken. Otherwise the
+        // accent is held back until the pointer asks for it, so the header's
+        // one coloured word does not outshout the column under it.
+        let new = "+ space";
         let new_hue = if model.root_picker.is_some() {
             Token::TextMuted
         } else {
-            Token::Accent
+            match chip_state(model, Some(WorkspaceHit::NewSpace)) {
+                ChipState::Hovered | ChipState::Pressed => Token::Accent,
+                ChipState::Resting | ChipState::Static => Token::AccentMuted,
+            }
         };
         let new_width = Span::raw(new).width() as u16;
         let divider = theme::glyph(Symbol::TreeColumnDivider);
@@ -2299,7 +2304,7 @@ fn elide_head(text: &str, width: usize) -> String {
         .collect()
 }
 
-/// The "+ new" prompt and the directories it currently matches, drawn as
+/// The "+ space" prompt and the directories it currently matches, drawn as
 /// rows of the sidebar itself rather than a floating popup: the prompt is
 /// choosing where the next space in this very list goes. It stands where
 /// the first space's header stands, with the listing directly under it the

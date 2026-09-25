@@ -27,7 +27,7 @@ pub(super) struct Candidate {
     pub(super) path: PathBuf,
 }
 
-/// Open state of the sidebar's "+ new" prompt; `None` on the model when
+/// Open state of the sidebar's "+ space" prompt; `None` on the model when
 /// closed. Holds its own listing so a keystroke only re-reads the
 /// filesystem when it changes which directory is being listed — typing a
 /// name filters what was already read.
