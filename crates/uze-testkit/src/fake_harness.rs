@@ -351,7 +351,12 @@ fn emit_vendor_agy(state_dir: &Path, dest: &Path) -> String {
     block.push_str("    case \"$*\" in\n");
     block.push_str("      \"plugin install\"*)\n");
     block.push_str("        root=\"$3\"\n");
-    block.push_str("        id=$(basename \"$root\")\n");
+    // The real `agy` stages a plugin under its manifest's `name`, not its
+    // directory's: a generated plugin lives in `<name>--<market>/`.
+    block.push_str(
+        "        id=$(sed -n 's/^[[:space:]]*\"name\"[[:space:]]*:[[:space:]]*\"\\([^\"]*\\)\".*/\\1/p' \"$root/plugin.json\" 2>/dev/null | head -n 1)\n",
+    );
+    block.push_str("        [ -n \"$id\" ] || id=$(basename \"$root\")\n");
     block.push_str("        mkdir -p \"$dest\"\n");
     block.push_str("        cp -R \"$root\" \"$dest/$id\" 2>/dev/null || true\n");
     block.push_str("        printf '%s\\n' \"$id\" >> \"$state_dir/installed\"\n");

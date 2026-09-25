@@ -114,6 +114,17 @@ fn removing_a_marketplace_takes_its_packages_with_it() {
 
 fn marketplace_with_two_plugins() -> (TestEnvironment, std::path::PathBuf) {
     let env = TestEnvironment::isolated();
+    // The stand-ins shadow whatever the host has on PATH, so the packages
+    // are delivered — and hold receipts — on a CI runner with no harness
+    // exactly as on a machine with four.
+    uze_testkit::fake_harness::Standard {
+        bin_dir: &env.fake_bin,
+        home: &env.home,
+        state_root: &env.root().join("fake-state"),
+        interactive: false,
+        opencode_binary: "opencode",
+    }
+    .install();
     let scenario = Scenario::new()
         .marketplace(
             "purge-market",
