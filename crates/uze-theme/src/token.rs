@@ -79,6 +79,11 @@ vocabulary! {
         // ── accent and state ───────────────────────────────────────────
         /// The one signature hue.
         Accent = "accent",
+        /// [`Accent`](Self::Accent) at rest, for a control whose hue is what
+        /// marks it as the one that acts: pulled back until the pointer
+        /// asks, as [`StateSuccessMuted`](Self::StateSuccessMuted) is for a
+        /// count.
+        AccentMuted = "accent-muted",
         /// Something worked. Aliases [`Accent`](Self::Accent) by default —
         /// the design's own `levelColor` uses one colour for both.
         StateSuccess = "state.success",

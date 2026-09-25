@@ -1431,7 +1431,7 @@ pub(super) enum WorkspaceHit {
     /// generic over whatever action that row is, same pattern
     /// [`WorkspaceHit::PickAgent`] uses for the agent picker.
     ContextMenuAction(usize),
-    /// The sidebar's "+ new" row — opens the root picker
+    /// The sidebar's "+ space" control — opens the root picker
     /// ([`WorkspaceModel::root_picker`]), since a space is born from a
     /// directory and that directory is chosen, not typed blind.
     NewSpace,
@@ -2451,7 +2451,7 @@ struct WorkspaceModel {
     /// pane, and any click elsewhere cancels it (same "click outside
     /// discards" rule the management modal's dialogs use).
     renaming: Option<(RenameTarget, String)>,
-    /// Open state of the sidebar's "+ new" prompt — the directory the next
+    /// Open state of the sidebar's "+ space" prompt — the directory the next
     /// space is born from, chosen from a live listing that narrows as it is
     /// typed. Same "click outside discards" rule as `renaming`.
     root_picker: Option<RootPicker>,

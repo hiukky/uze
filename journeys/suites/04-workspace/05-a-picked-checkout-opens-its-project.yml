@@ -34,7 +34,7 @@ scenes:
         in: "{home}"
         say: uze opens in the home directory, not in the project
         # A pattern, like every `expect`: the `+` is escaped.
-        expect: 'new'
+        expect: '\+ space'
         expect_timeout: 20
         pause: 1.0
     then:
@@ -44,7 +44,7 @@ scenes:
 
   - scene: picking the checkout as a new space's root opens the project
     when:
-      - click: new
+      - click: "+ space"
         say: open the new-space prompt
         in: sidebar
         expect: '▏'  # the prompt's own cursor, which nothing else draws

@@ -25,6 +25,7 @@
     "border.faint": "~0d",
 
     "accent": "#8fd19e",
+    "accent-muted": "@accent/c0",
     "state.success": "@accent",
     "state.success-muted": "@state.success/c0",
     "state.warning": "#e0b567",

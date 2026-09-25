@@ -54,7 +54,7 @@ scenes:
         expect: demo-app
         expect_timeout: 20
         pause: 1.0
-      - click: new
+      - click: "+ space"
         say: open the new-space prompt
         in: sidebar
         expect: '▏'  # the prompt's own cursor, which nothing else draws
