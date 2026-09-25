@@ -71,9 +71,11 @@ scenes:
       - file: "{world}/terminal.bytes"
         contains: "]52;c;Z3JhYi10aGlzLXdvcmQ="
         about: the drag over the program was a selection, and copied its word
-      - file: "{world}/mouse-input"
-        excludes: "[<32;"
-        about: the program was told nothing about the drag — no motion report reached it
+      - cmd:
+          run: test "$(grep -o '\[<' "{world}/mouse-input" | wc -l)" -eq 2
+        about: |
+          the program was told nothing about the drag — the only reports it
+          received are the click's own two
       - file: "{world}/mouse-input"
         contains: "[<0;1;1M\e[<0;1;1m"
         about: |

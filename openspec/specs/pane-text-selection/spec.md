@@ -42,8 +42,9 @@ When the button is released over a non-empty selection, the client SHALL put
 the selected text on the system clipboard, with no further key or command,
 and SHALL say so in a toast that names how much was copied. The text SHALL
 carry one line per selected row, SHALL NOT carry the blanks a terminal pads
-each row with, and SHALL NOT carry the blank cell a wide character spills
-into. The clipboard SHALL be reached through the terminal the operator is
+each row with nor blank rows at its end, and SHALL NOT carry the blank cell a
+wide character spills into. A selection that covered only blanks SHALL copy
+nothing and SHALL NOT be delivered to the pane's program as a click. The clipboard SHALL be reached through the terminal the operator is
 using, so the copy lands on the machine the operator sits at when UZE runs on
 another one or under WSL.
 
@@ -53,6 +54,12 @@ another one or under WSL.
   and releases
 - **THEN** the clipboard holds `hello`
 - **AND** a toast says five characters were copied
+
+#### Scenario: A drag over blanks copies nothing
+
+- **WHEN** the operator drags across cells that hold only blanks
+- **THEN** nothing is copied and no toast is raised
+- **AND** a program that asked for mouse reports receives nothing
 
 #### Scenario: Trailing padding is not copied
 

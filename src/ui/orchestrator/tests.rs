@@ -7647,6 +7647,23 @@ mod workspace_tests {
         assert!(driven.attach.model.selection.is_none());
     }
 
+    #[test]
+    fn a_drag_over_blanks_is_not_a_click_where_it_ended() {
+        let home = UzeHome::at(uze_testkit::temp::scratch("orchestrator-blank-drag"));
+        let mut model = model_of(session("/tmp"));
+        pane_showing(&mut model, "", true);
+        let mut driven = driven(model, &home);
+
+        drag_across_the_first_word(&mut driven, crossterm::event::KeyModifiers::empty());
+
+        assert_eq!(driven.attach.model.clipboard, None);
+        assert!(driven.attach.model.selection.is_none());
+        assert!(
+            forwarded_input(&mut driven).is_empty(),
+            "the program was not handed a click the operator never made"
+        );
+    }
+
     fn forwarded_input(driven: &mut Driven<'_>) -> Vec<Vec<u8>> {
         driven
             .sent()

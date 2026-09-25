@@ -3,8 +3,8 @@
 //! The client owns the mouse (it has to, for its own chrome), which takes
 //! the host terminal's native selection away from the panes it draws. This
 //! gives it back the way every terminal does it: press, drag, release — and
-//! the release copies, since a selection nobody asked to copy is the one
-//! gesture a pane's reader never wanted.
+//! the release copies, so selecting is the whole gesture and no key a pane's
+//! program might bind has to be taken from it.
 
 use ratatui::layout::Rect;
 use ratatui::text::Span;
@@ -57,9 +57,10 @@ impl PaneSelection {
     }
 
     /// The selected cells as text: trailing blanks dropped from each row,
-    /// since a terminal pads every line to its width and nobody selected
-    /// the padding, and the cell a wide character spills into skipped,
-    /// since it holds a blank that is not in the text.
+    /// and blank rows from the end, since a terminal pads every line to its
+    /// width and nobody selected the padding; the cell a wide character
+    /// spills into skipped, since it holds a blank that is not in the text.
+    /// Empty when the selection covered nothing but blanks.
     pub(super) fn text(&self, snapshot: &PaneSnapshot) -> String {
         if !self.moved {
             return String::new();
@@ -82,6 +83,9 @@ impl PaneSelection {
                 column += Span::raw(cell.character.to_string()).width().max(1) as u16;
             }
             lines.push(line.trim_end().to_owned());
+        }
+        while lines.last().is_some_and(String::is_empty) {
+            lines.pop();
         }
         lines.join("\n")
     }
@@ -215,6 +219,13 @@ mod tests {
     fn the_blank_a_wide_character_spills_into_is_not_copied() {
         let pane = snapshot(&["日 本 x"], 12);
         assert_eq!(dragged((0, 0), (4, 0)).text(&pane), "日本x");
+    }
+
+    #[test]
+    fn blank_rows_at_the_end_are_padding_too() {
+        let pane = snapshot(&["first", "", ""], 12);
+        assert_eq!(dragged((0, 0), (11, 2)).text(&pane), "first");
+        assert_eq!(dragged((6, 0), (11, 2)).text(&pane), "");
     }
 
     #[test]
