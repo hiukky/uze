@@ -2981,19 +2981,15 @@ impl WorkspaceModel {
         if remembered == agent {
             return agent;
         }
-        // The remembered tab has to still be one of this agent's own
-        // shells: a shell can be dragged into another strip, or have a
-        // harness started in it and become an agent of its own, and
-        // following it either way would move the user to a different agent
-        // than the one they clicked — for good, since that one's click
-        // would keep landing there.
+        // Only a tab the agent's strip still draws: a shell can be dragged
+        // into another strip, or have a harness started in it and become an
+        // agent of its own, and following it either way would land every
+        // click on this agent's row in a different agent.
         let belongs = self.session.as_ref().is_some_and(|session| {
             session.workspace.spaces.iter().any(|space| {
-                space.tabs.iter().any(|tab| {
-                    tab.id == remembered
-                        && tab.agent == Some(agent)
-                        && agent_identity_for_tab(identities, tab).is_none()
-                })
+                strip_tabs(space, Some(agent), identities)
+                    .iter()
+                    .any(|tab| tab.id == remembered)
             })
         });
         if belongs { remembered } else { agent }
