@@ -367,6 +367,22 @@ fn the_agent_surface_meets_the_budget() {
     });
 }
 
+/// `config notification` is one `config.toml` key read or written — a
+/// choice a person makes standing at a prompt, never a read of the machine.
+#[test]
+fn notification_choice_meets_the_budget() {
+    let world = World::build("budget-notification");
+    world.within_budget("config notification", |app| {
+        app.notifications()
+            .set_agent_finished(uze_application::Chime::OutOfSight)
+            .unwrap();
+        assert_eq!(
+            app.notifications().agent_finished().unwrap(),
+            uze_application::Chime::OutOfSight
+        );
+    });
+}
+
 #[test]
 fn doctor_meets_the_budget() {
     let world = World::build("budget-doctor");
