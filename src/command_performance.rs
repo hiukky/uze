@@ -228,7 +228,7 @@ pub const BUDGETED_COMMAND_TESTS: &[(&str, &str)] = &[
     ),
     (
         "config notification",
-        "uze_application::application::notifications::tests::notification_choice_meets_the_budget",
+        "crates/uze-application/tests/performance.rs::notification_choice_meets_the_budget",
     ),
     (
         "agent plugin create",
