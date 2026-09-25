@@ -293,9 +293,9 @@ pub(super) fn render(
     }
 }
 
-/// A small popup listing `agent_options`, opened by the tab strip's "✦"
-/// button — a dropdown anchored just below it, creating the
-/// picked agent as a new tab in the currently selected space. Not built on
+/// A small popup listing `agent_options`, opened by the selected space
+/// header's "✦ new" — a dropdown anchored just below it, creating the
+/// picked agent as a new tab in that space. Not built on
 /// the management modal's dialog helpers (those are shaped for static
 /// text, not a selectable, hit-testable list) — this is self-contained,
 /// styled by hand to match the same palette.
@@ -1790,7 +1790,7 @@ pub(super) fn render_space_header(
                     Style::default().fg(status.color()),
                 ));
             }
-            push_trailing_sync(&mut spans, rect, model, space, identities);
+            push_trailing_controls(&mut spans, hits, rect, model, space, selected, identities);
         }
     }
     // The space's own row is a target like any other, so when it is the
@@ -2205,30 +2205,33 @@ pub(super) fn render_status_catalog(
 
 /// Pins what a pull and a push would move to the space header's right
 /// edge — the column every row in the sidebar keeps free, the one the
-/// agent rows pin their task mark to.
+/// agent rows pin their task mark to — followed, on the space in front,
+/// by the control that places a new agent in it.
 ///
-/// On the header because that is whose fact it is. It is read from the
-/// checkout, so it is the same two numbers for every agent standing in
-/// one, and the agent rows printed it once each: four agents in a space's
-/// own root is an ordinary day, and the column said `⇣₁₁ ⇡₁₉` four times
-/// under four different names. The branch left those rows for the header
-/// on exactly this argument.
+/// The control is here rather than in the tab strip because an agent is
+/// placed in a space, and this is the row that names it. Only the
+/// selected space carries it: the new agent lands in the space in front,
+/// and one on every header would be a column of the same word to read
+/// past, each promising a space it would not land in.
 ///
-/// Nothing when there is nothing to move, and nothing for a space whose
-/// own directory is a slot — that checkout belongs to a task, and what
-/// its branch owes upstream is the task's business, not the space's.
-fn push_trailing_sync(
+/// The counts are on the header because that is whose fact it is. They
+/// are read from the checkout, so they are the same two numbers for every
+/// agent standing in one, and the agent rows printed them once each: four
+/// agents in a space's own root is an ordinary day, and the column said
+/// `⇣₁₁ ⇡₁₉` four times under four different names. Nothing when there is
+/// nothing to move, and nothing for a space whose own directory is a slot
+/// — that checkout belongs to a task, and what its branch owes upstream
+/// is the task's business, not the space's.
+fn push_trailing_controls(
     spans: &mut Vec<Span<'_>>,
+    hits: &mut Vec<(Rect, WorkspaceHit)>,
     rect: Rect,
     model: &WorkspaceModel,
     space: &Space,
+    selected: bool,
     identities: &[AgentIdentity],
 ) {
-    let counts = unisolated_sync_caption(model, &space_cwd(space, identities));
-    if counts.is_empty() {
-        return;
-    }
-    let drawn: Vec<Span<'_>> = counts
+    let mut drawn: Vec<Span<'_>> = unisolated_sync_caption(model, &space_cwd(space, identities))
         .into_iter()
         .enumerate()
         .map(|(index, (text, hue))| {
@@ -2236,6 +2239,22 @@ fn push_trailing_sync(
             Span::styled(format!("{gap}{text}"), Style::default().fg(hue))
         })
         .collect();
+    let new = selected.then(|| surface_label(Symbol::MarkSparkle, "new"));
+    if let Some(label) = &new {
+        if !drawn.is_empty() {
+            drawn.push(Span::raw(" "));
+        }
+        // The accent is held back until the pointer asks for it, so the
+        // row's one coloured word does not outshout the name beside it.
+        let hue = match chip_state(model, Some(WorkspaceHit::NewAgentMenu)) {
+            ChipState::Hovered | ChipState::Pressed => Token::Accent,
+            ChipState::Resting | ChipState::Static => Token::AccentMuted,
+        };
+        drawn.push(Span::styled(label.clone(), theme::fg_bold(hue)));
+    }
+    if drawn.is_empty() {
+        return;
+    }
     let used: u16 = spans
         .iter()
         .chain(&drawn)
@@ -2245,6 +2264,14 @@ fn push_trailing_sync(
     let Some(gap) = rect.width.checked_sub(used) else {
         return;
     };
+    if let Some(label) = &new {
+        let width = Span::raw(label.as_str()).width() as u16;
+        // Ahead of the row's own `SelectSpace`, so it wins the click.
+        hits.push((
+            Rect::new(rect.right() - TRAILING_PAD - width, rect.y, width, 1),
+            WorkspaceHit::NewAgentMenu,
+        ));
+    }
     spans.push(Span::raw(" ".repeat(gap as usize)));
     spans.extend(drawn);
     spans.push(Span::raw(" ".repeat(TRAILING_PAD as usize)));
@@ -2759,8 +2786,8 @@ pub(super) fn agent_activity_frame(tick: usize) -> String {
 /// envelope, its agent tab rows) — this strip used to skip that fill and
 /// lean on text weight alone, which read as a lighter kind of "selected"
 /// than everywhere else in the TUI. A dim `×` close affordance per tab once
-/// more than one exists in the selected space, and trailing "+"/"✦" actions
-/// to open another of either kind (both land in the selected space).
+/// more than one exists in the selected space, and a trailing "+" opening
+/// another shell in it.
 pub(super) fn render_tab_strip(
     frame: &mut ratatui::Frame<'_>,
     area: Rect,
@@ -3121,36 +3148,20 @@ pub(super) fn render_tab_strip(
         spans.push(Span::raw(" "));
         x += 2;
     }
-    // One group of two, the same construction as the actions at the other
-    // end of the row: a bold "+" creates a new shell tab directly (the
-    // fast, default action), a "✦" beside it opens the agent picker for
-    // anything else. "✦" carries the accent — it is the one that summons
-    // an agent — and "+" stays neutral, just bolder, being the plain
-    // action.
+    // A bold "+" creates a new shell tab directly. It stays neutral, just
+    // bolder, being the plain action; a new agent is asked for on its
+    // space's header in the sidebar (see `push_trailing_controls`), which
+    // is where the space it lands in is named.
     //
-    // A divider used to stand between them, and it was the same orphan
-    // column the actions group has none of: it belonged to neither half,
-    // so hovering one left it wearing the resting fill, a sliver of a
-    // third material between two buttons. The two fills meeting is the
-    // divider.
-    //
-    // `SurfaceRaisedBright` backs this pair where the actions take the
-    // plain `SurfaceRaised`: two bare glyphs have no word's weight
-    // carrying them, and at the plain strength they read as barely there.
-    let buttons = [
-        GroupButton {
-            hit: WorkspaceHit::NewTab,
-            label: "+".to_owned(),
-            hue: theme::color(Token::TextInactive),
-            strong: true,
-        },
-        GroupButton {
-            hit: WorkspaceHit::NewAgentMenu,
-            label: theme::glyph(Symbol::MarkSparkle),
-            hue: theme::color(Token::Accent),
-            strong: false,
-        },
-    ];
+    // `SurfaceRaisedBright` backs it where the actions take the plain
+    // `SurfaceRaised`: a bare glyph has no word's weight carrying it, and
+    // at the plain strength it reads as barely there.
+    let buttons = [GroupButton {
+        hit: WorkspaceHit::NewTab,
+        label: "+".to_owned(),
+        hue: theme::color(Token::TextInactive),
+        strong: true,
+    }];
     if x + group_width(&buttons) <= limit {
         let (actions, group_hits) =
             button_group(model, &buttons, Token::SurfaceRaisedBright, (x, inner.y));

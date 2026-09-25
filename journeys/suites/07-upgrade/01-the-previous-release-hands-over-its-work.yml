@@ -39,10 +39,11 @@ scenes:
         expect: demo-app
         expect_timeout: 30
         pause: 1.5
-      # The released binary's own strip, which drew a divider between the
-      # two buttons. Every other journey clicks this build's, where they
-      # meet on their padding — this is the one gesture aimed at a screen
-      # this repository no longer draws.
+      # The released binary's own strip, which carried the "✦" beside the
+      # "+" with a divider between them. Every other journey clicks this
+      # build's, where "✦ new" is on the selected space's row in the
+      # sidebar — this is the one gesture aimed at a screen this
+      # repository no longer draws.
       - click: "+ │ ✦"
         say: open the new-agent picker
         in: strip
@@ -80,14 +81,12 @@ scenes:
         expect: demo-app
         expect_timeout: 30
         pause: 2.0
-      - click: "+  ✦"
+      - click: "✦ new"
         say: the product works — place an agent
-        in: strip
-        offset: 3
+        in: sidebar
         expect: new agent
       - click: " new agent "
         say: pick Claude Code
-        in: pane
         row_offset: 1
         offset: 3
         expect: agent 2

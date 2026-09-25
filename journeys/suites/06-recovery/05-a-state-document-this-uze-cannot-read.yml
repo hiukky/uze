@@ -37,14 +37,12 @@ scenes:
         expect: demo-app
         expect_timeout: 20
         pause: 1.0
-      - click: "+  ✦"
-        say: open the new-agent picker from the tab strip
-        in: strip
-        offset: 3
+      - click: "✦ new"
+        say: open the new-agent picker from the space's row
+        in: sidebar
         expect: new agent
       - click: " new agent "
         say: place a Claude agent
-        in: pane
         row_offset: 1
         offset: 3
         expect: agent 1
@@ -81,14 +79,12 @@ scenes:
             printf '{"schema_version": 1, "tasks": []}' > "$document"
           done
         say: the machine is left holding the state an older uze wrote
-      - click: "+  ✦"
+      - click: "✦ new"
         say: open the picker again
-        in: strip
-        offset: 3
+        in: sidebar
         expect: new agent
       - click: " new agent "
         say: place a second agent — the gesture that used to be refused
-        in: pane
         row_offset: 1
         offset: 3
         expect: agent 2
