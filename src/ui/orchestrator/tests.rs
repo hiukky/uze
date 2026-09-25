@@ -1033,33 +1033,29 @@ mod workspace_tests {
                 .collect::<Vec<_>>()
         };
 
-        for (left, right) in [
-            (WorkspaceHit::NewTab, WorkspaceHit::NewAgentMenu),
-            (WorkspaceHit::OpenArchitect, WorkspaceHit::OpenFiles),
-        ] {
-            let (first, second) = (hit_rect(&model, left), hit_rect(&model, right));
-            assert_eq!(
-                first.right(),
-                second.x,
-                "the members meet — there is no column between them"
-            );
+        let (left, right) = (WorkspaceHit::OpenArchitect, WorkspaceHit::OpenFiles);
+        let (first, second) = (hit_rect(&model, left), hit_rect(&model, right));
+        assert_eq!(
+            first.right(),
+            second.x,
+            "the members meet — there is no column between them"
+        );
 
-            model.hovered = Some(left);
-            let lit = grounds(&model, first);
-            let rest = grounds(&model, second);
-            assert!(
-                lit.iter().all(|ground| *ground == lit[0]),
-                "the hovered member lights whole, padding included: {lit:?}"
-            );
-            assert!(
-                rest.iter().all(|ground| *ground == rest[0]),
-                "and its neighbour stays whole at rest: {rest:?}"
-            );
-            assert_ne!(
-                lit[0], rest[0],
-                "so the boundary between them is where the fill changes"
-            );
-        }
+        model.hovered = Some(left);
+        let lit = grounds(&model, first);
+        let rest = grounds(&model, second);
+        assert!(
+            lit.iter().all(|ground| *ground == lit[0]),
+            "the hovered member lights whole, padding included: {lit:?}"
+        );
+        assert!(
+            rest.iter().all(|ground| *ground == rest[0]),
+            "and its neighbour stays whole at rest: {rest:?}"
+        );
+        assert_ne!(
+            lit[0], rest[0],
+            "so the boundary between them is where the fill changes"
+        );
     }
 
     /// The changes count is a door that is not dressed as one. Three
@@ -4842,7 +4838,7 @@ mod workspace_tests {
         assert!(driven.attach.model.manage_chrome.is_none());
     }
 
-    /// The key opens the same menu the tab strip's button does, in the
+    /// The key opens the same menu the space header's button does, in the
     /// same place — under the button, not wherever a keyboard gesture lands.
     #[test]
     fn the_new_agent_key_opens_the_picker_under_its_button() {
@@ -5703,8 +5699,8 @@ mod workspace_tests {
 
         let (at, rows, row, pull, push) = header(&model);
         assert!(
-            row.ends_with("\u{21e3}1 \u{21e1}12 \u{2502}"),
-            "the arrows sit at the right edge, one pad off the divider: {row:?}"
+            row.ends_with("\u{21e3}1 \u{21e1}12 \u{2726} new \u{2502}"),
+            "the arrows sit just before \u{2726} new, one pad off the divider: {row:?}"
         );
         assert_eq!(pull, Some(theme::color(Token::StateDanger)));
         assert_eq!(push, Some(theme::color(Token::StateSuccess)));
@@ -5723,7 +5719,7 @@ mod workspace_tests {
             .insert(PathBuf::from("/repo"), UpstreamSync { pull: 0, push: 3 });
         let (_, _, row, ..) = header(&model);
         assert!(
-            !row.contains('\u{21e3}') && row.ends_with("\u{21e1}3 \u{2502}"),
+            !row.contains('\u{21e3}') && row.ends_with("\u{21e1}3 \u{2726} new \u{2502}"),
             "nothing to pull, three to push: {row:?}"
         );
 
@@ -7825,6 +7821,41 @@ mod workspace_tests {
                 .any(|request| matches!(request, ClientRequest::SelectSpace { space: selected } if *selected == space)),
             "a space of agents alone was not switched to: {sent:?}"
         );
+    }
+
+    /// The selected space alone carries "✦ new", at its header's right
+    /// edge, and it opens the agent picker under itself: the new agent
+    /// lands in the space in front, so no other header offers one.
+    #[test]
+    fn only_the_selected_space_header_offers_a_new_agent() {
+        let home = UzeHome::at(uze_testkit::temp::scratch("orchestrator-space-new-agent"));
+        let mut driven = driven(three_spaces(), &home).on_a_roomy_terminal();
+        driven.frame();
+        let hits = driven.attach.model.hits.clone();
+        let offered: Vec<Rect> = hits
+            .iter()
+            .filter(|(_, hit)| *hit == WorkspaceHit::NewAgentMenu)
+            .map(|(rect, _)| *rect)
+            .collect();
+        let header = space_header(&hits, SpaceId(3));
+        assert_eq!(offered.len(), 1, "one control, whatever the spaces number");
+        let new = offered[0];
+        assert_eq!(new.y, header.y, "on the selected space's header");
+        assert_eq!(
+            new.right() + crate::ui::widget::TRAILING_PAD,
+            header.right(),
+            "one pad off the divider"
+        );
+
+        driven.press(new.x, new.y);
+
+        let picker = driven
+            .attach
+            .model
+            .agent_picker
+            .as_ref()
+            .expect("the picker opened");
+        assert_eq!(picker.anchor, new, "anchored under the control clicked");
     }
 
     /// Three spaces, `one`, `two` and `three`, one agent each; the

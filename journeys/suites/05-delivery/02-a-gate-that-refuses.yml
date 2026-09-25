@@ -30,13 +30,11 @@ scenes:
         expect: demo-app
         expect_timeout: 20
         pause: 1.0
-      - click: "+  ✦"
-        in: strip
-        offset: 3
+      - click: "✦ new"
+        in: sidebar
         expect: new agent
       - click: " new agent "
         say: place an agent
-        in: pane
         row_offset: 1
         offset: 3
         expect: Claude Code v

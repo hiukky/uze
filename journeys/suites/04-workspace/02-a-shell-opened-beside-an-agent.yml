@@ -36,14 +36,12 @@ scenes:
         expect: demo-app
         expect_timeout: 20
         pause: 1.0
-      - click: "+  ✦"
+      - click: "✦ new"
         say: open the new-agent picker
-        in: strip
-        offset: 3
+        in: sidebar
         expect: new agent
       - click: " new agent "
         say: pick Claude Code
-        in: pane
         row_offset: 1
         offset: 3
         # UZE's own drawing, not the stand-in's banner: a gate on a
@@ -107,14 +105,12 @@ scenes:
 
   - scene: the next agent takes the freed slot rather than a new directory
     when:
-      - click: "+  ✦"
+      - click: "✦ new"
         say: open the picker again
-        in: strip
-        offset: 3
+        in: sidebar
         expect: new agent
       - click: " new agent "
         say: pick Codex
-        in: pane
         row_offset: 2
         offset: 3
         # An item on the tree, not the label: the closed agent freed its

@@ -1408,9 +1408,9 @@ pub(super) enum WorkspaceHit {
     SelectTab(TabId),
     CloseTab(TabId),
     NewTab,
-    /// Opens the agent picker (`WorkspaceModel::agent_picker`) — the tab
-    /// strip's "✦" button, creating a new agent tab inside the selected
-    /// space.
+    /// Opens the agent picker (`WorkspaceModel::agent_picker`) — the
+    /// "✦ new" on the selected space's header in the sidebar, creating a
+    /// new agent tab inside that space.
     NewAgentMenu,
     /// One row of the open agent picker, by index into its `options`.
     PickAgent(usize),
@@ -1900,7 +1900,7 @@ struct AgentOption {
 struct AgentPicker {
     options: Vec<AgentOption>,
     selected: usize,
-    /// The tab strip's "✦" button's own rect — the popup anchors just
+    /// The "✦ new" button's own rect — the popup anchors just
     /// under it.
     anchor: Rect,
     /// A preserved task to continue: placement answers with its slot, or
