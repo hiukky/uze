@@ -3384,15 +3384,30 @@ pub(super) fn render_pane(frame: &mut ratatui::Frame<'_>, area: Rect, model: &Wo
     };
     let width = area.width.min(snapshot.columns);
     let height = area.height.min(snapshot.rows);
+    let selection = model
+        .selection
+        .filter(|selection| selection.pane == snapshot.pane && selection.is_visible());
     let buffer = frame.buffer_mut();
     let mut encoded = [0u8; 4];
     for row in 0..height {
         for column in 0..width {
             let index = usize::from(row) * usize::from(snapshot.columns) + usize::from(column);
             if let Some(cell) = snapshot.cells.get(index) {
+                let mut style = cell_style(cell);
+                // Reversed against the cell's own colours rather than
+                // tinted with one of ours: a pane's content can be any
+                // colour at all, and inversion is the one mark that
+                // stays legible over every one of them.
+                if selection.is_some_and(|selection| selection.contains(column, row)) {
+                    style = if cell.attributes.inverse {
+                        style.remove_modifier(Modifier::REVERSED)
+                    } else {
+                        style.add_modifier(Modifier::REVERSED)
+                    };
+                }
                 buffer[(area.x + column, area.y + row)]
                     .set_symbol(cell.character.encode_utf8(&mut encoded))
-                    .set_style(cell_style(cell));
+                    .set_style(style);
             }
         }
     }

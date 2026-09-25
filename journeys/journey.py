@@ -661,6 +661,19 @@ class Screen:
         time.sleep(0.07)
         self.literal(f"\033[<{button};{col};{row}m")
 
+    def drag(self, start: tuple[int, int], end: tuple[int, int], shift: bool) -> None:
+        # Press, one motion report per cell, release — the SGR a terminal
+        # sends for a held left button, with Shift's bit when it is held.
+        modifier = 4 if shift else 0
+        (col, row), (to_col, to_row) = start, end
+        self.literal(f"\033[<{modifier};{col};{row}M")
+        step = 1 if to_col >= col else -1
+        for through in range(col + step, to_col + step, step):
+            time.sleep(0.03)
+            self.literal(f"\033[<{32 + modifier};{through};{to_row}M")
+        time.sleep(0.07)
+        self.literal(f"\033[<{modifier};{to_col};{to_row}m")
+
     def type_text(self, text: str) -> None:
         for char in text:
             self.literal(char)
@@ -687,8 +700,18 @@ class Failed(Exception):
     """A gesture that did not happen, or a check that did not hold."""
 
 
-GESTURES = ("open", "click", "rclick", "dclick", "type", "key", "shell", "wait")
-AIMED = ("click", "rclick", "dclick")
+GESTURES = (
+    "open",
+    "click",
+    "rclick",
+    "dclick",
+    "drag",
+    "type",
+    "key",
+    "shell",
+    "wait",
+)
+AIMED = ("click", "rclick", "dclick", "drag")
 
 
 @dataclass
@@ -814,6 +837,23 @@ class Runner:
         subprocess.run(
             ["tmux", "set-option", "-t", session, "status", "off"], capture_output=True
         )
+        # What the app writes to its terminal, byte for byte — the only
+        # witness of a request the app makes of the terminal itself (a
+        # clipboard write) rather than of a cell. Per pane, so the tmux
+        # server's own options are left alone.
+        if tap := step.get("tap"):
+            subprocess.run(
+                [
+                    "tmux",
+                    "pipe-pane",
+                    "-t",
+                    session,
+                    "-o",
+                    f"cat >> {shlex.quote(self.resolve(tap))}",
+                ],
+                check=True,
+                capture_output=True,
+            )
         self.screen = Screen(session)
         time.sleep(1.5)
 
@@ -862,6 +902,13 @@ class Runner:
         self.screen.mouse(col, row)
         time.sleep(0.11)
         self.screen.mouse(col, row)
+
+    def _drag(self, step: dict) -> None:
+        # From the first cell of the target across `span` cells, default
+        # the target's own width: a drag that selects exactly what it names.
+        row, col = self._target(step)
+        span = int(step.get("span", len(step["drag"])))
+        self.screen.drag((col, row), (col + span - 1, row), bool(step.get("shift")))
 
     def _type(self, step: dict) -> None:
         if clear := step.get("clear"):
