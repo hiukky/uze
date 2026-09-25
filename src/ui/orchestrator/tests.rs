@@ -9936,3 +9936,34 @@ fn dismissing_takes_the_one_that_was_clicked() {
         "an index nobody drew is a no-op"
     );
 }
+
+/// A label is edited where the caret is, not only at its end: renaming
+/// "agent 2" to "agent 12" is one keystroke after two lefts, not a label
+/// erased and typed out again.
+#[test]
+fn a_rename_edits_at_the_caret() {
+    let mut buffer = RenameBuffer::new("agent 2".to_owned());
+    buffer.left();
+    buffer.insert('1');
+    assert_eq!(buffer.text(), "agent 12");
+
+    buffer.home();
+    buffer.erase_forward();
+    buffer.insert('A');
+    buffer.end();
+    buffer.erase_back();
+    buffer.insert_str("3é");
+    assert_eq!(buffer.text(), "Agent 13é");
+
+    buffer.left();
+    buffer.erase_back();
+    assert_eq!(buffer.split(), ("Agent 1", "é"));
+
+    buffer.home();
+    buffer.left();
+    buffer.erase_back();
+    buffer.end();
+    buffer.right();
+    buffer.erase_forward();
+    assert_eq!(buffer.text(), "Agent 1é", "edges are where the caret stops");
+}

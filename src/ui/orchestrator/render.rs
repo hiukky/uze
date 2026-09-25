@@ -1000,7 +1000,7 @@ struct SidebarAgent<'a> {
     /// keystrokes.
     is_current: bool,
     status: AgentTabStatus,
-    renaming: Option<&'a str>,
+    renaming: Option<&'a RenameBuffer>,
     drop_target: bool,
     harness: Option<&'a str>,
     tick: usize,
@@ -1091,7 +1091,7 @@ impl<'a> SidebarAgent<'a> {
             .renaming
             .as_ref()
             .filter(|(target, _)| *target == RenameTarget::Tab(tab.id))
-            .map(|(_, buffer)| buffer.as_str());
+            .map(|(_, buffer)| buffer);
         // A tab-reorder drag in this exact space, resolved to drop right
         // before (or, on the last row, at the end after) this one.
         let drop_target = model.dragging_tab.is_some_and(|dragging| {
@@ -1115,14 +1115,9 @@ impl<'a> SidebarAgent<'a> {
 
     /// The row's label: the rename buffer being typed, or the tab's label
     /// elided to `room`.
-    fn label(&self, room: u16) -> Span<'static> {
+    fn label(&self, room: u16) -> Vec<Span<'static>> {
         match self.renaming {
-            Some(buffer) => Span::styled(
-                format!("{buffer}{}", theme::glyph(Symbol::CursorText)),
-                Style::default()
-                    .fg(theme::color(Token::TextBright))
-                    .add_modifier(Modifier::BOLD),
-            ),
+            Some(buffer) => rename_spans(buffer),
             None => {
                 // One item in the whole column is bright and bold, and it
                 // is whatever is receiving keystrokes — here, or the
@@ -1143,13 +1138,27 @@ impl<'a> SidebarAgent<'a> {
                 // register for it in the spaces nobody is in would be a
                 // third level of emphasis in a column that is asking for
                 // fewer.
-                Span::styled(
+                vec![Span::styled(
                     text::elide(&self.tab.label, room as usize),
                     label_style(self.is_current, false),
-                )
+                )]
             }
         }
     }
+}
+
+/// A label being renamed: bright and bold, since it is where keys land,
+/// with the caret where the next one will.
+fn rename_spans(buffer: &RenameBuffer) -> Vec<Span<'static>> {
+    let style = Style::default()
+        .fg(theme::color(Token::TextBright))
+        .add_modifier(Modifier::BOLD);
+    let (before, after) = buffer.split();
+    vec![
+        Span::styled(before.to_owned(), style),
+        Span::styled(theme::glyph(Symbol::CursorText), style),
+        Span::styled(after.to_owned(), style),
+    ]
 }
 
 /// The row under a minimized or empty space's header: the directory the
@@ -1340,7 +1349,8 @@ fn draw_tree(
             // own `SelectTab` hit below, since the click search takes the
             // first rect it lands in — a 1-column target inside a row-wide
             // one only ever wins by being found first.
-            let mut spans = vec![gutter_span, indent_span, indicator_span, label];
+            let mut spans = vec![gutter_span, indent_span, indicator_span];
+            spans.extend(label);
             if let Some((mark, hue)) = &caption.task_mark {
                 push_trailing_mark(&mut spans, hits, label_rect, mark, *hue);
             }
@@ -1746,7 +1756,7 @@ pub(super) fn render_space_header(
         .renaming
         .as_ref()
         .filter(|(target, _)| *target == RenameTarget::Space(space.id))
-        .map(|(_, buffer)| buffer.as_str());
+        .map(|(_, buffer)| buffer);
     // Bold while this is the space in front, and bright with it only
     // while the header is also the row receiving keystrokes — which is
     // when the space is minimized or speaks for no agent of its own, and
@@ -1766,12 +1776,7 @@ pub(super) fn render_space_header(
         WorkspaceHit::ToggleSpaceCollapsed(space.id),
     ));
     match renaming_this {
-        Some(buffer) => spans.push(Span::styled(
-            format!("{buffer}{}", theme::glyph(Symbol::CursorText)),
-            Style::default()
-                .fg(theme::color(Token::TextBright))
-                .add_modifier(Modifier::BOLD),
-        )),
+        Some(buffer) => spans.extend(rename_spans(buffer)),
         None => {
             // The label is what the space is called, and the row says that
             // alone. Where its work lives is the caption under it (see
@@ -3028,28 +3033,24 @@ pub(super) fn render_tab_strip(
             .renaming
             .as_ref()
             .filter(|(target, _)| *target == RenameTarget::Tab(tab.id))
-            .map(|(_, buffer)| buffer.as_str());
+            .map(|(_, buffer)| buffer);
         let tab_label = match renaming_this {
-            Some(buffer) => Span::styled(
-                format!("{buffer}{}", theme::glyph(Symbol::CursorText)),
-                Style::default()
-                    .fg(theme::color(Token::TextBright))
-                    .add_modifier(Modifier::BOLD),
-            ),
+            Some(buffer) => rename_spans(buffer),
             // One name per agent across the whole frame: the tab's own
             // label, which is what the sidebar draws and what renaming
             // edits. A working agent's task carries a label of its own
             // (the prompt's slug, or the bare task identifier when it has
             // no prompt) — showing that here left the same agent reading
             // as "engineer" in the sidebar and "gic3jz" up top.
-            None => Span::styled(tab.label.clone(), label_style),
+            None => vec![Span::styled(tab.label.clone(), label_style)],
         };
         // An agent is never closed by a stray click — that stays a
         // right-click and a confirmation in the sidebar (see `ContextMenu`),
         // the same rule that keeps the sidebar's own agent rows unclosable.
         let show_close = renaming_this.is_none() && can_close && !is_agent;
-        let content_width =
-            marker.width() as u16 + tab_label.width() as u16 + if show_close { 2 } else { 0 }; // " ×"
+        let content_width = marker.width() as u16
+            + tab_label.iter().map(Span::width).sum::<usize>() as u16
+            + if show_close { 2 } else { 0 }; // " ×"
         // 1 column of padding on each side, reserved whether or not this
         // tab is selected — only the theme::color(Token::SurfaceRaised) fill toggles with
         // `selected`, never the width. Sizing the chip itself to
@@ -3061,7 +3062,7 @@ pub(super) fn render_tab_strip(
 
         let mut chip = vec![Span::raw(" ")];
         chip.push(marker);
-        chip.push(tab_label);
+        chip.extend(tab_label);
         if show_close {
             chip.push(Span::raw(" "));
             chip.push(Span::styled("×", theme::fg(Token::TextDim)));
