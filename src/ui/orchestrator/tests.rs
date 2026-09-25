@@ -9019,6 +9019,63 @@ mod workspace_tests {
         );
     }
 
+    /// A harness started by hand in the shell an agent was left on makes
+    /// that shell an agent of its own. Re-entering the first agent then
+    /// means the first agent: following the remembered shell would land
+    /// every click on its row in the other agent, for good.
+    #[test]
+    fn a_shell_that_became_an_agent_is_not_where_its_first_agent_is_re_entered() {
+        let home = UzeHome::at(uze_testkit::temp::scratch("orchestrator-strip-shell-agent"));
+        let (mut model, first, second) = two_agents_with_shells();
+        let shell = model.session.as_ref().expect("session").workspace.spaces[0]
+            .tabs
+            .iter()
+            .find(|tab| tab.agent == Some(first))
+            .expect("the first agent has a shell")
+            .id;
+
+        let mut session = model.session.clone().expect("session");
+        session.select_tab(shell);
+        model.apply(
+            ClientEvent::SessionUpdated { session },
+            &identities_fixture(),
+        );
+        let mut session = model.session.clone().expect("session");
+        for tab in &mut session.workspace.spaces[0].tabs {
+            if tab.id == shell {
+                tab.pane.process = "agent".into();
+            }
+        }
+        session.select_tab(second);
+        model.apply(
+            ClientEvent::SessionUpdated { session },
+            &identities_fixture(),
+        );
+
+        let mut driven = driven(model, &home);
+        driven.frame();
+        let layout = compute_layout(Rect::new(0, 0, 80, 24), driven.attach.model.sidebar_width);
+        let row = driven
+            .attach
+            .model
+            .hits
+            .iter()
+            .find(|(rect, hit)| {
+                rect.x < layout.sidebar.right()
+                    && matches!(hit, WorkspaceHit::SelectTab(tab) if *tab == first)
+            })
+            .map(|(rect, _)| *rect)
+            .expect("the first agent has a sidebar row");
+        driven.press(row.x + 4, row.y);
+
+        assert!(
+            driven.sent().iter().any(
+                |request| matches!(request, ClientRequest::SelectTab { tab } if *tab == first)
+            ),
+            "the first agent's own tab, not the agent started in its shell"
+        );
+    }
+
     /// The same click, when the user is already inside that agent: it
     /// means the agent's own tab, and the strip is right there for
     /// anything else.

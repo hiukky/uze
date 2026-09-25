@@ -2460,7 +2460,7 @@ impl Attach<'_> {
                 let selected = if hit_rect.x < layout.sidebar.right()
                     && !self.model.is_context_agent(tab, &self.identities)
                 {
-                    self.model.strip_tab_for(tab)
+                    self.model.strip_tab_for(tab, &self.identities)
                 } else {
                     tab
                 };
