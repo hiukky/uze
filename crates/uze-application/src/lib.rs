@@ -37,7 +37,7 @@ pub use uze_core::{
         FixedResolution, NameCollisionAuthority, NameCollisionRequest, NameCollisionResolution,
         NoNameCollisionAuthority,
     },
-    notifications::Chime,
+    notifications::{Chime, WrittenChime},
     // The one writer for anything UZE owns. The binary writes its own
     // update ledger, and doing that with a second atomic-rename of its own
     // is how two conventions for one thing start.

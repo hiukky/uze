@@ -8,7 +8,11 @@ mod progress;
 mod prompt;
 mod shim;
 
-use std::{collections::BTreeMap, io::IsTerminal, path::PathBuf};
+use std::{
+    collections::BTreeMap,
+    io::IsTerminal,
+    path::{Path, PathBuf},
+};
 
 use clap::{CommandFactory, Parser, Subcommand, ValueEnum, error::ErrorKind};
 use uze_application::{Chime, HostEntry, PlannedAction, Result, UzeHome};
@@ -49,14 +53,15 @@ enum Command {
     ///
     /// With `name@marketplace`, that package is installed on this machine
     /// and, inside a project, declared in agents.yaml — `-m` installs and
-    /// declares nothing. With no package, the project's environment is
-    /// converged: agents.yaml resolved into agents.lock, then installed.
-    /// A direct path or Git URL is never accepted — the marketplace is the
-    /// product's provenance contract (see ADR-019).
+    /// declares nothing. With no package, or with a project directory, that
+    /// project's environment is converged: agents.yaml resolved into
+    /// agents.lock, then installed. A package is never installed from a
+    /// direct path or Git URL — the marketplace is the product's
+    /// provenance contract (see ADR-019).
     #[command(visible_alias = "i")]
     Install {
-        /// `<name>@<marketplace>`; omitted, converge this project's
-        /// environment
+        /// `<name>@<marketplace>`, or a project directory to converge;
+        /// omitted, converge the project here
         plugin: Option<String>,
         path: Option<PathBuf>,
         /// Authorize executable capabilities
@@ -119,7 +124,7 @@ enum Command {
         #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
         format: OutputFormat,
     },
-    /// Remove from this project, or from this machine with `-m`
+    /// Show this project's environment, or this machine's with `-m`
     Status {
         path: Option<PathBuf>,
         /// The machine read model: packages installed, from where, and
@@ -482,6 +487,16 @@ struct ShorthandArgs {
     /// Machine scope: install the package and declare nothing, project or not
     #[arg(short = 'm', long)]
     machine: bool,
+    /// If the package's bare name is already active from a different
+    /// marketplace, install this one under `NAME` instead. Conflicts with
+    /// `--replace`.
+    #[arg(long, conflicts_with = "replace")]
+    alias: Option<String>,
+    /// If the package's bare name is already active from a different
+    /// marketplace, remove that one first (once safe to) and let this
+    /// install claim the name.
+    #[arg(long)]
+    replace: bool,
     /// Show delivery evidence and full attachment details
     #[arg(long)]
     verbose: bool,
@@ -574,33 +589,45 @@ fn argv_lossy() -> Vec<String> {
 
 /// The removed spellings, each named by the verb that replaced it.
 ///
-/// Only these two: the `plugin` namespace and the `agent task` noun. An
+/// The `plugin` namespace, the `agent task` noun and the root `theme`: an
 /// alias would keep two spellings of one operation alive, which the
 /// command-grammar spec refuses — but a removal that leaves no message
 /// naming its replacement is a removal the next caller repeats wrong.
+/// Matched on the prefix, so whatever followed the removed words is
+/// answered the same way rather than reaching clap's bare error — or, for
+/// a first word clap does not know, the shorthand's "did you mean".
 fn removed_spelling(argv: &[String]) -> Option<String> {
+    const REMOVED: &[(&[&str], &str)] = &[
+        (
+            &["plugin"],
+            "the plugin namespace is gone — install, remove, update, inspect and status are \
+             root verbs now, and `-m` states machine scope",
+        ),
+        (
+            &["agent", "task"],
+            "the agent grammar speaks of work: use `uze agent work`",
+        ),
+        (
+            &["theme"],
+            "appearance is this machine's configuration now: use `uze config theme`",
+        ),
+    ];
     let spoken = |words: &[&str]| {
-        words.len() == argv.len()
+        argv.len() >= words.len()
             && words
                 .iter()
-                .zip(argv.iter().map(String::as_str))
+                .zip(argv)
                 .all(|(word, given)| word.eq_ignore_ascii_case(given))
     };
-    if argv.first().is_some_and(|first| first == "plugin") {
-        return Some(
-            "unrecognized subcommand 'plugin'\n\n  the plugin namespace is gone — install, remove, \
-             update, inspect and status are root verbs now, and `-m` states machine scope"
-                .to_owned(),
-        );
-    }
-    if spoken(&["agent", "task"]) {
-        return Some(
-            "unrecognized subcommand 'task'\n\n  the agent grammar speaks of work: \
-             use `uze agent work`"
-                .to_owned(),
-        );
-    }
-    None
+    REMOVED
+        .iter()
+        .find(|(words, _)| spoken(words))
+        .map(|(words, replacement)| {
+            format!(
+                "unrecognized subcommand '{}'\n\n  {replacement}",
+                words.last().expect("a removed spelling has words")
+            )
+        })
 }
 
 enum HelpTopic {
@@ -958,87 +985,35 @@ fn dispatch(cli: Cli, home: UzeHome) -> Result<()> {
             format,
         } => {
             let authority = trust_authority(trust);
-            match plugin {
-                // One package: the marketplace is the product's provenance
-                // contract, so the spec is always `name@marketplace` (see
-                // ADR-019). `-m` states machine scope; without it the
-                // project declares the package when there is a project,
-                // and the machine half alone runs when there is not — both
-                // report which scope they touched.
-                Some(spec) => {
-                    if !spec.contains('@') {
-                        return Err(uze_application::UzeError::UnknownPackage(format!(
-                            "`{spec}` is not a `name@marketplace` spec; add its marketplace with \
-                             `uze market add <market>` first, then install with \
-                             `uze install {spec}@<market>`"
-                        )));
-                    }
-                    let name_authority = name_collision_authority(alias, replace);
-                    let report = if machine {
-                        machine_install(&app, &spec, authority.as_ref(), name_authority.as_ref())?
-                    } else {
-                        let (plugin_name, marketplace) = split_spec(&spec)?;
-                        let current_dir = cwd()?;
-                        let report = with_spinner(
-                            &format!("Installing {spec}..."),
-                            &format!("Failed to install {spec}"),
-                            || {
-                                app.project().add(
-                                    &plugin_name,
-                                    &marketplace,
-                                    &current_dir,
-                                    authority.as_ref(),
-                                )
-                            },
-                        )?;
-                        if matches!(format, OutputFormat::Text) {
-                            report_scope("this machine and this project");
-                        }
-                        emit(format, &report, |report| {
-                            format!(
-                                "{}\n{}\n{}",
-                                progress::report_title(
-                                    "Added to project",
-                                    Some(&format!("{plugin_name}@{marketplace}"))
-                                ),
-                                progress::key_value(
-                                    "Store path",
-                                    report.plugin.store_path.display().to_string()
-                                ),
-                                render_add_report(report, verbose, &app)
-                            )
-                        });
-                        warn_blocked(&report, &app);
-                        return Ok(());
-                    };
-                    emit(format, &report, |report| {
-                        format!(
-                            "{}\n{}\n{}",
-                            progress::report_title("Package installed", Some(&report.plugin.id)),
-                            progress::key_value(
-                                "Store path",
-                                report.plugin.store_path.display().to_string()
-                            ),
-                            render_add_report(report, verbose, &app)
-                        )
-                    });
-                    if matches!(format, OutputFormat::Text) {
-                        report_scope("this machine only — nothing was declared");
-                        for publication in &report.publications {
-                            if let Some(error) = &publication.error {
-                                progress::warn(&format!(
-                                    "{} could not publish: {error}",
-                                    app.health().integration_label(&publication.integration)
-                                ));
-                            }
-                        }
-                        warn_blocked(&report, &app);
-                    }
-                }
+            match install_target(&app, plugin, path)? {
+                InstallTarget::Package {
+                    plugin,
+                    marketplace,
+                } => install_package(
+                    &app,
+                    PackageInstall {
+                        plugin: &plugin,
+                        marketplace: &marketplace,
+                        machine,
+                        authority: authority.as_ref(),
+                        name_authority: name_collision_authority(alias, replace).as_ref(),
+                        format,
+                        verbose,
+                    },
+                )?,
+                // `-m` promises no project file is touched, and converging
+                // a project is nothing but writing its files.
+                InstallTarget::Project(_) if machine => Cli::command()
+                    .error(
+                        ErrorKind::MissingRequiredArgument,
+                        "`-m` installs one package on this machine and needs it named: \
+                         `uze install -m <name>@<marketplace>`",
+                    )
+                    .exit(),
                 // The project's environment: resolved, reproduced and left
                 // reconciled — or, outside a project, an answer that says
                 // so rather than a fault.
-                None => {
+                InstallTarget::Project(path) => {
                     let report = with_spinner(
                         "Installing project environment...",
                         "Failed to install environment",
@@ -1051,7 +1026,7 @@ fn dispatch(cli: Cli, home: UzeHome) -> Result<()> {
                     if matches!(format, OutputFormat::Text)
                         && matches!(report, InstallReport::NoChanges)
                     {
-                        progress::key_value("Scope", "no project here — nothing was declared");
+                        report_scope("no project here — nothing was declared");
                     }
                 }
             }
@@ -1073,6 +1048,14 @@ fn dispatch(cli: Cli, home: UzeHome) -> Result<()> {
                 )
             })?;
             emit(format, &report, render_update_report);
+            let blocked: Vec<&str> = report.blocked().collect();
+            if !blocked.is_empty() {
+                return Err(uze_application::UzeError::LifecycleBlocked(format!(
+                    "update of `{}` was blocked by drifted managed state and left as it was; \
+                     the report above says what happened to every other package",
+                    blocked.join("`, `")
+                )));
+            }
         }
         Command::Remove {
             plugin,
@@ -1136,25 +1119,24 @@ fn dispatch(cli: Cli, home: UzeHome) -> Result<()> {
             // model — what is installed, from where, and its freshness —
             // instead of the project's own report with the project absent.
             // `-m` states the machine read model even inside a project.
-            let machine_report = if machine {
-                Some(app.health().machine_status()?)
-            } else {
+            if !machine {
                 match app.health().status(&root) {
                     Ok(report) => {
                         emit(format, &report, render_status);
                         return Ok(());
                     }
-                    Err(uze_application::UzeError::NoProject { .. }) => {
-                        Some(app.health().machine_status()?)
-                    }
+                    Err(uze_application::UzeError::NoProject { .. }) => {}
                     Err(error) => return Err(error),
                 }
+            }
+            let asked = if machine {
+                MachineAsked::Explicitly
+            } else {
+                MachineAsked::NoProjectHere
             };
-            emit(
-                format,
-                machine_report.as_ref().expect("a machine answer"),
-                render_machine_status,
-            );
+            emit(format, &app.health().machine_status()?, |report| {
+                render_machine_status(report, asked)
+            });
         }
         Command::Agent { action } => run_agent(&app, action)?,
         Command::Config { action } => run_config(&app, &home, action)?,
@@ -1441,16 +1423,25 @@ fn run_config(app: &UzeApplication, home: &UzeHome, action: ConfigAction) -> Res
         },
         ConfigAction::Notification { state, format } => match state.as_deref() {
             None => {
-                let chime = app.notifications().agent_finished()?;
+                let written = app.notifications().agent_finished_as_written()?;
+                let chime = chime_label(written.in_force);
                 if matches!(format, OutputFormat::Json) {
                     // Chime carries no read model of its own; the choice's
-                    // label is the answer.
-                    println!(r#"{{"finished_turns_ring":"{}"}}"#, chime_label(chime));
+                    // label is the answer, and the word left unread beside it.
+                    print_json(&serde_json::json!({
+                        "finished_turns_ring": chime,
+                        "unrecognised": written.unrecognised,
+                    }));
                 } else {
-                    println!(
-                        "{}",
-                        progress::key_value("Finished turns ring", chime_label(chime))
-                    );
+                    println!("{}", progress::key_value("Finished turns ring", chime));
+                }
+                // Reported, never written over: the file is the operator's
+                // text, and the word may be one a newer build knows.
+                if let Some(word) = &written.unrecognised {
+                    progress::warn(&format!(
+                        "config.toml sets notifications.agent_finished to `{word}`, which this \
+                         build does not recognise — {chime} is in force"
+                    ));
                 }
             }
             Some("test") => {
@@ -2313,50 +2304,123 @@ fn run_shorthand(app: &UzeApplication, args: Vec<String>, verbose: bool) -> Resu
     if shorthand.verbose {
         progress::follow_steps(true);
     }
-    let authority = trust_authority(shorthand.trust);
-    if shorthand.machine {
-        // `-m` states machine scope from a caller that cannot choose a
-        // directory to express it: install and deliver, declare nothing.
-        let report = machine_install(
-            app,
-            &format!("{plugin}@{marketplace}"),
-            authority.as_ref(),
-            &uze_application::NoNameCollisionAuthority,
-        )?;
-        emit(shorthand.format, &report, |report| {
-            format!(
-                "{}\n{}\n{}",
-                progress::report_title("Package installed", Some(&report.plugin.id)),
-                progress::key_value("Store path", report.plugin.store_path.display().to_string()),
-                render_add_report(report, verbose || shorthand.verbose, app)
-            )
-        });
-        if matches!(shorthand.format, OutputFormat::Text) {
-            report_scope("this machine only — nothing was declared");
-        }
-        warn_blocked(&report, app);
-        return Ok(());
-    }
-    let current_dir = cwd()?;
-    let report = with_spinner(
-        &format!("Adding {plugin}@{marketplace} to this project..."),
-        &format!("Failed to add {plugin}@{marketplace}"),
-        || {
-            app.project()
-                .add(&plugin, &marketplace, &current_dir, authority.as_ref())
+    install_package(
+        app,
+        PackageInstall {
+            plugin: &plugin,
+            marketplace: &marketplace,
+            machine: shorthand.machine,
+            authority: trust_authority(shorthand.trust).as_ref(),
+            name_authority: name_collision_authority(shorthand.alias, shorthand.replace).as_ref(),
+            format: shorthand.format,
+            verbose: verbose || shorthand.verbose,
         },
-    )?;
+    )
+}
 
-    emit(shorthand.format, &report, |report| {
+/// What `uze install <spec>` was handed: one package, or a project to
+/// converge — the directory given, or the one it was run from.
+enum InstallTarget {
+    Package { plugin: String, marketplace: String },
+    Project(Option<PathBuf>),
+}
+
+/// Reads the install positional. A `name@marketplace` spec is a package; a
+/// project's root directory is the project to converge, which is what
+/// `uze install <path>` meant before the package form shared its position.
+/// Only a root: any other directory is far likelier a package's own
+/// directory handed over as a direct source, which the marketplace
+/// contract refuses — and converging whatever project happens to enclose
+/// it would write into one nobody named.
+fn install_target(
+    app: &UzeApplication,
+    positional: Option<String>,
+    path: Option<PathBuf>,
+) -> Result<InstallTarget> {
+    let Some(positional) = positional else {
+        return Ok(InstallTarget::Project(path));
+    };
+    if positional.contains('@') {
+        let (plugin, marketplace) = uze_application::parse_plugin_marketplace_spec(&positional)?;
+        return Ok(InstallTarget::Package {
+            plugin,
+            marketplace,
+        });
+    }
+    if path.is_none() && app.project().is_root(Path::new(&positional)) {
+        return Ok(InstallTarget::Project(Some(PathBuf::from(positional))));
+    }
+    Err(uze_application::UzeError::UnknownPackage(format!(
+        "`{positional}` is not a `name@marketplace` spec; add its marketplace with \
+         `uze market add <market>` first, then install with \
+         `uze install {positional}@<market>`"
+    )))
+}
+
+/// One package install as the caller asked for it — `uze install <spec>`
+/// and the `uze <spec>` shorthand are the same operation with two
+/// spellings, so they share this and its rendering.
+struct PackageInstall<'a> {
+    plugin: &'a str,
+    marketplace: &'a str,
+    machine: bool,
+    authority: &'a dyn uze_application::TrustAuthority,
+    name_authority: &'a dyn uze_application::NameCollisionAuthority,
+    format: OutputFormat,
+    verbose: bool,
+}
+
+/// Installs one package in the scope asked for — the machine alone with
+/// `-m`, otherwise declared in the project here when there is one — and
+/// reports the scope the install actually touched, which is the report's
+/// to say: a project add with no project, or from the marketplace built
+/// into UZE, declares nothing.
+fn install_package(app: &UzeApplication, install: PackageInstall<'_>) -> Result<()> {
+    let spec = format!("{}@{}", install.plugin, install.marketplace);
+    let report = if install.machine {
+        machine_install(app, &spec, install.authority, install.name_authority)?
+    } else {
+        let current_dir = cwd()?;
+        with_spinner(
+            &format!("Installing {spec}..."),
+            &format!("Failed to install {spec}"),
+            || {
+                app.project().add(
+                    install.plugin,
+                    install.marketplace,
+                    &current_dir,
+                    install.authority,
+                    install.name_authority,
+                )
+            },
+        )?
+    };
+    let (title, scope) = if report.declared {
+        ("Added to project", "this machine and this project")
+    } else {
+        (
+            "Package installed",
+            "this machine only — nothing was declared",
+        )
+    };
+    emit(install.format, &report, |report| {
         format!(
             "{}\n{}\n{}",
-            progress::report_title("Added to project", Some(&format!("{plugin}@{marketplace}"))),
+            progress::report_title(title, Some(&report.plugin.id)),
             progress::key_value("Store path", report.plugin.store_path.display().to_string()),
-            render_add_report(report, verbose || shorthand.verbose, app)
+            render_add_report(report, install.verbose, app)
         )
     });
-    if matches!(shorthand.format, OutputFormat::Text) {
-        report_scope("this machine and this project");
+    if matches!(install.format, OutputFormat::Text) {
+        report_scope(scope);
+        for publication in &report.publications {
+            if let Some(error) = &publication.error {
+                progress::warn(&format!(
+                    "{} could not publish: {error}",
+                    app.health().integration_label(&publication.integration)
+                ));
+            }
+        }
     }
     warn_blocked(&report, app);
     Ok(())
@@ -2381,20 +2445,9 @@ fn machine_install(
     )
 }
 
-/// Splits `name@marketplace` for the project install path, which asks for
-/// the halves separately.
-fn split_spec(spec: &str) -> Result<(String, String)> {
-    let (plugin, marketplace) = spec.split_once('@').ok_or_else(|| {
-        uze_application::UzeError::UnknownPackage(format!(
-            "`{spec}` is not a `name@marketplace` spec"
-        ))
-    })?;
-    Ok((plugin.to_owned(), marketplace.to_owned()))
-}
-
 /// The scope note every two-scoped verb ends with: what the command touched.
 fn report_scope(scope: &str) {
-    progress::key_value("Scope", scope);
+    println!("{}", progress::key_value("Scope", scope));
 }
 
 /// The ending a blocked lifecycle mutation deserves.
@@ -2641,10 +2694,17 @@ fn freshness_label(freshness: &uze_application::application::Freshness) -> Strin
 /// answers, and a report that shows only what changed cannot tell them
 /// apart.
 fn render_update_report(report: &uze_application::application::UpdateReport) -> String {
-    use uze_application::application::UpdateOutcome;
-    let title = progress::report_title("Update", Some("This project's pins"));
+    use uze_application::application::{UpdateOutcome, UpdateScope};
+    let (scope, nothing_considered) = match report.scope {
+        UpdateScope::Project => ("This project's pins", "This project declares no plugins"),
+        UpdateScope::Machine => (
+            "Packages on this machine",
+            "No packages installed on this machine",
+        ),
+    };
+    let title = progress::report_title("Update", Some(scope));
     if report.outcomes.is_empty() {
-        return format!("{title}\n  This project declares no plugins\n");
+        return format!("{title}\n  {nothing_considered}\n");
     }
     let rows = report
         .outcomes
@@ -2660,6 +2720,10 @@ fn render_update_report(report: &uze_application::application::UpdateReport) -> 
             UpdateOutcome::Held { plugin, reason } => {
                 vec![progress::title(plugin), progress::label(reason)]
             }
+            UpdateOutcome::Blocked { plugin, reason } => vec![
+                progress::title(plugin),
+                progress::warning_text(format!("blocked — {reason}")),
+            ],
         })
         .collect();
     let mut text = format!("{title}\n{}\n", progress::aligned_rows(rows));
@@ -2936,7 +3000,7 @@ fn run_agent_market(app: &UzeApplication, action: AgentMarketAction) -> Result<(
                 )?;
                 emit(format, &report, |report| {
                     format!(
-                        "{}\n{}",
+                        "{}\n{}\n",
                         progress::report_title(
                             "Marketplace created",
                             Some(&format!(
@@ -2958,6 +3022,8 @@ fn run_agent_market(app: &UzeApplication, action: AgentMarketAction) -> Result<(
                                    marketplace) or `--at <dir>` (a standalone checkout)",
                 );
             };
+            // The registry outlives the directory this ran from.
+            let at = cwd()?.join(at);
             let report = with_spinner(
                 &format!("Scaffolding marketplace {name}..."),
                 "Failed to scaffold the marketplace",
@@ -2968,7 +3034,7 @@ fn run_agent_market(app: &UzeApplication, action: AgentMarketAction) -> Result<(
             )?;
             emit(format, &report, |report| {
                 format!(
-                    "{}\n{}",
+                    "{}\n{}\n",
                     progress::report_title(
                         "Marketplace created",
                         Some(&format!(
@@ -3028,7 +3094,7 @@ fn run_agent_plugin(app: &UzeApplication, action: AgentPluginAction) -> Result<(
             )?;
             emit(format, &report, |report| {
                 format!(
-                    "{}\n{}",
+                    "{}\n{}\n",
                     progress::report_title(
                         "Plugin created",
                         Some(&format!(
@@ -3513,7 +3579,7 @@ fn render_market_removal(report: &MarketplaceRemovalReport) -> String {
             progress::title(package)
         ));
     }
-    if report.blocked.is_empty() && !report.record_removed {
+    if report.record_removed {
         text.push_str(&progress::label("registry entry removed\n"));
     }
     if !report.blocked.is_empty() {
@@ -3616,12 +3682,30 @@ fn render_harness_detail(harness: &HarnessHealth) -> String {
     text
 }
 
-/// `uze status` outside a project: the machine read model. The absence of
-/// a project is stated as the fact it is, and the packages answer follows.
-fn render_machine_status(report: &MachineStatusReport) -> String {
-    let mut text = progress::report_title("Machine status", Some("No project here"));
+/// Why `uze status` answered with the machine: `-m` asked for it, or there
+/// was no project to answer about.
+#[derive(Clone, Copy)]
+enum MachineAsked {
+    Explicitly,
+    NoProjectHere,
+}
+
+/// `uze status -m`, or `uze status` outside a project: the machine read
+/// model. The absence of a project is stated as the fact it is — and only
+/// when it is one — and the packages answer follows.
+fn render_machine_status(report: &MachineStatusReport, asked: MachineAsked) -> String {
+    let (detail, absence) = match asked {
+        MachineAsked::Explicitly => ("Packages on this machine", None),
+        MachineAsked::NoProjectHere => (
+            "No project here",
+            Some("no project here — nothing was declared\n"),
+        ),
+    };
+    let mut text = progress::report_title("Machine status", Some(detail));
     text.push('\n');
-    text.push_str(&progress::label("no project here — nothing was declared\n"));
+    if let Some(absence) = absence {
+        text.push_str(&progress::label(absence));
+    }
     text.push_str(&render_plugin_list(&report.packages));
     text.push('\n');
     text

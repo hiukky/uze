@@ -190,7 +190,13 @@ impl World {
             .add(&format!("file://{}", market.display()))
             .unwrap();
         app.project()
-            .add(PLUGIN, MARKETPLACE, &world.project, &AlwaysTrust)
+            .add(
+                PLUGIN,
+                MARKETPLACE,
+                &world.project,
+                &AlwaysTrust,
+                &uze_application::NoNameCollisionAuthority,
+            )
             .unwrap();
         // From here on the marketplace's repository does not exist: every
         // answer about it below is the cache's, or nothing.

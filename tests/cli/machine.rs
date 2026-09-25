@@ -969,17 +969,69 @@ fn a_blocked_update_reports_and_fails() {
         ])
         .output()
         .unwrap();
-    let stderr = String::from_utf8_lossy(&update.stderr);
-    assert!(
-        stderr.contains("blocked"),
-        "the report must still say what happened, got: {stderr}"
+    let stdout = String::from_utf8_lossy(&update.stdout);
+    let report: serde_json::Value = serde_json::from_str(&stdout)
+        .unwrap_or_else(|error| panic!("the report must stay parseable ({error}): {stdout}"));
+    assert_eq!(
+        report["outcomes"][0]["outcome"], "BLOCKED",
+        "the report must still say what happened, got: {stdout}"
     );
     assert!(
         !update.status.success(),
-        "a blocked update reported success: {stderr}"
+        "a blocked update reported success: {stdout}"
+    );
+    let stderr = String::from_utf8_lossy(&update.stderr);
+    assert!(
+        !stderr.contains("nothing was changed"),
+        "the failure must not claim more than it knows: {stderr}"
     );
 
     let _ = std::fs::remove_dir_all(home);
     let _ = std::fs::remove_dir_all(uze_home);
     let _ = std::fs::remove_dir_all(fake_bin);
+}
+
+/// Updating a machine whose packages are already at their source's head
+/// moves nothing, and says so — every time it is asked, under a header
+/// that names the machine rather than a project that is not there.
+#[cfg(unix)]
+#[test]
+fn a_machine_update_with_nothing_new_says_already_current() {
+    let home = temporary_home("cli-update-current-home");
+    let uze_home = temporary_home("cli-update-current-uze-home");
+    let path = "/usr/bin:/bin";
+
+    let add = install_via_marketplace(&home, &uze_home, &package_fixture(), path);
+    assert!(
+        add.status.success(),
+        "install failed: {}",
+        String::from_utf8_lossy(&add.stderr)
+    );
+
+    for _ in 0..2 {
+        let update = Command::new(env!("CARGO_BIN_EXE_uze"))
+            .env("UZE_HOME", &uze_home)
+            .env("HOME", &home)
+            .env("PATH", path)
+            .args(["update", "-m"])
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&update.stdout);
+        assert!(
+            update.status.success(),
+            "{} {stdout}",
+            String::from_utf8_lossy(&update.stderr)
+        );
+        assert!(
+            stdout.contains("Packages on this machine") && !stdout.contains("This project"),
+            "got: {stdout}"
+        );
+        assert!(
+            stdout.contains("already current") && !stdout.contains("moved to"),
+            "an update that moved nothing claimed a move: {stdout}"
+        );
+    }
+
+    let _ = std::fs::remove_dir_all(home);
+    let _ = std::fs::remove_dir_all(uze_home);
 }

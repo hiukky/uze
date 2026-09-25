@@ -349,6 +349,10 @@ pub struct AddPluginReport {
     /// does not own. The package is installed and everything else was
     /// delivered; these are what a person has to settle.
     pub blocked: Vec<BlockedCapability>,
+    /// Whether a project declared the package. A project add outside any
+    /// project, or from the marketplace built into UZE, installs on the
+    /// machine alone — and the scope it reports has to say so.
+    pub declared: bool,
 }
 
 #[derive(Clone, Debug, Serialize)]

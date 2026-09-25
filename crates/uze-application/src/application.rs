@@ -65,6 +65,7 @@ pub use overview::{
 use project_environment::ProjectEnvironmentPlan;
 pub use project_environment::{
     InstallReport, ProjectLockStatus, RemoveProjectPluginReport, UpdateOutcome, UpdateReport,
+    UpdateScope,
 };
 pub use uze_core::workspace::WorkspaceKind;
 

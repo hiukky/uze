@@ -204,6 +204,7 @@ impl Plugins<'_> {
             attachments,
             publications,
             blocked,
+            declared: false,
         })
     }
 

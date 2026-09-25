@@ -9,6 +9,7 @@ use serde::Serialize;
 use uze_core::{
     Result, UzeError,
     manifest::{self, DeclaredMarketplace},
+    naming::NameCollisionAuthority,
     project_lock::{self, LockedMarketplace, LockedPlugin, ProjectLock},
     project_root,
     trust::TrustAuthority,
@@ -27,13 +28,16 @@ use super::*;
 /// A marketplace linked to a checkout this machine develops pins nothing
 /// (`record_in_lock` leaves it out by design), so the lock has no entry to
 /// carry — the declared source is then what the machine registry knows: the
-/// checkout, as a local path. It does not reproduce on another machine, and
-/// `plan` says so; what it must never do is panic on the declaration it is
-/// obliged to write.
+/// checkout, as a local path. A checkout that is the project or sits inside
+/// it is spelled relative to the project root, which is what a `path:` is
+/// read against, so every clone of the project resolves it; any other does
+/// not reproduce on another machine, and `plan` says so. What it must never
+/// do is panic on the declaration it is obliged to write.
 fn declared_marketplace_for(
     lock: &ProjectLock,
     marketplace: &str,
     checkout: Option<std::path::PathBuf>,
+    project_root: &Path,
 ) -> DeclaredMarketplace {
     match lock.marketplaces.get(marketplace) {
         Some(locked) => DeclaredMarketplace {
@@ -45,12 +49,30 @@ fn declared_marketplace_for(
         },
         None => DeclaredMarketplace {
             git: None,
-            path: checkout,
+            path: checkout.map(|checkout| declared_path(checkout, project_root)),
             r#ref: None,
             subdirectory: None,
             plugins: Vec::new(),
         },
     }
+}
+
+fn declared_path(checkout: std::path::PathBuf, project_root: &Path) -> std::path::PathBuf {
+    let checkout = checkout.canonicalize().unwrap_or(checkout);
+    match checkout.strip_prefix(project_root) {
+        Ok(inside) if inside.as_os_str().is_empty() => std::path::PathBuf::from("."),
+        Ok(inside) => inside.to_path_buf(),
+        Err(_) => checkout,
+    }
+}
+
+/// A `path:` a clone of the project resolves the same way: relative, and
+/// never climbing out of the project it is read against.
+fn stays_inside_the_project(path: &Path) -> bool {
+    path.is_relative()
+        && !path
+            .components()
+            .any(|component| component == std::path::Component::ParentDir)
 }
 
 impl Project<'_> {
@@ -81,13 +103,19 @@ impl Project<'_> {
             .map(|(name, _)| name.to_owned())
             .collect();
 
-        // A marketplace declared as a path is a directory on one machine.
-        // It resolves here and nowhere else — including for the person who
-        // wrote it, on their next machine.
+        // A marketplace declared as a path outside the project is a
+        // directory on one machine. It resolves here and nowhere else —
+        // including for the person who wrote it, on their next machine.
         let unreproducible_marketplaces: Vec<String> = manifest
             .marketplaces
             .iter()
-            .filter(|(_, declared)| declared.git.is_none() && declared.path.is_some())
+            .filter(|(_, declared)| {
+                declared.git.is_none()
+                    && declared
+                        .path
+                        .as_deref()
+                        .is_some_and(|path| !stays_inside_the_project(path))
+            })
             .map(|(name, _)| name.clone())
             .collect();
 
@@ -172,6 +200,19 @@ impl Project<'_> {
         )
     }
 
+    /// Whether `dir` is a project's own root — the directory a path names
+    /// when it names a project, as opposed to one somewhere inside it.
+    #[tracing::instrument(name = "project.is_root", skip_all, fields(dir = %dir.display()))]
+    pub fn is_root(&self, dir: &Path) -> bool {
+        let Ok(canonical) = dir.canonicalize() else {
+            return false;
+        };
+        project_root::resolve_project_root(&canonical)
+            .ok()
+            .flatten()
+            .is_some_and(|root| root == canonical)
+    }
+
     /// Adds a plugin to the project lock and ensures it's in the Store.
     #[tracing::instrument(name = "project.add", skip_all, fields(plugin = %plugin, marketplace = %marketplace, root = %root.display()), err)]
     pub fn add(
@@ -180,6 +221,7 @@ impl Project<'_> {
         marketplace: &str,
         root: &Path,
         authority: &dyn TrustAuthority,
+        name_authority: &dyn NameCollisionAuthority,
     ) -> Result<AddPluginReport> {
         self.0.begin_operation();
         let canonical = project_root::resolve_project_root(root)?;
@@ -195,7 +237,7 @@ impl Project<'_> {
             return self.0.marketplace().install_plugin_resolving(
                 &format!("{plugin}@{marketplace}"),
                 authority,
-                &uze_core::naming::NoNameCollisionAuthority,
+                name_authority,
             );
         }
         let canonical = canonical.unwrap();
@@ -233,7 +275,14 @@ impl Project<'_> {
 
         // Acquire and ingest (reuses existing lifecycle).
         let _mutation = uze_core::persistence::MutationLock::acquire(&self.0.home)?;
-        let report = self.resolve_into_lock(&mut lock, plugin, marketplace, &request, authority)?;
+        let report = self.resolve_into_lock(
+            &mut lock,
+            plugin,
+            marketplace,
+            &request,
+            authority,
+            name_authority,
+        )?;
 
         // The declaration comes first and the lock second: `agents.yaml` is
         // what the project meant, and the lock is what that meant resolved
@@ -257,11 +306,14 @@ impl Project<'_> {
             &canonical,
             plugin,
             marketplace,
-            &declared_marketplace_for(&lock, marketplace, checkout),
+            &declared_marketplace_for(&lock, marketplace, checkout, &canonical),
         )?;
         project_lock::save_lock(&canonical, &lock)?;
 
-        Ok(report)
+        Ok(AddPluginReport {
+            declared: true,
+            ..report
+        })
     }
 
     /// Removes a plugin's declaration and the entry it resolved to. The
@@ -443,9 +495,15 @@ impl Project<'_> {
                 }
             } else {
                 let _mutation = uze_core::persistence::MutationLock::acquire(&self.0.home)?;
-                self.resolve_and_install(&name, &marketplace, &request, authority)?
-                    .plugin
-                    .id
+                self.resolve_and_install(
+                    &name,
+                    &marketplace,
+                    &request,
+                    authority,
+                    &uze_core::naming::NoNameCollisionAuthority,
+                )?
+                .plugin
+                .id
             };
 
             let pinned =
@@ -480,6 +538,7 @@ impl Project<'_> {
         // `AGENTS.md`, so declaring and projecting stay one command, as
         // they are for `install`.
         let report = UpdateReport {
+            scope: UpdateScope::Project,
             reconciled: false,
             outcomes,
         };
@@ -503,7 +562,8 @@ impl Project<'_> {
     /// Best-effort like the project update: one package's failure never
     /// stops the rest, and a blocked or trust-held update leaves the
     /// installed revision untouched — `Plugins::update` inspects before it
-    /// detaches.
+    /// detaches. A block is an outcome in the report rather than an error,
+    /// so the caller can show every package's answer before failing on it.
     fn update_machine(
         &self,
         plugin: Option<&str>,
@@ -519,26 +579,25 @@ impl Project<'_> {
                 .collect(),
         };
         let mut outcomes = Vec::new();
-        let mut held_back: Option<(String, (ReconciliationReport, PackageRemovalPlan))> = None;
         for id in targets {
+            let before = self.resolved_revision(&id);
             match self.0.plugins().update(&id, authority) {
                 Ok(UpdatePluginReport::Updated { .. }) => {
-                    let revision = self
-                        .0
-                        .package_by_name(&id)
-                        .map(|package| package.provenance.resolved.display())
-                        .unwrap_or_default();
-                    outcomes.push(UpdateOutcome::Moved {
-                        plugin: id,
-                        revision,
+                    let after = self.resolved_revision(&id);
+                    outcomes.push(if after == before {
+                        UpdateOutcome::AlreadyCurrent { plugin: id }
+                    } else {
+                        UpdateOutcome::Moved {
+                            plugin: id,
+                            revision: after,
+                        }
                     });
                 }
-                Ok(UpdatePluginReport::Blocked { report, plan }) => {
-                    // A blocked update is reported *and* failed: the exit
-                    // status is the contract a script reads (`update -m x
-                    // && …` must never be told the update happened).
-                    held_back = Some((id, (report, plan)));
-                    break;
+                Ok(UpdatePluginReport::Blocked { plan, .. }) => {
+                    outcomes.push(UpdateOutcome::Blocked {
+                        plugin: id,
+                        reason: format!("managed state has drifted ({plan:?})"),
+                    });
                 }
                 Err(UzeError::TrustRequired { detail, .. }) => {
                     outcomes.push(UpdateOutcome::Held {
@@ -552,16 +611,18 @@ impl Project<'_> {
                 Err(error) => return Err(error),
             }
         }
-        if let Some((_, (report, plan))) = held_back {
-            return Err(UzeError::LifecycleBlocked(format!(
-                "update of `{}` was blocked ({plan:?}); nothing was changed",
-                report.package_id
-            )));
-        }
         Ok(UpdateReport {
+            scope: UpdateScope::Machine,
             reconciled: false,
             outcomes,
         })
+    }
+
+    fn resolved_revision(&self, id: &str) -> String {
+        self.0
+            .package_by_name(id)
+            .map(|package| package.provenance.resolved.display())
+            .unwrap_or_default()
     }
 
     /// Brings the project's declared environment about, in two passes over
@@ -706,7 +767,14 @@ impl Project<'_> {
             };
             let request = MarketplaceRequest::of(&fetch_source)?;
             self.register_marketplace(marketplace, fetch_source, &request.repository.identity)?;
-            self.resolve_into_lock(&mut lock, &stale.plugin, marketplace, &request, authority)?;
+            self.resolve_into_lock(
+                &mut lock,
+                &stale.plugin,
+                marketplace,
+                &request,
+                authority,
+                &uze_core::naming::NoNameCollisionAuthority,
+            )?;
             // Saved per entry, not once at the end: bytes are already in
             // the Store, and a later failure must not leave the lock
             // denying what this machine now holds.
@@ -893,6 +961,7 @@ impl Project<'_> {
         marketplace: &str,
         request: &MarketplaceRequest,
         authority: &dyn TrustAuthority,
+        name_authority: &dyn NameCollisionAuthority,
     ) -> Result<AddPluginReport> {
         let materialized = request.materialize_plugin(
             plugin,
@@ -908,7 +977,7 @@ impl Project<'_> {
             marketplace,
             None,
             authority,
-            &uze_core::naming::NoNameCollisionAuthority,
+            name_authority,
         )
     }
 
@@ -960,8 +1029,10 @@ impl Project<'_> {
         marketplace: &str,
         request: &MarketplaceRequest,
         authority: &dyn TrustAuthority,
+        name_authority: &dyn NameCollisionAuthority,
     ) -> Result<AddPluginReport> {
-        let report = self.resolve_and_install(plugin, marketplace, request, authority)?;
+        let report =
+            self.resolve_and_install(plugin, marketplace, request, authority, name_authority)?;
         self.record_in_lock(lock, plugin, marketplace, request, &report.plugin.id)?;
         Ok(report)
     }
@@ -1094,10 +1165,24 @@ pub enum UpdateOutcome {
     /// marketplace linked to a checkout on this machine pins nothing, and a
     /// revision introducing execution waits for an explicit decision.
     Held { plugin: String, reason: String },
+    /// The safety check refused to detach what is installed, so it was left
+    /// exactly as it was. Unlike `Held`, this fails the command: a script
+    /// running `update -m x && …` must not be told the update happened.
+    Blocked { plugin: String, reason: String },
+}
+
+/// Which pins an update considered: a project's declared ones, or every
+/// package this machine holds.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UpdateScope {
+    Project,
+    Machine,
 }
 
 #[derive(Clone, Debug, Serialize)]
 pub struct UpdateReport {
+    pub scope: UpdateScope,
     pub outcomes: Vec<UpdateOutcome>,
     /// Whether the project's context was reconciled afterwards.
     pub reconciled: bool,
@@ -1108,6 +1193,14 @@ impl UpdateReport {
         self.outcomes
             .iter()
             .any(|outcome| matches!(outcome, UpdateOutcome::Moved { .. }))
+    }
+
+    /// The packages the safety check refused to touch.
+    pub fn blocked(&self) -> impl Iterator<Item = &str> {
+        self.outcomes.iter().filter_map(|outcome| match outcome {
+            UpdateOutcome::Blocked { plugin, .. } => Some(plugin.as_str()),
+            _ => None,
+        })
     }
 }
 

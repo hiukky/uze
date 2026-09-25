@@ -13,6 +13,12 @@ impl Notifications<'_> {
         notifications::agent_finished(&self.0.home)
     }
 
+    /// The choice in force, and the word `config.toml` holds for it when
+    /// this build does not recognise that word.
+    pub fn agent_finished_as_written(&self) -> Result<notifications::WrittenChime> {
+        notifications::agent_finished_as_written(&self.0.home)
+    }
+
     #[tracing::instrument(name = "notifications.set_agent_finished", skip_all, fields(chime = ?chime), err)]
     pub fn set_agent_finished(&self, chime: Chime) -> Result<()> {
         notifications::set_agent_finished(&self.0.home, chime)
