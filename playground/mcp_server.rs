@@ -5,7 +5,7 @@
 use rmcp::{
     ServerHandler, ServiceExt,
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},
-    model::{ServerCapabilities, ServerInfo},
+    model::{ServerCapabilities, ServerConfig},
     tool, tool_handler, tool_router,
     transport::io::stdio,
 };
@@ -61,8 +61,8 @@ impl PlaygroundServer {
 
 #[tool_handler(router = self.tool_router)]
 impl ServerHandler for PlaygroundServer {
-    fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
+    fn get_info(&self) -> ServerConfig {
+        ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
             .with_instructions("Deterministic playground MCP tools")
     }
 }

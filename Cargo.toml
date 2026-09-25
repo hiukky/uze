@@ -81,7 +81,7 @@ libc = "0.2"
 # signs as "what is in here", and answered for by `cargo deny` and
 # `cargo audit` — a full async runtime and an MCP server the product does not
 # use. No production source in `src/` or `crates/` names any of them.
-rmcp = { version = "3", features = ["server", "transport-io", "macros"], optional = true }
+rmcp = { version = "3.4", features = ["server", "transport-io", "macros"], optional = true }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-std"], optional = true }
 schemars = { version = "1", optional = true }
 
@@ -99,7 +99,7 @@ tracing-appender = "0.2"
 opentelemetry = { version = "0.33", optional = true }
 opentelemetry_sdk = { version = "0.33", optional = true }
 opentelemetry-otlp = { version = "0.33", optional = true, default-features = false, features = ["trace", "http-proto", "reqwest-blocking-client"] }
-tracing-opentelemetry = { version = "0.33", optional = true }
+tracing-opentelemetry = { version = "0.34", optional = true }
 
 [features]
 # Export every span over OTLP/HTTP to `OTEL_EXPORTER_OTLP_ENDPOINT`

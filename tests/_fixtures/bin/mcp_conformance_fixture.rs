@@ -9,7 +9,7 @@
 use rmcp::{
     ServerHandler, ServiceExt,
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},
-    model::{ServerCapabilities, ServerInfo},
+    model::{ServerCapabilities, ServerConfig},
     tool, tool_handler, tool_router,
     transport::io::stdio,
 };
@@ -49,11 +49,11 @@ impl ConformanceServer {
 
 #[tool_handler(router = self.tool_router)]
 impl ServerHandler for ConformanceServer {
-    fn get_info(&self) -> ServerInfo {
+    fn get_info(&self) -> ServerConfig {
         // Some MCP clients only attempt tool discovery when the server
         // explicitly advertises tool support here, even though this server
         // always answers `tools/list`/`tools/call` regardless.
-        ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
+        ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
             .with_instructions("UZE MCP conformance fixture")
     }
 }
