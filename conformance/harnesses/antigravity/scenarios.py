@@ -813,8 +813,9 @@ cat /work/home/.gemini/config/plugins/uze-mcp-conformance/mcp_config.json 2>&1
         "mcp-server-configured",
         "uze-conformance" in out
         and cfg.mcp_proof in out
-        and cfg.mcp_fixture_bin in out,
-        "S2: staged mcp_config.json declares the server + proof arg",
+        and "/scripts/server" in out
+        and "${PLUGIN_ROOT}" not in out,
+        "S2: staged mcp_config.json declares the server, its package root resolved, + proof arg",
     )
 
 

@@ -101,6 +101,15 @@ def drive_onboarding(child):
     that `loading` is gone. Reading it off `render_screen` rather than a
     snapshot is what makes it reliable: a read can land mid-redraw, and the
     grid is where the current header exists.
+
+    codex-cli 0.157 starts its shared app-server daemon on an interactive
+    launch (openai/codex#47179): it paints a first frame whose header
+    already names the directory, steps out of the alternate screen to start
+    (and, on a fresh home, install) the daemon, and only then opens the
+    trust dialog in a second frame. The directory is no longer the signal
+    that cannot race; the model is — `model: loading` until the session the
+    daemon serves exists, which is after the directory is trusted. Both are
+    required, so the older order still settles the same way.
     """
     screen = make_screen(child)
     raw = ""
@@ -113,7 +122,12 @@ def drive_onboarding(child):
         if "Doyoutrust" in squashed or "Trustthisfolder?" in squashed:
             child.send("\r")
             continue
-        if "directory:" in shown and "directory:loading" not in squashed:
+        if (
+            "directory:" in shown
+            and "directory:loading" not in squashed
+            and "model:" in shown
+            and "model:loading" not in squashed
+        ):
             break
     return raw, shown
 

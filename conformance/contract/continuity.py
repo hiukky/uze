@@ -238,8 +238,8 @@ def _end_the_process(tui, bindings):
         tui.child.send(key)
         # Between keys the harness's own gap, after the last one a real
         # wait. The gap belongs to the harness because they want opposite
-        # things: Claude's "press it again to exit" expires, and Codex has
-        # to draw that offer before a second interrupt means anything.
+        # things: Claude's "press it again to exit" expires, and Codex before
+        # 0.157 had to draw that offer before a second interrupt means anything.
         _, plain, ended = tui.wait_for(
             [ENDED_MARKER],
             tries=8 if last else 1,

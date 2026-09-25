@@ -16,10 +16,13 @@ class CodexBindings(Bindings):
     #: onboarding passes every check against a screen that accepts no
     #: input — which it did, once, here.
     ready_markers = ("Ask Codex to do anything",)
-    #: Codex answers the first interrupt by offering to take a second, and
-    #: a second sent before that offer is drawn is swallowed: measured, six
-    #: seconds apart it exits and half a second apart it never does.
-    exit_key_gap = 6.0
+    #: One interrupt. Since codex-cli 0.157 an interactive session is served
+    #: by the shared app-server daemon (openai/codex#47179), and leaving it
+    #: only disconnects — "Any running work continues" — so there is no
+    #: second-interrupt offer to wait for. A second key would land on the
+    #: shell once the TUI has handed the terminal back, and end it before
+    #: the next launch.
+    exit_keys = ("\x03",)
     warmup = 6.0
 
     def session(self, cfg, prov_ip):

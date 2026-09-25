@@ -1,0 +1,4 @@
+#!/bin/sh
+# Ships inside the plugin and is named through ${PLUGIN_ROOT}, the way an
+# author ships a server: what the Lab proves is that every harness resolves it.
+exec __UZE_MCP_FIXTURE_BINARY__ "$@"
