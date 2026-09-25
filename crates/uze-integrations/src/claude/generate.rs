@@ -13,9 +13,10 @@
 //! Safe synthesis is deliberately structural for the default model+user
 //! policy: the generated manifest declares the package's whole conventional
 //! `skills/` directory (mirroring Codex's own `"./skills/"` convention)
-//! verbatim, and its `mcp.json`'s `mcpServers` object verbatim — nothing is
-//! translated, reinterpreted, or invented beyond name/version/description
-//! already declared in the package's own canonical `plugin.json`.
+//! verbatim, and its `mcp.json`'s `mcpServers` object with only the package
+//! root resolved — nothing else is translated, reinterpreted, or invented
+//! beyond name/version/description already declared in the package's own
+//! canonical `plugin.json`.
 //!
 //! A Skill whose canonical `invoke:` policy is not the default is the one
 //! deliberate exception (ADR-030): Claude
@@ -32,7 +33,8 @@ use std::{fs, path::Path};
 
 use uze_core::{Result, UzeError, store::StoredPackage};
 
-use crate::shared::marketplace::{canonical_mcp_manifest_value, manifest_fields};
+use crate::shared::marketplace::manifest_fields;
+use crate::shared::mcp::delivered_mcp_servers;
 use crate::shared::skill::{link_extras, link_or_repair, recreate_dir, write_file};
 
 /// The description a generated manifest declares when the package's own
@@ -45,7 +47,7 @@ pub(super) const GENERATED_DESCRIPTION: &str =
 /// description come from the package's own canonical `plugin.json`, never
 /// invented; `skills`/`mcpServers` are declared only when the structural
 /// surface they describe exists on disk, and `mcpServers` is carried inline
-/// verbatim.
+/// with the package root resolved.
 pub(super) fn materialize_envelope(package: &StoredPackage, dir: &Path) -> Result<()> {
     let (description, version) = manifest_fields(&package.manifest, GENERATED_DESCRIPTION);
     let mut manifest = serde_json::json!({
@@ -57,19 +59,8 @@ pub(super) fn materialize_envelope(package: &StoredPackage, dir: &Path) -> Resul
     if package.root.join("skills").is_dir() {
         manifest["skills"] = serde_json::json!(["./skills"]);
     }
-    if package.root.join("scripts").is_dir() {
-        // The canonical manifest's MCP entries speak `${CLAUDE_PLUGIN_ROOT}`,
-        // which resolves here — the auxiliary file tree the package carries
-        // is delivered by the same symlink discipline as skills: the Store
-        // stays the one source.
-        uze_core::persistence::create_symlink(&package.root.join("scripts"), &dir.join("scripts"))?;
-    }
-    if let Some(servers) = canonical_mcp_manifest_value(package) {
-        // The canonical manifest speaks the hook wrapper's `${PLUGIN_ROOT}`;
-        // Claude Code expands its own `${CLAUDE_PLUGIN_ROOT}` — carrying one
-        // verbatim into the other's grammar is a server entry that points at
-        // a variable nobody resolves.
-        manifest["mcpServers"] = rewrite_plugin_root_for_claude(&servers);
+    if let Some(servers) = delivered_mcp_servers(package) {
+        manifest["mcpServers"] = servers;
     }
     let plugin_dir = dir.join(".claude-plugin");
     fs::create_dir_all(&plugin_dir).map_err(|source| UzeError::Write {
@@ -81,29 +72,6 @@ pub(super) fn materialize_envelope(package: &StoredPackage, dir: &Path) -> Resul
         &serde_json::to_vec_pretty(&manifest).expect("generated manifest is serializable"),
     )?;
     materialize_generated_skills(package, dir)
-}
-
-/// Rewrites the hook wrapper's `${PLUGIN_ROOT}` token into Claude Code's own
-/// `${CLAUDE_PLUGIN_ROOT}` in every string the server entries carry —
-/// `command`, `args`, `env` values — so an MCP server declared once in the
-/// portable manifest resolves in the grammar of the harness it is delivered
-/// to.
-fn rewrite_plugin_root_for_claude(value: &serde_json::Value) -> serde_json::Value {
-    match value {
-        serde_json::Value::String(text) => {
-            serde_json::Value::String(text.replace("${PLUGIN_ROOT}", "${CLAUDE_PLUGIN_ROOT}"))
-        }
-        serde_json::Value::Array(items) => {
-            serde_json::Value::Array(items.iter().map(rewrite_plugin_root_for_claude).collect())
-        }
-        serde_json::Value::Object(entries) => serde_json::Value::Object(
-            entries
-                .iter()
-                .map(|(key, value)| (key.clone(), rewrite_plugin_root_for_claude(value)))
-                .collect(),
-        ),
-        other => other.clone(),
-    }
 }
 
 /// Materializes the generated envelope's `skills/` surface.
@@ -982,5 +950,28 @@ mod generated_native_tests {
 
         let _ = fs::remove_dir_all(root);
         let _ = fs::remove_dir_all(victim);
+    }
+
+    #[test]
+    fn the_envelope_resolves_the_package_root_its_servers_name() {
+        let (_root, pkg) = make_plain_package("mcp-package-root", false);
+        fs::write(
+            pkg.root.join("mcp.json"),
+            r#"{"mcpServers":{"srv":{"command":"python3","args":["${PLUGIN_ROOT}/scripts/server.py"]}}}"#,
+        )
+        .unwrap();
+        let dir = _root.join("envelope");
+        super::materialize_envelope(&pkg, &dir).unwrap();
+        let manifest: serde_json::Value =
+            serde_json::from_slice(&fs::read(dir.join(".claude-plugin/plugin.json")).unwrap())
+                .unwrap();
+        assert_eq!(
+            manifest["mcpServers"]["srv"]["args"][0],
+            pkg.root
+                .join("scripts/server.py")
+                .to_string_lossy()
+                .as_ref()
+        );
+        let _ = fs::remove_dir_all(_root);
     }
 }

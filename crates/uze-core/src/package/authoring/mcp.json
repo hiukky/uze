@@ -2,7 +2,8 @@
   "//": [
     "One server per key, keyed by the name a harness will address it under.",
     "`command` runs locally (stdio); a `url` server speaks a remote protocol.",
-    "The stub below is a Python stdio server skeleton with no dependencies —",
+    "`${PLUGIN_ROOT}` is this plugin's own directory; UZE resolves it for every harness.",
+    "The stub below is a complete stdio server with no dependencies and one tool —",
     "swap it for your real server or delete the key."
   ],
   "mcpServers": {

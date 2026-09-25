@@ -3,7 +3,7 @@
 //! — for the harnesses whose own CLI registers servers — the `mcp`
 //! add/probe/remove verbs.
 
-use std::{ffi::OsString, path::Path, path::PathBuf};
+use std::{ffi::OsString, fs, path::Path, path::PathBuf};
 
 use uze_core::{
     Result, UzeError,
@@ -11,15 +11,60 @@ use uze_core::{
     exposure::{ExposureMechanism, ExposurePlan},
     integration::ManagedArtifact,
     router::CompatibilityRoute,
+    store::StoredPackage,
 };
 
 use crate::shared::process::{capture, failed_message, is_cli_safe_token, succeeds};
 
+/// How a canonical `mcp.json` names the root of its own package — the token
+/// the portable hook contract already speaks.
+const PACKAGE_ROOT_TOKEN: &str = "${PLUGIN_ROOT}";
+
+/// Resolves [`PACKAGE_ROOT_TOKEN`] to `package_root` in every string a
+/// server declaration carries. No harness expands the portable token, and
+/// the ones that stage their own copy of a plugin do not follow the
+/// symlinks an envelope is made of, so the one path that holds in every
+/// harness is the Store's.
+pub(crate) fn resolve_package_root(
+    value: &serde_json::Value,
+    package_root: &Path,
+) -> serde_json::Value {
+    match value {
+        serde_json::Value::String(text) => serde_json::Value::String(
+            text.replace(PACKAGE_ROOT_TOKEN, &package_root.to_string_lossy()),
+        ),
+        serde_json::Value::Array(items) => serde_json::Value::Array(
+            items
+                .iter()
+                .map(|item| resolve_package_root(item, package_root))
+                .collect(),
+        ),
+        serde_json::Value::Object(entries) => serde_json::Value::Object(
+            entries
+                .iter()
+                .map(|(key, value)| (key.clone(), resolve_package_root(value, package_root)))
+                .collect(),
+        ),
+        other => other.clone(),
+    }
+}
+
+/// The `mcpServers` value of the package's canonical `mcp.json`, resolved
+/// into the grammar every harness runs: what an envelope carries.
+pub(crate) fn delivered_mcp_servers(package: &StoredPackage) -> Option<serde_json::Value> {
+    fs::read(package.root.join("mcp.json"))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+        .and_then(|value| value.get("mcpServers").cloned())
+        .map(|servers| resolve_package_root(&servers, &package.root))
+}
+
 /// `{"command": "...", "args": [...]}` from one server's canonical config
-/// object, as MCP resource discovery extracts it from `mcp.json`. `None`
-/// without a usable `command`; non-string arguments are skipped.
-pub(crate) fn stdio_command(payload: &[u8]) -> Option<(PathBuf, Vec<String>)> {
-    let value: serde_json::Value = serde_json::from_slice(payload).ok()?;
+/// object, as MCP resource discovery extracts it from `mcp.json`, with the
+/// package root resolved. `None` without a usable `command`; non-string
+/// arguments are skipped.
+pub(crate) fn stdio_command(payload: &[u8], package_root: &Path) -> Option<(PathBuf, Vec<String>)> {
+    let value = resolve_package_root(&serde_json::from_slice(payload).ok()?, package_root);
     let command = value.get("command")?.as_str()?;
     let args = value
         .get("args")
@@ -44,7 +89,7 @@ pub(crate) fn managed_stdio_plan(
     enabled: Option<bool>,
     evidence: &str,
 ) -> Option<ExposurePlan> {
-    let (command, args) = stdio_command(&resource.capability.payload)?;
+    let (command, args) = stdio_command(&resource.capability.payload, &resource.package_root)?;
     Some(ExposurePlan {
         route,
         mechanism: ExposureMechanism::Managed(ManagedArtifact::VendorConfigEntry {
@@ -128,4 +173,38 @@ pub(crate) fn cli_remove(
         &format!("{vendor} mcp remove `{entry_name}`"),
         &output,
     )))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_package_root_resolves_in_every_string_a_server_carries() {
+        let root = Path::new("/store/plugins/mk/pm");
+        let declared = serde_json::json!({
+            "command": "${PLUGIN_ROOT}/bin/server",
+            "args": ["--data", "${PLUGIN_ROOT}/data", 3],
+            "env": { "HOME_OF": "${PLUGIN_ROOT}" },
+        });
+        assert_eq!(
+            resolve_package_root(&declared, root),
+            serde_json::json!({
+                "command": "/store/plugins/mk/pm/bin/server",
+                "args": ["--data", "/store/plugins/mk/pm/data", 3],
+                "env": { "HOME_OF": "/store/plugins/mk/pm" },
+            })
+        );
+    }
+
+    #[test]
+    fn a_managed_entry_runs_the_resolved_command() {
+        let (command, args) = stdio_command(
+            br#"{"command":"python3","args":["${PLUGIN_ROOT}/scripts/server.py"]}"#,
+            Path::new("/store/pm"),
+        )
+        .unwrap();
+        assert_eq!(command, PathBuf::from("python3"));
+        assert_eq!(args, vec!["/store/pm/scripts/server.py".to_owned()]);
+    }
 }
