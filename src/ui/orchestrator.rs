@@ -1509,13 +1509,97 @@ pub(super) enum WorkspaceHit {
 
 /// What [`WorkspaceModel::renaming`] is currently editing — a tab or a
 /// space header both use the exact same inline-edit interaction (double-
-/// click to enter, Enter/Esc/Backspace/typing to edit, click-away to
+/// click to enter, Enter/Esc/typing and the caret keys to edit, click-away to
 /// discard), so one buffer serves both; this just says which request to
 /// send on commit.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum RenameTarget {
     Tab(TabId),
     Space(SpaceId),
+}
+
+/// The label being typed over a tab or a space, and where in it typing
+/// lands. The caret is a byte offset that only ever sits on a character
+/// boundary, so every edit is a plain `String` operation at it.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+struct RenameBuffer {
+    text: String,
+    caret: usize,
+}
+
+impl RenameBuffer {
+    /// A buffer holding `text`, with the caret after it — where someone
+    /// who meant to append expects it, and one `home` from replacing.
+    fn new(text: String) -> Self {
+        let caret = text.len();
+        Self { text, caret }
+    }
+
+    fn text(&self) -> &str {
+        &self.text
+    }
+
+    /// The text either side of the caret.
+    fn split(&self) -> (&str, &str) {
+        self.text.split_at(self.caret)
+    }
+
+    fn insert(&mut self, character: char) {
+        self.text.insert(self.caret, character);
+        self.caret += character.len_utf8();
+    }
+
+    fn insert_str(&mut self, text: &str) {
+        self.text.insert_str(self.caret, text);
+        self.caret += text.len();
+    }
+
+    fn erase_back(&mut self) {
+        if let Some(previous) = self.previous_boundary() {
+            self.text.replace_range(previous..self.caret, "");
+            self.caret = previous;
+        }
+    }
+
+    fn erase_forward(&mut self) {
+        if let Some(next) = self.next_boundary() {
+            self.text.replace_range(self.caret..next, "");
+        }
+    }
+
+    fn left(&mut self) {
+        if let Some(previous) = self.previous_boundary() {
+            self.caret = previous;
+        }
+    }
+
+    fn right(&mut self) {
+        if let Some(next) = self.next_boundary() {
+            self.caret = next;
+        }
+    }
+
+    fn home(&mut self) {
+        self.caret = 0;
+    }
+
+    fn end(&mut self) {
+        self.caret = self.text.len();
+    }
+
+    fn previous_boundary(&self) -> Option<usize> {
+        self.text[..self.caret]
+            .char_indices()
+            .next_back()
+            .map(|(index, _)| index)
+    }
+
+    fn next_boundary(&self) -> Option<usize> {
+        self.text[self.caret..]
+            .chars()
+            .next()
+            .map(|character| self.caret + character.len_utf8())
+    }
 }
 
 /// Which set of tabs a drag-to-reorder gesture is confined to — the exact
@@ -2450,7 +2534,7 @@ struct WorkspaceModel {
     /// While set, all keyboard input edits this instead of reaching the
     /// pane, and any click elsewhere cancels it (same "click outside
     /// discards" rule the management modal's dialogs use).
-    renaming: Option<(RenameTarget, String)>,
+    renaming: Option<(RenameTarget, RenameBuffer)>,
     /// Open state of the sidebar's "+ space" prompt — the directory the next
     /// space is born from, chosen from a live listing that narrows as it is
     /// typed. Same "click outside discards" rule as `renaming`.
@@ -4620,7 +4704,7 @@ fn begin_rename(model: &mut WorkspaceModel, target: MenuTarget) {
             (RenameTarget::Space(space), label)
         }
     };
-    model.renaming = Some((rename_target, label));
+    model.renaming = Some((rename_target, RenameBuffer::new(label)));
 }
 
 /// Delivers the selected tab's task, the way the project's completion says.

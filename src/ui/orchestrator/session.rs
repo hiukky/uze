@@ -458,7 +458,7 @@ impl Attach<'_> {
         } else if let Some(picker) = self.model.root_picker.as_mut() {
             picker.typed(character);
         } else if let Some((_, buffer)) = self.model.renaming.as_mut() {
-            buffer.push(character);
+            buffer.insert(character);
         } else if self
             .model
             .code
@@ -863,7 +863,7 @@ impl Attach<'_> {
         match action {
             Action::Activate => {
                 if let Some((target, buffer)) = self.model.renaming.take() {
-                    let trimmed = buffer.trim().to_owned();
+                    let trimmed = buffer.text().trim().to_owned();
                     if !trimmed.is_empty() {
                         let _ = send_request(
                             &mut self.stream,
@@ -882,12 +882,19 @@ impl Attach<'_> {
                 }
             }
             Action::Dismiss => self.model.renaming = None,
-            Action::EraseBack => {
+            _ => {
                 if let Some((_, buffer)) = self.model.renaming.as_mut() {
-                    buffer.pop();
+                    match action {
+                        Action::EraseBack => buffer.erase_back(),
+                        Action::EraseForward => buffer.erase_forward(),
+                        Action::CaretLeft => buffer.left(),
+                        Action::CaretRight => buffer.right(),
+                        Action::CaretLineStart => buffer.home(),
+                        Action::CaretLineEnd => buffer.end(),
+                        _ => {}
+                    }
                 }
             }
-            _ => {}
         }
         self.model.dirty = true;
     }
@@ -1411,7 +1418,7 @@ impl Attach<'_> {
             }
             _ if self.model.renaming.is_some() => {
                 if let Some((_, buffer)) = self.model.renaming.as_mut() {
-                    buffer.push_str(text.trim_end_matches(['\r', '\n']));
+                    buffer.insert_str(text.trim_end_matches(['\r', '\n']));
                 }
                 self.model.dirty = true;
             }

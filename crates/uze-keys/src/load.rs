@@ -430,6 +430,11 @@ fn default_bindings() -> Vec<Binding> {
         bind(Scope::Rename, "enter", Action::Activate),
         bind(Scope::Rename, "esc", Action::Dismiss),
         bind(Scope::Rename, "backspace", Action::EraseBack),
+        bind(Scope::Rename, "delete", Action::EraseForward),
+        bind(Scope::Rename, "left", Action::CaretLeft),
+        bind(Scope::Rename, "right", Action::CaretRight),
+        bind(Scope::Rename, "home", Action::CaretLineStart),
+        bind(Scope::Rename, "end", Action::CaretLineEnd),
     ];
     for index in 1..=9u8 {
         bindings.push(bind(
