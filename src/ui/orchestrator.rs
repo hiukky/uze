@@ -175,6 +175,7 @@ const AGENT_SETTLE_CAP: Duration = Duration::from_millis(2500);
 
 mod input;
 mod render;
+mod selection;
 mod session;
 use input::*;
 use render::*;
@@ -1357,6 +1358,9 @@ pub(crate) fn attach_workspace(
         {
             terminal.ring();
         }
+        if let Some(text) = attach.model.clipboard.take() {
+            terminal.emit(&selection::osc52(&text));
+        }
         if event::poll(POLL).map_err(io_error)?
             && let Flow::Exit(exit) = attach.handle(event::read().map_err(io_error)?, &viewport)
         {
@@ -2508,6 +2512,13 @@ struct WorkspaceModel {
     /// Whether the content's own scrollbar is being held. Unambiguous, so
     /// it needs nothing but a flag.
     dragging_code_content: bool,
+    /// Text being selected in a pane with the pointer, and — once released
+    /// — the selection still drawn until the next press or key.
+    selection: Option<selection::PaneSelection>,
+    /// What a release selected, waiting for the frame loop to hand it to
+    /// the host terminal's clipboard through the handle the frames go
+    /// through, so it cannot land inside one.
+    clipboard: Option<String>,
     /// An in-progress tab-reorder drag; `None` when no tab is being
     /// dragged. Client-local presentation state — nothing is sent to the
     /// server until release (see `TabDragGroup`/`DraggingTab`).

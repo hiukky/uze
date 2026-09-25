@@ -162,8 +162,9 @@ scenes:
 
 | verb | what it does |
 |---|---|
-| `open` | launches the app in a tmux-held pty — `{uze}` is the binary under test (`in:` its directory, default the project) |
+| `open` | launches the app in a tmux-held pty — `{uze}` is the binary under test (`in:` its directory, default the project); `tap: <path>` appends every byte the app writes to its terminal to that file, the witness of what it asked of the terminal itself (a clipboard write) |
 | `click` / `rclick` / `dclick` | an SGR mouse event written into the pty — indistinguishable from a hand |
+| `drag` | the left button pressed on the target, moved across `span:` cells (default the target's width) and released; `shift: true` holds Shift throughout |
 | `type` | one character at a time; `submit: false` to leave Enter out, `clear: all` to empty a field |
 | `key` | one key or a list (`Escape`, `C-g`, `BSpace`) |
 | `shell` | a command in the world (what an agent would do to its own checkout) |

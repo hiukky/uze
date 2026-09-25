@@ -223,6 +223,14 @@ impl TerminalSession {
         let backend = self.terminal.backend_mut();
         let _ = backend.write_all(b"\x07").and_then(|()| backend.flush());
     }
+
+    /// Writes raw bytes to the host terminal between frames — a control
+    /// sequence meant for the terminal itself rather than for a cell.
+    pub(crate) fn emit(&mut self, bytes: &[u8]) {
+        use std::io::Write;
+        let backend = self.terminal.backend_mut();
+        let _ = backend.write_all(bytes).and_then(|()| backend.flush());
+    }
 }
 
 impl Drop for TerminalSession {

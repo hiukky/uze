@@ -1,0 +1,81 @@
+journey: text dragged over in a pane reaches the clipboard, whatever runs there
+tags: [gate, tui, workspace]
+about: |
+  Selecting a pane's text is one gesture with one result in every pane:
+  press, drag, release, and what was covered goes to the clipboard of the
+  machine the operator sits at. The client owns the mouse, so the host
+  terminal's own selection cannot reach a pane — this is what gives it back.
+
+  The clipboard is the host terminal's, reached through an OSC 52 write, so
+  what is read here is the bytes the app wrote to its terminal: the request
+  the terminal acts on, not UZE's word that it made one.
+
+  The claim that makes it one gesture is the second scene. A program that
+  asked for mouse reports — every agent harness with a TUI of its own — still
+  loses the drag to the selection, and is told nothing about it; it keeps its
+  clicks, delivered when the button comes up without having moved.
+
+world:
+  project: demo-app
+
+scenes:
+  - scene: a drag over a shell's output copies what it covered
+    when:
+      - open: "{uze}"
+        tap: "{world}/terminal.bytes"
+        expect: demo-app
+        expect_timeout: 20
+        pause: 2.0
+      - type: "echo copy-me-please"
+        # The command line says it once; the output is the second time.
+        expect: '(?s)copy-me-please.*copy-me-please'
+      - drag: "copy-me-please"
+        say: drag across the command's output
+        in: pane
+        occurrence: last
+        expect: copied
+    then:
+      - file: "{world}/terminal.bytes"
+        contains: "]52;c;Y29weS1tZS1wbGVhc2U="
+        about: |
+          the terminal was asked to put exactly the dragged text on the
+          clipboard — `copy-me-please`, nothing before it and no padding after
+
+  - scene: and then a program that owns the mouse loses the drag but keeps its clicks
+    when:
+      - shell: |
+          cat > "{world}/mouse-owner.py" <<'PY'
+          import os, sys, tty
+          fd = sys.stdin.fileno()
+          tty.setraw(fd)
+          sys.stdout.write("\x1b[?1002h\x1b[?1006h\x1b[2J\x1b[H")
+          sys.stdout.write("owner-says grab-this-word\r\n")
+          sys.stdout.flush()
+          with open(sys.argv[1], "ab", buffering=0) as log:
+              while data := os.read(fd, 1024):
+                  log.write(data)
+          PY
+          : > "{world}/mouse-input"
+      - type: "{python} {world}/mouse-owner.py {world}/mouse-input"
+        expect: owner-says
+      - drag: "grab-this-word"
+        say: drag across the program's word
+        in: pane
+        expect: copied
+      - click: "owner-says"
+        say: click the program's first word
+        in: pane
+        expect: owner-says
+        pause: 1.0
+    then:
+      - file: "{world}/terminal.bytes"
+        contains: "]52;c;Z3JhYi10aGlzLXdvcmQ="
+        about: the drag over the program was a selection, and copied its word
+      - file: "{world}/mouse-input"
+        excludes: "[<32;"
+        about: the program was told nothing about the drag — no motion report reached it
+      - file: "{world}/mouse-input"
+        contains: "[<0;1;1M\e[<0;1;1m"
+        about: |
+          and the click reached it whole, press and release at the cell
+          clicked — held until it could not be a drag, not swallowed

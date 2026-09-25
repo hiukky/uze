@@ -387,6 +387,9 @@ impl Attach<'_> {
     /// Keyboard input: say what is open, then act on what the keystroke
     /// means. Which key that was is `crate::ui::keys`'s business.
     fn key(&mut self, key: KeyEvent, viewport: &Viewport) -> Flow {
+        if self.model.selection.take().is_some() {
+            self.model.dirty = true;
+        }
         // Three surfaces are notices rather than questions — read, then
         // gone — so any keystroke dismisses one. That is a property of a
         // surface with nothing to answer, not a binding, and so not the
@@ -1492,6 +1495,9 @@ impl Attach<'_> {
             rows,
             ..
         } = *viewport;
+        if self.model.selection.take().is_some() {
+            self.model.dirty = true;
+        }
         match mouse {
             _ if self.model.release_notes.is_some() && self.model.action_index.is_none() => {
                 if !matches!(
@@ -1708,7 +1714,16 @@ impl Attach<'_> {
             _ => {
                 let Some((hit_rect, hit)) = self.model.hit_rect_at(mouse.column, mouse.row) else {
                     self.model.last_click = None;
-                    forward_mouse(&mut self.stream, &self.model, layout.pane, mouse);
+                    if self.selects_in_pane(mouse, layout.pane) {
+                        self.model.selection = Some(selection::PaneSelection::pressed(
+                            self.model.focused_pane(),
+                            layout.pane,
+                            mouse.column,
+                            mouse.row,
+                        ));
+                    } else {
+                        forward_mouse(&mut self.stream, &self.model, layout.pane, mouse);
+                    }
                     return Flow::Continue;
                 };
                 let now = std::time::Instant::now();
@@ -1741,6 +1756,13 @@ impl Attach<'_> {
             size, ref layout, ..
         } = *viewport;
         match mouse {
+            _ if self.model.selection.is_some() => {
+                if let Some(selection) = self.model.selection.as_mut()
+                    && selection.follow(layout.pane, mouse.column, mouse.row)
+                {
+                    self.model.dirty = true;
+                }
+            }
             _ if self.model.architect_grab.is_some() => {
                 self.drag_diagram(mouse.column, mouse.row);
             }
@@ -1846,6 +1868,10 @@ impl Attach<'_> {
         // into the pane above — the matching release belongs
         // there too, not just silently dropped the way it was
         // before pane forwarding existed.
+        if let Some(selection) = self.model.selection {
+            self.release_selection(selection, mouse, layout.pane);
+            return Flow::Continue;
+        }
         if !self.model.dragging_sidebar
             && self.model.code_edge_drag.is_none()
             && !self.model.dragging_code_content
@@ -1900,6 +1926,66 @@ impl Attach<'_> {
         self.model.dragging_timeline = false;
         self.model.dirty = true;
         Flow::Continue
+    }
+
+    /// Whether a press in the pane starts a selection rather than reaching
+    /// the pane's program. Always, so that selecting text is the same
+    /// gesture with the same result in every pane, whatever runs in it: a
+    /// program that asked for the mouse still gets its clicks — see
+    /// [`Self::release_selection`] — and gives up only the drag. Shift
+    /// hands the drag back to a program that asked for it, for the one
+    /// that has a use for a drag of its own.
+    fn selects_in_pane(&self, mouse: MouseEvent, pane: Rect) -> bool {
+        let inside = pane.contains(ratatui::layout::Position::new(mouse.column, mouse.row));
+        let program_owns_the_mouse = self
+            .model
+            .panes
+            .get(&self.model.focused_pane())
+            .is_some_and(|snapshot| snapshot.mouse.reports_clicks);
+        inside
+            && self.model.no_modal_open()
+            && !(program_owns_the_mouse && mouse.modifiers.contains(KeyModifiers::SHIFT))
+    }
+
+    /// A selection's release. What it covers goes to the clipboard, and it
+    /// stays drawn so the reader can see what was taken. A press that never
+    /// moved was a click, and a click belongs to the pane's program: it was
+    /// held back only until it could not be the start of a drag, and is
+    /// delivered now, press and release together.
+    fn release_selection(
+        &mut self,
+        selection: selection::PaneSelection,
+        mouse: MouseEvent,
+        pane: Rect,
+    ) {
+        let text = self
+            .model
+            .panes
+            .get(&selection.pane)
+            .map(|snapshot| selection.text(snapshot))
+            .unwrap_or_default();
+        if text.is_empty() {
+            self.model.selection = None;
+            let press = MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Left),
+                ..mouse
+            };
+            forward_mouse(&mut self.stream, &self.model, pane, press);
+            forward_mouse(&mut self.stream, &self.model, pane, mouse);
+            return;
+        }
+        let characters = text.chars().count();
+        self.model.raise_toast(
+            ToastKind::Done,
+            "copied",
+            format!(
+                "{characters} character{} to the clipboard",
+                if characters == 1 { "" } else { "s" }
+            ),
+            None,
+        );
+        self.model.clipboard = Some(text);
+        self.model.dirty = true;
     }
 
     /// The right button: the tab/space context menu, anchored where it

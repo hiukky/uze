@@ -7512,6 +7512,152 @@ mod workspace_tests {
         }
     }
 
+    /// A pane showing `line` on its first row, whose program asked for
+    /// mouse reports or did not.
+    fn pane_showing(model: &mut WorkspaceModel, line: &str, reports_clicks: bool) {
+        let pane = model.focused_pane();
+        let columns = 80u16;
+        let mut cells = vec![super::render::blank_cell(); usize::from(columns) * 24];
+        for (cell, character) in cells.iter_mut().zip(line.chars()) {
+            cell.character = character;
+        }
+        model.panes.insert(
+            pane,
+            uze_terminal::PaneSnapshot {
+                pane,
+                columns,
+                rows: 24,
+                cursor: Cursor { column: 0, row: 0 },
+                alternate_screen: false,
+                mouse: MouseMode {
+                    reports_clicks,
+                    reports_drag: reports_clicks,
+                    sgr: true,
+                },
+                bracketed_paste: false,
+                cells,
+            },
+        );
+    }
+
+    fn drag_across_the_first_word(
+        driven: &mut Driven<'_>,
+        modifiers: crossterm::event::KeyModifiers,
+    ) {
+        driven.frame();
+        let pane = compute_layout(driven.area, driven.attach.model.sidebar_width).pane;
+        for (column, kind) in [
+            (pane.x, MouseEventKind::Down(MouseButton::Left)),
+            (pane.x + 4, MouseEventKind::Drag(MouseButton::Left)),
+            (pane.x + 4, MouseEventKind::Up(MouseButton::Left)),
+        ] {
+            let mut event = mouse_at(column, pane.y, kind);
+            event.modifiers = modifiers;
+            let layout = compute_layout(driven.area, driven.attach.model.sidebar_width);
+            let viewport = Viewport {
+                size: ratatui::layout::Size::new(driven.area.width, driven.area.height),
+                columns: layout.pane.width,
+                rows: layout.pane.height,
+                layout,
+            };
+            let _ = driven
+                .attach
+                .handle(crossterm::event::Event::Mouse(event), &viewport);
+        }
+    }
+
+    #[test]
+    fn releasing_a_drag_over_a_pane_copies_what_it_covered() {
+        let home = UzeHome::at(uze_testkit::temp::scratch("orchestrator-copy-on-select"));
+        let mut model = model_of(session("/tmp"));
+        pane_showing(&mut model, "hello world", false);
+        let mut driven = driven(model, &home);
+
+        drag_across_the_first_word(&mut driven, crossterm::event::KeyModifiers::empty());
+
+        assert_eq!(driven.attach.model.clipboard.as_deref(), Some("hello"));
+        assert!(
+            driven.attach.model.selection.is_some(),
+            "what was taken stays drawn after the release"
+        );
+        driven.press_key(crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Char('a'),
+            crossterm::event::KeyModifiers::NONE,
+        ));
+        assert!(
+            driven.attach.model.selection.is_none(),
+            "and the next key puts it away"
+        );
+    }
+
+    #[test]
+    fn a_drag_is_a_selection_even_over_a_program_that_owns_the_mouse() {
+        let home = UzeHome::at(uze_testkit::temp::scratch("orchestrator-copy-over-mouse"));
+        let mut model = model_of(session("/tmp"));
+        pane_showing(&mut model, "hello world", true);
+        let mut driven = driven(model, &home);
+
+        drag_across_the_first_word(&mut driven, crossterm::event::KeyModifiers::empty());
+
+        assert_eq!(driven.attach.model.clipboard.as_deref(), Some("hello"));
+        assert!(
+            forwarded_input(&mut driven).is_empty(),
+            "the program is not told about a drag it did not get"
+        );
+    }
+
+    #[test]
+    fn shift_hands_the_drag_to_a_program_that_owns_the_mouse() {
+        let home = UzeHome::at(uze_testkit::temp::scratch("orchestrator-shift-drag"));
+        let mut model = model_of(session("/tmp"));
+        pane_showing(&mut model, "hello world", true);
+        let mut driven = driven(model, &home);
+
+        drag_across_the_first_word(&mut driven, crossterm::event::KeyModifiers::SHIFT);
+
+        assert_eq!(driven.attach.model.clipboard, None);
+        assert_eq!(
+            forwarded_input(&mut driven).len(),
+            3,
+            "press, drag, release"
+        );
+    }
+
+    #[test]
+    fn a_click_still_reaches_a_program_that_owns_the_mouse() {
+        let home = UzeHome::at(uze_testkit::temp::scratch("orchestrator-held-click"));
+        let mut model = model_of(session("/tmp"));
+        pane_showing(&mut model, "hello world", true);
+        let mut driven = driven(model, &home);
+        driven.frame();
+        let pane = compute_layout(driven.area, driven.attach.model.sidebar_width).pane;
+
+        driven.press(pane.x + 2, pane.y);
+        assert!(
+            forwarded_input(&mut driven).is_empty(),
+            "held until it cannot be the start of a drag"
+        );
+        driven.mouse(pane.x + 2, pane.y, MouseEventKind::Up(MouseButton::Left));
+
+        assert_eq!(
+            forwarded_input(&mut driven),
+            vec![b"\x1b[<0;3;1M".to_vec(), b"\x1b[<0;3;1m".to_vec()]
+        );
+        assert_eq!(driven.attach.model.clipboard, None);
+        assert!(driven.attach.model.selection.is_none());
+    }
+
+    fn forwarded_input(driven: &mut Driven<'_>) -> Vec<Vec<u8>> {
+        driven
+            .sent()
+            .into_iter()
+            .filter_map(|request| match request {
+                ClientRequest::Input { bytes, .. } => Some(bytes),
+                _ => None,
+            })
+            .collect()
+    }
+
     /// A list opened over the architect's board follows the pointer, the
     /// way every other dropdown in this client does.
     ///
