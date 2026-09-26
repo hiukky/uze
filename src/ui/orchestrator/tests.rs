@@ -5131,6 +5131,42 @@ mod workspace_tests {
         assert_eq!(manage_route(&driven), crate::ui::model::Route::Harnesses);
     }
 
+    /// With one harness set up the picker would be a single row to
+    /// confirm, so asking for an agent starts it: the placement is asked
+    /// for at once and no picker opens.
+    #[test]
+    fn with_one_harness_set_up_a_new_agent_starts_without_a_picker() {
+        let home = UzeHome::at(uze_testkit::temp::scratch("orchestrator-picker-single"));
+        let only = super::super::agent_identities(&home)
+            .into_iter()
+            .next()
+            .expect("a harness is registered");
+        uze_core::state::record(
+            &home,
+            only.integration,
+            uze_core::state::IntegrationRecord {
+                version: None,
+                strategy: "test".to_owned(),
+            },
+        )
+        .unwrap();
+        let mut driven =
+            driven(agent_with_task(WorkStateView::Ready, 1), &home).on_a_roomy_terminal();
+        driven.frame();
+        let sparkle = driven.hit(|hit| *hit == WorkspaceHit::NewAgentMenu);
+
+        driven.press(sparkle.x, sparkle.y);
+
+        assert!(
+            driven.attach.model.agent_picker.is_none(),
+            "no picker for a choice of one"
+        );
+        assert!(
+            driven.attach.model.placement_pending,
+            "the agent was started"
+        );
+    }
+
     /// The header's trailing control opens the modal; a click inside it
     /// is the modal's own, a click beside it closes it.
     ///
