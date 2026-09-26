@@ -2974,23 +2974,22 @@ impl WorkspaceModel {
     /// Where selecting `agent` from the sidebar should actually land — the
     /// tab it was last left on, when that tab is still open beside it, and
     /// otherwise the agent itself.
-    fn strip_tab_for(&self, agent: TabId) -> TabId {
+    fn strip_tab_for(&self, agent: TabId, identities: &[AgentIdentity]) -> TabId {
         let Some(remembered) = self.remembered.strip_selection.get(&agent).copied() else {
             return agent;
         };
         if remembered == agent {
             return agent;
         }
-        // The remembered tab has to still be one of this agent's own: a
-        // shell can be dragged into another strip, and following it there
-        // would silently move the user to a different agent than the one
-        // they clicked.
+        // Only a tab the agent's strip still draws: a shell can be dragged
+        // into another strip, or have a harness started in it and become an
+        // agent of its own, and following it either way would land every
+        // click on this agent's row in a different agent.
         let belongs = self.session.as_ref().is_some_and(|session| {
             session.workspace.spaces.iter().any(|space| {
-                space
-                    .tabs
+                strip_tabs(space, Some(agent), identities)
                     .iter()
-                    .any(|tab| tab.id == remembered && tab.agent == Some(agent))
+                    .any(|tab| tab.id == remembered)
             })
         });
         if belongs { remembered } else { agent }

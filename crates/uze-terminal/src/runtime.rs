@@ -3705,6 +3705,94 @@ mod tests {
         assert_eq!(landed, elsewhere, "and the client lands in it");
     }
 
+    /// A tab is opened in the space the client selected last, so selecting
+    /// a space and then asking for a tab of its own lands the tab there —
+    /// the pair a click on a space whose shells all became agents sends.
+    #[test]
+    fn a_tab_asked_for_after_selecting_a_space_opens_in_that_space() {
+        let scratch = uze_testkit::temp::socket_scratch("select-then-create");
+        let uze_home = scratch.join("home");
+        let project = scratch.join("project");
+        let elsewhere = scratch.join("elsewhere");
+        let runtime_dir = scratch.join("runtime");
+        for directory in [&uze_home, &project, &elsewhere, &runtime_dir] {
+            std::fs::create_dir_all(directory).unwrap();
+        }
+        let mut env = uze_testkit::env::scope();
+        env.set("UZE_HOME", &uze_home)
+            .set("XDG_RUNTIME_DIR", &runtime_dir);
+        let (server, _damage) = Server::new(seat_at(&project), socket_path().unwrap()).unwrap();
+        let server = Arc::new(server);
+        let (client, driver) = std::os::unix::net::UnixStream::pair().unwrap();
+        let serving = {
+            let server = Arc::clone(&server);
+            std::thread::spawn(move || server.handle_client(client))
+        };
+        let mut writer = driver.try_clone().unwrap();
+        let mut reader = std::io::BufReader::new(driver);
+        send_request(
+            &mut writer,
+            &crate::ClientRequest::Attach {
+                version: crate::PROTOCOL_VERSION,
+                columns: 80,
+                rows: 24,
+                seating: crate::Seating::Open(seat_at(&elsewhere)),
+            },
+        )
+        .unwrap();
+        let first = std::iter::from_fn(|| read_event(&mut reader).unwrap())
+            .find_map(|event| match event {
+                crate::ClientEvent::Snapshot { session } => session
+                    .workspace
+                    .spaces
+                    .iter()
+                    .find(|space| space.root == project)
+                    .map(|space| space.id),
+                _ => None,
+            })
+            .expect("the client attached beside the project's space");
+
+        for request in [
+            crate::ClientRequest::SelectSpace { space: first },
+            crate::ClientRequest::CreateTab {
+                label: "shell 1".into(),
+                agent: None,
+                columns: 80,
+                rows: 24,
+                cwd: Some(project.clone()),
+                command: None,
+                env: Vec::new(),
+            },
+        ] {
+            send_request(&mut writer, &request).unwrap();
+        }
+        let opened = std::iter::from_fn(|| read_event(&mut reader).unwrap())
+            .find_map(|event| match event {
+                crate::ClientEvent::SessionUpdated { session } => {
+                    let tabs = |root: &Path| {
+                        session
+                            .workspace
+                            .spaces
+                            .iter()
+                            .find(|space| space.root == root)
+                            .map_or(0, |space| space.tabs.len())
+                    };
+                    (tabs(&project) + tabs(&elsewhere) == 3)
+                        .then(|| (tabs(&project), tabs(&elsewhere)))
+                }
+                _ => None,
+            })
+            .expect("the tab was opened");
+        let _ = send_request(&mut writer, &crate::ClientRequest::Detach);
+        let _ = serving.join();
+
+        assert_eq!(
+            opened,
+            (2, 1),
+            "the tab opened in the space selected, not the one attached to"
+        );
+    }
+
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     /// Stopping a pane ends what its program left behind in its process
     /// group, not only the program: a worker deaf to the hangup would
