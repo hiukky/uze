@@ -6,7 +6,7 @@
 #   tui-record probe  .demo/code   # the app in its sandbox, to try a selector out
 #   tui-record run    .demo/code   # record → cut → leak-check → render → poster
 #
-# `tui-record` ships with the `tui` plugin: uze plugin install tui@ai
+# `tui-record` ships with the `tui` plugin: uze install -m tui@ai
 #
 # It records in the **same sandbox as .demo/demo.yml** — one {root}, one
 # {fixtures}, one remembered HEAD — so the `demo-app` fixture below is that
@@ -46,6 +46,10 @@ video:
   # fallback is named so a machine without the patched build still renders
   # readable text instead of nothing.
   font_family: FiraCode Nerd Font Mono,DejaVu Sans Mono
+  # Where that font is read from when the system never installed it: the
+  # Nerd Fonts v3.5.1 FiraCode release, unpacked. Without it the renderer
+  # silently draws the text in the fallback above.
+  font_dir: ~/.cache/nerd-fonts/v3.5.1/FiraCode
   wait_collapse: 1.0
   # The still the page shows first: the diff, which is what this surface is
   # for — named by what must be on screen so a re-cut cannot move it. The nav
@@ -78,7 +82,7 @@ sandbox:
   # the product is drawn for. It needs a patched font in the *renderer*
   # too — see `font_family` in `video`.
   provision:
-    - '{project}/target/release/uze theme glyphs nerd'
+    - '{project}/target/release/uze config icons nerd'
   author: Ada Lovelace
   author_email: ada@demo.dev
   reset:
@@ -93,6 +97,21 @@ sandbox:
     # is excluded: the rewind removes those itself, and pulling the directory
     # out from under Git first leaves metadata to prune.
     - git -C {fixtures}/demo-app clean -qfd -e .worktrees 2>/dev/null || true
+    # A home with no layout is a first run: the first-steps list opens and
+    # pushes the timeline off the sidebar. The video is of a project already
+    # in use, so the list starts folded and the timeline open — written here
+    # rather than left to whatever an earlier take folded or ticked, before
+    # every attempt, since a take ticks steps and moves the manage route.
+    - |
+      cat > {home}/.uze/state/layout.json <<'LAYOUT'
+      {
+        "sidebar": { "width": null },
+        "workspace": { "timeline_collapsed": false, "timeline_rows": null, "collapsed_space_roots": [] },
+        "management": { "route": "overview", "marketplace_drawer_width": null, "extension_drawer_width": null,
+                        "harness_drawer_width": null, "profile_columns_width": null, "collapsed_marketplaces": [] },
+        "first_steps": { "collapsed": true, "closed": false, "taken": [] }
+      }
+      LAYOUT
   clear:
     # The rewind removes the checkouts but leaves the directory that held
     # them, and the `clean` above deliberately spares it — so an empty
@@ -291,13 +310,14 @@ beats:
           'pub fn ping() -> Response {\n    Response::text(200, "pong")\n}\n')
       EDIT
     pause: 1.2
+  # The timeline is open from the first frame, so there is nothing to click:
+  # a click on its header would fold it. The wait is the proof instead — it
+  # is read on a thread and answers through a channel, so the section can be
+  # drawn a beat before it has rows.
   - say: what happened to this checkout, in the sidebar it already has
-    click: timeline
-    in: sidebar
-    expect: chore. initial commit
-    # The timeline is read on a thread and answers through a channel, so the
-    # section can be open a beat before it has rows. It cost take 1 once.
-    expect_timeout: 15
+    wait: screen
+    until: chore. initial commit
+    timeout: 15
     pause: 2.6
   - say: and what has not landed yet — the changes, from the tab you stand in
     key: M-g
@@ -307,18 +327,18 @@ beats:
     pause: 3.2
   - say: another file, its diff coloured beside it
     click: router.rs
-    in: sidebar
+    in: pane
     expect: '"/ping" => Response'
     expect_timeout: 8
     pause: 3.2
   - say: the same file, now as the tree it sits in — one selection, two halves
-    key: C-e
+    key: M-e
     expect: config\.toml
     expect_timeout: 8
     pause: 2.6
   - say: a document opens as a document
     click: AGENTS.md
-    in: sidebar
+    in: pane
     expect: '· preview'
     expect_timeout: 8
     pause: 3.2
