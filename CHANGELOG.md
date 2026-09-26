@@ -4,6 +4,46 @@ All notable changes to UZE are documented here, generated from Conventional
 Commits by `git-cliff` (`make changelog`). Until v1, UZE ships only SemVer
 pre-releases — see `docs/versioning.md`.
 
+## [0.0.0-alpha.10](https://github.com/uze-sh/uze/compare/v0.0.0-alpha.9...v0.0.0-alpha.10) - 2026-09-26
+
+### Features
+
+- **workspace:** Ring the terminal bell when an agent turn settles ([#108](https://github.com/uze-sh/uze/pull/108)) ([adbeef1](https://github.com/uze-sh/uze/commit/adbeef1de00866036a3c0dee8a4b9eb1c530e5b7))
+- **marketplace:** Add a transport ladder and canonical https identity for marketplaces ([#106](https://github.com/uze-sh/uze/pull/106)) ([42afc3a](https://github.com/uze-sh/uze/commit/42afc3ae63e0a161f00745ab3f86a724abf29637))
+- **workspace:** Copy a pane's selected text via OSC 52 on mouse release ([#113](https://github.com/uze-sh/uze/pull/113)) ([bd75266](https://github.com/uze-sh/uze/commit/bd752669b7584bcfeb05177306b92926fb2043dd))
+- **ui:** Rename the sidebar header's "new" control to "+ space" ([#114](https://github.com/uze-sh/uze/pull/114)) ([c550d29](https://github.com/uze-sh/uze/commit/c550d29559b39ce25e3f2022a63be38e0861eec1))
+- **ui:** Move the new-agent control to the selected space's sidebar row ([#116](https://github.com/uze-sh/uze/pull/116)) ([f2df12f](https://github.com/uze-sh/uze/commit/f2df12fc0ea4853b7e08ae62139d4b9a97143201))
+- **cli:** Flatten the command grammar ([#112](https://github.com/uze-sh/uze/pull/112)) [**breaking**] ([b471fb4](https://github.com/uze-sh/uze/commit/b471fb45fb38854c2c7de545560f8e939ee9215a))
+- **ui:** Render the code and architect extensions in the pane area ([#120](https://github.com/uze-sh/uze/pull/120)) ([4a83e85](https://github.com/uze-sh/uze/commit/4a83e85c4c627da276082293a1139c815048608b))
+- **ui:** Start the agent directly when one harness is set up ([#126](https://github.com/uze-sh/uze/pull/126)) ([d6efaef](https://github.com/uze-sh/uze/commit/d6efaef6124db28f3782aba551b80d6a505efb07))
+
+### Fixes
+
+- **ui:** Move the rename caret with the arrow, home, end and delete keys ([#115](https://github.com/uze-sh/uze/pull/115)) ([97f6ffa](https://github.com/uze-sh/uze/commit/97f6ffae3717d88a416d3743cc4e4dce6779b220))
+- **ui:** Route sidebar clicks past a shell that started a harness ([#117](https://github.com/uze-sh/uze/pull/117)) ([65e5aa1](https://github.com/uze-sh/uze/commit/65e5aa1043ef4852ee4037bce6f160c877ec1978))
+
+### Documentation
+
+- Move the documentation domain to uze.sh ([#119](https://github.com/uze-sh/uze/pull/119)) ([d73157f](https://github.com/uze-sh/uze/commit/d73157f652c58b949d0ee5c64395c12ac9a1de16))
+- **demo:** Re-record the demos against the pane-area extensions ([#124](https://github.com/uze-sh/uze/pull/124)) ([f54551e](https://github.com/uze-sh/uze/commit/f54551eb877f34ea231a24efbb43bd937265c532))
+- **web:** Rewrite the docs into guide, advanced and reference sections ([#125](https://github.com/uze-sh/uze/pull/125)) ([1d23262](https://github.com/uze-sh/uze/commit/1d23262f18c8b46c0efc4fe816063f3859471f57))
+
+### Dependencies
+
+- **deps:** Bump tailscale/github-action from 3.3.0 to 4.2.0 ([#109](https://github.com/uze-sh/uze/pull/109)) ([284e619](https://github.com/uze-sh/uze/commit/284e619ee306b2e50ec547cb9092c898f08867f5))
+- **deps:** Bump taiki-e/install-action from 2.87.12 to 2.87.17 ([#110](https://github.com/uze-sh/uze/pull/110)) ([43ac795](https://github.com/uze-sh/uze/commit/43ac795027396234b4a48b269cda35f3b793ba95))
+- **deps:** Bump the cargo-dependencies group with 5 updates ([#111](https://github.com/uze-sh/uze/pull/111)) ([0cfd9db](https://github.com/uze-sh/uze/commit/0cfd9dbcf4c3fa85cf368dda8eddf3b93bbdf1e6))
+- **deps:** Bump taiki-e/install-action from 2.87.17 to 2.87.19 ([#121](https://github.com/uze-sh/uze/pull/121)) ([1e61362](https://github.com/uze-sh/uze/commit/1e61362d9e16d9e65e97ea45c0a6b5c241280615))
+- **deps:** Bump noyalib from 0.0.45 to 0.0.51 in the cargo-dependencies group ([#122](https://github.com/uze-sh/uze/pull/122)) ([dbf49cb](https://github.com/uze-sh/uze/commit/dbf49cb9c0d000d683e9da2e4c14db43a14a007d))
+
+### Chore
+
+- Point repository references at uze-sh/uze ([#123](https://github.com/uze-sh/uze/pull/123)) ([d5d75a2](https://github.com/uze-sh/uze/commit/d5d75a2b3d8e99d96e5ffbde1ff2307bfbcce316))
+
+### Style
+
+- **ui:** Draw the new-agent control in the current agent's hue ([#118](https://github.com/uze-sh/uze/pull/118)) ([fd3755d](https://github.com/uze-sh/uze/commit/fd3755d7e7b972c198fae4d331477c46c615c344))
+
 ## [0.0.0-alpha.9](https://github.com/uze-sh/uze/compare/v0.0.0-alpha.8...v0.0.0-alpha.9) - 2026-09-23
 
 ### Features
