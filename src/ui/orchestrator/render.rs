@@ -1528,12 +1528,19 @@ fn render_timeline(
         == Some(WorkspaceHit::Extension(ExtensionHit::CodeTimeline(
             ViewHit::ToggleSection,
         )));
+    let hovered_row = match model.hovered {
+        Some(WorkspaceHit::Extension(ExtensionHit::CodeTimeline(ViewHit::SelectItem(index)))) => {
+            Some(index)
+        }
+        _ => None,
+    };
     let sliding = crate::ui::extension_view::render_section_with(
         frame,
         &section,
         &mut column,
         model.dragging_timeline,
         hovered.then_some(model.tick),
+        hovered_row,
         &mut section_hits,
     );
     hits.extend(section_hits.into_iter().map(|(rect, hit)| {
@@ -2244,11 +2251,13 @@ fn push_trailing_controls(
         if !drawn.is_empty() {
             drawn.push(Span::raw(" "));
         }
-        // The accent is held back until the pointer asks for it, so the
-        // row's one coloured word does not outshout the name beside it.
+        // The hue the caption of the agent receiving keystrokes wears
+        // (`caption_color`), because this is where the next one lands —
+        // held back until the pointer asks for it, so the row's one
+        // coloured word does not outshout the name beside it.
         let hue = match chip_state(model, Some(WorkspaceHit::NewAgentMenu)) {
-            ChipState::Hovered | ChipState::Pressed => Token::Accent,
-            ChipState::Resting | ChipState::Static => Token::AccentMuted,
+            ChipState::Hovered | ChipState::Pressed => Token::StateWarning,
+            ChipState::Resting | ChipState::Static => Token::StateWarningMuted,
         };
         drawn.push(Span::styled(label.clone(), theme::fg_bold(hue)));
     }
@@ -3131,22 +3140,19 @@ pub(super) fn render_tab_strip(
         // carried that padding, not just the selected one.
         spans.push(Span::raw(" "));
         x += chip_width + 1;
-    }
-    // A "/" separates the tab list from the action buttons that follow —
-    // without it the gap before them read as just another inter-tab gap,
-    // not a boundary between two different kinds of thing. No leading
-    // space of its own — the loop above already ends on one (the last
-    // chip's trailing gap) — only a trailing one, so it sits exactly 1
-    // neutral column off the tab side and 1 off the button side; baking a
-    // space into both ends of `" / "` double-counted the left side and
-    // left it looking closer to the buttons than to the tabs. `theme::color(Token::TextMuted)`, not
-    // `theme::color(Token::BorderFaint)` — sitting on the plain backdrop out here (not a
-    // filled chip the way the "│" below does), `theme::color(Token::BorderFaint)` read as a
-    // near-invisible hairline.
-    if x < limit {
-        spans.push(Span::styled("/", theme::fg(Token::TextMuted)));
-        spans.push(Span::raw(" "));
-        x += 2;
+        // A "/" closes the agent leading the strip off from the shells
+        // opened beside it, and from the "+" that opens another: two kinds
+        // of tab, and without it the gap after the agent read as just
+        // another gap between shells. No leading space — the chip's own
+        // trailing gap is one — so it sits one column off either side.
+        // `TextFaint`, the hue of the zone hairlines on this same backdrop:
+        // a separator is not text, and the brighter `TextMuted` made it
+        // read as one more word in the strip.
+        if is_agent && x < limit {
+            spans.push(Span::styled("/", theme::fg(Token::TextFaint)));
+            spans.push(Span::raw(" "));
+            x += 2;
+        }
     }
     // A bold "+" creates a new shell tab directly. It stays neutral, just
     // bolder, being the plain action; a new agent is asked for on its
@@ -3239,7 +3245,7 @@ fn group_width(buttons: &[GroupButton]) -> u16 {
 /// members meet on their padding and the boundary *is* where the fill
 /// changes — visible exactly when there is something to see, and nowhere
 /// at rest. A drawn divider belongs on the flat backdrop (the zone
-/// hairlines, the "/" before the tab buttons), where there is no fill for
+/// hairlines, the "/" after the agent tab), where there is no fill for
 /// it to disagree with.
 ///
 /// `resting` is the group's own fill, which is the one thing that differs

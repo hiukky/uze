@@ -5156,6 +5156,56 @@ mod workspace_tests {
         );
     }
 
+    /// The control placing an agent wears the hue of the agent receiving
+    /// keystrokes, held back until the pointer asks for it.
+    #[test]
+    fn the_new_agent_control_wears_the_current_agents_hue_on_hover() {
+        let hue_of_new = |model: &mut WorkspaceModel| {
+            let area = Rect::new(0, 0, 80, 24);
+            let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
+            let mut hits = Vec::new();
+            terminal
+                .draw(|frame| {
+                    render::render(
+                        frame,
+                        model,
+                        &identities_fixture(),
+                        &mut hits,
+                        &mut render::FrameMetrics::default(),
+                    )
+                })
+                .unwrap();
+            model.hits = hits;
+            let buffer = terminal.backend().buffer().clone();
+            let (y, row) = buffer_rows(&buffer)
+                .into_iter()
+                .enumerate()
+                .find(|(_, row)| row.contains(" new"))
+                .expect("the selected space carries the control");
+            let column = row[..row.find(" new").unwrap()].chars().count() as u16 + 1;
+            (column, y as u16, buffer[(column, y as u16)].fg)
+        };
+        let mut model = agent_with_task(WorkStateView::Ready, 1);
+        let (column, row, resting) = hue_of_new(&mut model);
+        assert_eq!(
+            resting,
+            theme::color(Token::StateWarningMuted),
+            "held back at rest"
+        );
+        assert_eq!(
+            model.hit_at(column, row),
+            Some(WorkspaceHit::NewAgentMenu),
+            "the pointer over the word is over the control, not the row it sits on"
+        );
+
+        model.hovered = Some(WorkspaceHit::NewAgentMenu);
+        assert_eq!(
+            hue_of_new(&mut model).2,
+            theme::color(Token::StateWarning),
+            "the pointer restores the hue"
+        );
+    }
+
     /// The keystroke a chord is: the inverse of `keys::chord_of`, so a test
     /// can press what the keymap says rather than a key typed by hand.
     fn key_event(chord: uze_keys::Chord) -> crossterm::event::KeyEvent {
@@ -5805,6 +5855,55 @@ mod workspace_tests {
         assert!(
             name_row.contains('\u{25cf}'),
             "the agent still reads as selected: {name_row}"
+        );
+    }
+
+    /// The "/" closes the agent off from its shells and the "+" beside
+    /// them, in the zone hairlines' own faint hue.
+    #[test]
+    fn the_strip_separates_the_agent_from_its_shells() {
+        let mut model = agent_session_in("/repo/.worktrees/ai");
+        let session = model.session.as_mut().unwrap();
+        let agent = session.workspace.spaces[0].tabs[0].id;
+        session.add_tab(
+            SpaceId(1),
+            "shell 1".into(),
+            Some(agent),
+            80,
+            24,
+            "/repo/.worktrees/ai".into(),
+        );
+
+        let (rows, _) = tab_strip(&model);
+        let strip = rows
+            .iter()
+            .find(|row| row.contains("shell 1"))
+            .expect("the shell has a tab");
+        let slash = strip.find('/').expect("a separator is drawn");
+        let shell = strip.find("shell 1").unwrap();
+        let plus = strip.rfind('+').expect("the new-shell button is drawn");
+        assert!(
+            slash < shell && shell < plus,
+            "agent / shells +, in that order: {strip:?}"
+        );
+
+        let mut terminal = Terminal::new(TestBackend::new(80, 3)).unwrap();
+        terminal
+            .draw(|frame| {
+                render_tab_strip(
+                    frame,
+                    frame.area(),
+                    &model,
+                    &identities_fixture(),
+                    &mut Vec::new(),
+                )
+            })
+            .unwrap();
+        let row = rows.iter().position(|row| row == strip).unwrap() as u16;
+        let column = strip[..slash].chars().count() as u16;
+        assert_eq!(
+            terminal.backend().buffer()[(column, row)].fg,
+            theme::color(Token::TextFaint)
         );
     }
 

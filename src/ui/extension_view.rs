@@ -1818,19 +1818,25 @@ pub(crate) fn render_section(
     dragging: bool,
     hits: &mut Vec<(Rect, ViewHit)>,
 ) -> bool {
-    render_section_with(frame, section, rows, dragging, None, hits)
+    render_section_with(frame, section, rows, dragging, None, None, hits)
 }
 
 /// The same, with `marquee` the clock a caption too long for its room
 /// slides by — `Some` while the pointer is on this header, `None`
 /// otherwise. Answers whether a caption actually slid, which is what
 /// tells the host's own clock it has a reason to keep turning.
+///
+/// `hovered_row` is the row under the pointer, its name lifted to the
+/// bright text the row receiving keystrokes wears: a row that opens
+/// something on a click says so before it is clicked. The text alone, not
+/// a ground — a band under a row in this column reads as the selection.
 pub(crate) fn render_section_with(
     frame: &mut ratatui::Frame<'_>,
     section: &Section,
     rows: &mut crate::ui::Rows,
     dragging: bool,
     marquee: Option<usize>,
+    hovered_row: Option<usize>,
     hits: &mut Vec<(Rect, ViewHit)>,
 ) -> bool {
     let Some(header_rect) = rows.next(1) else {
@@ -1933,7 +1939,11 @@ pub(crate) fn render_section_with(
             ),
             TextSpan::styled(
                 text::elide(&row.name.text, name_width as usize),
-                Style::default().fg(color(row.name.role)),
+                Style::default().fg(if hovered_row == Some(index) {
+                    theme::color(Token::TextBright)
+                } else {
+                    color(row.name.role)
+                }),
             ),
         ];
         row::push_trailing(
@@ -1978,7 +1988,9 @@ mod tests {
             terminal
                 .draw(|frame| {
                     let mut rows = crate::ui::Rows::over(frame.area());
-                    slid = render_section_with(frame, &section, &mut rows, false, tick, &mut hits);
+                    slid = render_section_with(
+                        frame, &section, &mut rows, false, tick, None, &mut hits,
+                    );
                 })
                 .unwrap();
             let row: String = (0..40)
@@ -2011,6 +2023,52 @@ mod tests {
         let cycle = long.chars().count() + 3;
         let (_, round) = header(long, Some(cycle * 2));
         assert_eq!(first, round, "one cycle returns it: {round:?}");
+    }
+
+    /// The row under the pointer has its name lifted to the bright text,
+    /// on the ground it already had, and no other row does.
+    #[test]
+    fn the_row_under_the_pointer_lifts_its_name() {
+        let commit = |name: &str| uze_extensions::view::SectionRow {
+            mark: uze_extensions::view::RowMark::Commit,
+            mark_role: Role::Muted,
+            name: Span::new(name, Role::Dim),
+            trailing: Span::new("8m", Role::Muted),
+        };
+        let section = Section {
+            title: "timeline".to_owned(),
+            caption: Span::new("main", Role::Muted),
+            collapsed: false,
+            resizable: false,
+            scroll: 0,
+            rows: vec![commit("fix(ui): one"), commit("feat(cli): two")],
+        };
+        let mut terminal = Terminal::new(TestBackend::new(40, 4)).unwrap();
+        terminal
+            .draw(|frame| {
+                let mut rows = crate::ui::Rows::over(frame.area());
+                render_section_with(
+                    frame,
+                    &section,
+                    &mut rows,
+                    false,
+                    None,
+                    Some(1),
+                    &mut Vec::new(),
+                );
+            })
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        let bright = theme::color(Token::TextBright);
+        // The header, then one row per commit; the name starts past the
+        // mark and its gap.
+        assert_ne!(buffer[(2, 1)].fg, bright, "the resting row's name");
+        assert_eq!(buffer[(2, 2)].fg, bright, "the hovered row's name");
+        assert_eq!(
+            buffer[(2, 2)].bg,
+            buffer[(2, 1)].bg,
+            "on the same ground as its neighbour"
+        );
     }
 
     /// Which drawn row a board's menu lands on: the frame's own top edge
