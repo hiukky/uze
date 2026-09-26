@@ -5858,6 +5858,55 @@ mod workspace_tests {
         );
     }
 
+    /// The "/" closes the agent off from its shells and the "+" beside
+    /// them, in the zone hairlines' own faint hue.
+    #[test]
+    fn the_strip_separates_the_agent_from_its_shells() {
+        let mut model = agent_session_in("/repo/.worktrees/ai");
+        let session = model.session.as_mut().unwrap();
+        let agent = session.workspace.spaces[0].tabs[0].id;
+        session.add_tab(
+            SpaceId(1),
+            "shell 1".into(),
+            Some(agent),
+            80,
+            24,
+            "/repo/.worktrees/ai".into(),
+        );
+
+        let (rows, _) = tab_strip(&model);
+        let strip = rows
+            .iter()
+            .find(|row| row.contains("shell 1"))
+            .expect("the shell has a tab");
+        let slash = strip.find('/').expect("a separator is drawn");
+        let shell = strip.find("shell 1").unwrap();
+        let plus = strip.rfind('+').expect("the new-shell button is drawn");
+        assert!(
+            slash < shell && shell < plus,
+            "agent / shells +, in that order: {strip:?}"
+        );
+
+        let mut terminal = Terminal::new(TestBackend::new(80, 3)).unwrap();
+        terminal
+            .draw(|frame| {
+                render_tab_strip(
+                    frame,
+                    frame.area(),
+                    &model,
+                    &identities_fixture(),
+                    &mut Vec::new(),
+                )
+            })
+            .unwrap();
+        let row = rows.iter().position(|row| row == strip).unwrap() as u16;
+        let column = strip[..slash].chars().count() as u16;
+        assert_eq!(
+            terminal.backend().buffer()[(column, row)].fg,
+            theme::color(Token::TextFaint)
+        );
+    }
+
     /// A shell the user typed an agent into keeps nothing of its generated
     /// label: it takes the `agent N` label it would have opened with. A
     /// label the user chose stays theirs.
