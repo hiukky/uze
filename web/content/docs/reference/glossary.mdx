@@ -11,7 +11,7 @@ Each entry is the short version. The link goes to the page that explains it.
 Antigravity. See [Harnesses](/docs/reference/harnesses).
 
 **Plugin (package).** What you install once. A directory holding skills, MCP
-servers, agents, hooks and instructions. See [Creating a plugin](/docs/plugins/creating).
+servers, agents and hooks. See [Creating a plugin](/docs/plugins/creating).
 
 **Marketplace.** A Git repository with a `marketplace.json`, remote or cloned
 locally. Every plugin is resolved through one. `uze-official` ships inside the
@@ -21,7 +21,7 @@ binary.
 source of truth. No harness reads it directly.
 
 **Capability.** One kind of thing a plugin declares: a skill, an MCP server, an
-agent, a hook or instructions. See [Plugin format](/docs/reference/plugin-format).
+agent or a hook. See [Plugin format](/docs/reference/plugin-format).
 
 **Invocation policy.** Who may run a skill: the model, the user, or both. The
 `invoke: {model, user}` block in `SKILL.md`.

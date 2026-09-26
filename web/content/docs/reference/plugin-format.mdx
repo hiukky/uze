@@ -16,7 +16,6 @@ description: Every file a plugin can ship, and how each one reaches each agent
     </Folder>
     <File name="mcp.json" />
     <File name="hooks.json" />
-    <File name="AGENTS.md" />
   </Folder>
 </Files>
 
@@ -148,12 +147,6 @@ Not every agent carries every effect:
 A hook an agent cannot honour is reported before it is installed, never
 silently weakened. The full contract, every variable included, is in
 [portable-hooks.md](https://github.com/uze-sh/uze/blob/main/docs/capabilities/portable-hooks.md).
-
-## Instructions
-
-A plugin's own `AGENTS.md` is added to the project's `AGENTS.md` as a block uze
-marks and owns. Write it as the instructions themselves: it lands in someone
-else's project.
 
 ## Commands a plugin runs
 
