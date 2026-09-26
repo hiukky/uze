@@ -50,7 +50,7 @@ embedding; both are yes for everything below.
 
 | Asset | Where it comes from | Licence | Commercial | Web embedding |
 | --- | --- | --- | --- | --- |
-| IBM Plex Sans, IBM Plex Mono | `next/font/google`, fetched at build and self-hosted in the deployment | OFL-1.1 | yes | yes — the licence permits bundling and redistribution with software |
+| IBM Plex Sans, IBM Plex Mono | IBM's own hinted release, vendored in `web/app/fonts/` with its licence | OFL-1.1 | yes | yes — the licence permits bundling and redistribution with software |
 | Lucide icon set (`lucide-react`) | npm, drawn inline as SVG | ISC | yes | yes |
 | Mermaid (`mermaid`) | npm, renders the diagrams in the docs | MIT | yes | yes |
 | `web/public/uze-demo.gif`, `uze-demo-poster.png` | first-party — produced from the spec in `.demo/` | this project's own licence | — | — |
