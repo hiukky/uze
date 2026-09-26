@@ -596,7 +596,10 @@ class Screen:
         )
 
     def band(self, where: str) -> tuple[int, int]:
-        return {"sidebar": (1, self.sidebar), "pane": (self.sidebar + 1, 9999)}.get(
+        # The strip is the tab row right of the sidebar: the sidebar's own
+        # header shares its line, and `+ space` there is not the strip's `+`.
+        pane = (self.sidebar + 1, 9999)
+        return {"sidebar": (1, self.sidebar), "pane": pane, "strip": pane}.get(
             where, (1, 9999)
         )
 
@@ -638,9 +641,11 @@ class Screen:
         return hits[0]
 
     def shows(self, pattern: str, where: str = "screen") -> bool:
-        haystack = (
-            "".join(self.pane().splitlines()[:1]) if where == "strip" else self.pane()
-        )
+        if where == "strip":
+            low, high = self.band(where)
+            haystack = "".join(self.pane().splitlines()[:1])[low - 1 : high]
+        else:
+            haystack = self.pane()
         return re.search(pattern, haystack) is not None
 
     def send(self, *args: str) -> None:
