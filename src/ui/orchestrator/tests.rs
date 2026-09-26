@@ -7769,10 +7769,11 @@ mod workspace_tests {
 
     /// A space's own row lands on a shell of the space's, not on whichever
     /// agent the strip was showing: it is the way back to the space's
-    /// shells. A space of nothing but agents has no such tab, so the click
-    /// is a plain switch.
+    /// shells. A space whose first shell became an agent when a harness
+    /// was typed into it has no such tab, so the click opens one — the
+    /// space ends where "✦ new" leaves it, not bound to the agent.
     #[test]
-    fn a_space_row_lands_on_its_own_shell_and_otherwise_switches_the_space() {
+    fn a_space_row_lands_on_its_own_shell_and_otherwise_opens_one() {
         let home = UzeHome::at(uze_testkit::temp::scratch("orchestrator-space-row"));
         let click_space_row = |model: WorkspaceModel| {
             let mut driven = driven(model, &home);
@@ -7816,10 +7817,19 @@ mod workspace_tests {
         let pane = only_agents.selected_tab().pane.id;
         only_agents.update_pane_status(pane, PathBuf::from("/repo"), "agent".into());
         let (space, sent) = click_space_row(model_of(only_agents));
+        let switched = sent.iter().position(|request| {
+            matches!(request, ClientRequest::SelectSpace { space: selected } if *selected == space)
+        });
+        let opened = sent.iter().position(|request| {
+            matches!(
+                request,
+                ClientRequest::CreateTab { agent: None, command: None, cwd: Some(cwd), .. }
+                    if cwd == Path::new("/repo")
+            )
+        });
         assert!(
-            sent.iter()
-                .any(|request| matches!(request, ClientRequest::SelectSpace { space: selected } if *selected == space)),
-            "a space of agents alone was not switched to: {sent:?}"
+            matches!((switched, opened), (Some(switched), Some(opened)) if switched < opened),
+            "a space of agents alone was not switched to and given a shell of its own: {sent:?}"
         );
     }
 

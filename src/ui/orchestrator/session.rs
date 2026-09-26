@@ -1489,6 +1489,32 @@ impl Attach<'_> {
         );
     }
 
+    /// Opens a shell of `space` itself, belonging to no agent, in the
+    /// directory the space stands in. Sent after the space is selected,
+    /// since the server opens a tab in the space the client is on.
+    fn open_space_shell(&mut self, space: SpaceId, columns: u16, rows: u16) {
+        let Some(space) = self
+            .model
+            .session
+            .as_ref()
+            .and_then(|session| session.space(space))
+        else {
+            return;
+        };
+        let _ = send_request(
+            &mut self.stream,
+            &ClientRequest::CreateTab {
+                label: "shell 1".into(),
+                agent: None,
+                columns,
+                rows,
+                cwd: Some(space_cwd(space, &self.identities)),
+                command: None,
+                env: Vec::new(),
+            },
+        );
+    }
+
     /// A left button going down.
     ///
     /// Guards first, in the same modal-precedence order the keyboard has:
@@ -2533,33 +2559,19 @@ impl Attach<'_> {
                 // way each agent row lands on that agent. That
                 // is the whole way back to the space's shells
                 // once an agent is what the strip is showing.
-                // A space of nothing but agents has no such
-                // tab, and the click stays a plain switch.
-                let landing = self.model.session.as_ref().and_then(|session| {
-                    let space = session
-                        .workspace
-                        .spaces
-                        .iter()
-                        .find(|candidate| candidate.id == space)?;
-                    Some((space.selected_tab, space_own_tab(space, &self.identities)))
+                // A space of nothing but agents — its first
+                // shell became one when a harness was typed
+                // into it — is given a shell of its own, so it
+                // ends where "✦ new" leaves it rather than
+                // bound to the agent.
+                self.land_on_space(space, columns, rows);
+                let bound = self.model.session.as_ref().is_some_and(|session| {
+                    session
+                        .space(space)
+                        .is_some_and(|space| space_own_tab(space, &self.identities).is_none())
                 });
-                if let Some((selected, own)) = landing {
-                    self.model
-                        .acknowledge_completed_agent_tab(own.unwrap_or(selected));
-                }
-                let _ = match landing.and_then(|(_, own)| own) {
-                    Some(tab) => send_request(&mut self.stream, &ClientRequest::SelectTab { tab }),
-                    None => send_request(&mut self.stream, &ClientRequest::SelectSpace { space }),
-                };
-                // Resize the pane the same way `SelectTab` does
-                // — switching spaces switches which tab (and so
-                // which pane) is focused, same as switching
-                // tabs within one space already does.
-                if let Some(pane) = landing
-                    .map(|(selected, own)| own.unwrap_or(selected))
-                    .and_then(|tab| self.model.pane_for_tab(tab))
-                {
-                    resize_pane(&mut self.stream, &mut self.model, pane, columns, rows);
+                if bound {
+                    self.open_space_shell(space, columns, rows);
                 }
                 // The header is also the handle a space is carried by;
                 // nothing moves until the pointer does (see
