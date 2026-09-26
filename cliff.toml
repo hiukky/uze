@@ -24,7 +24,7 @@ pre-releases — see `docs/versioning.md`.
 # care about, and every version heading is the diff against the one before it
 # — which is the question a reader actually arrives with.
 body = """
-{% set repo = "https://github.com/hiukky/uze" %}\
+{% set repo = "https://github.com/uze-sh/uze" %}\
 {% if version %}\
     {% if previous.version %}\
         ## [{{ version | trim_start_matches(pat="v") }}]({{ repo }}/compare/{{ previous.version }}...{{ version }})\
@@ -52,7 +52,7 @@ footer = ""
 # keeps the link offline-derivable: no API call, no token, and `make
 # changelog` on a laptop produces the same bytes CI commits.
 postprocessors = [
-  { pattern = '\(#(\d+)\)', replace = "([#${1}](https://github.com/hiukky/uze/pull/${1}))" },
+  { pattern = '\(#(\d+)\)', replace = "([#${1}](https://github.com/uze-sh/uze/pull/${1}))" },
   # The conditional blocks above leave their own blank lines behind; one blank
   # line between blocks is what Markdown means by a paragraph break.
   # Releases are rendered one at a time and joined without a blank line

@@ -54,12 +54,12 @@ use sha2::{Digest as _, Sha256};
 use uze_application::UzeHome;
 
 /// Where releases are published, and where a notice's link points.
-const RELEASES: &str = "https://github.com/hiukky/uze/releases";
+const RELEASES: &str = "https://github.com/uze-sh/uze/releases";
 
 /// Where a release's own `CHANGELOG.md` is read from: the file at its tag.
 /// A constant for the same reason [`RELEASES`] is one, although what comes
 /// from here is only ever shown.
-const SOURCES: &str = "https://raw.githubusercontent.com/hiukky/uze";
+const SOURCES: &str = "https://raw.githubusercontent.com/uze-sh/uze";
 
 /// How long an answer about the latest release is trusted. Every client
 /// that opens runs the check, and this is what keeps a second terminal from
@@ -832,7 +832,7 @@ mod tests {
     #[test]
     fn the_version_is_read_off_the_release_page_the_redirect_lands_on() {
         assert_eq!(
-            tag_version("https://github.com/hiukky/uze/releases/tag/v0.0.0-alpha.4\n").as_deref(),
+            tag_version("https://github.com/uze-sh/uze/releases/tag/v0.0.0-alpha.4\n").as_deref(),
             Some("0.0.0-alpha.4")
         );
         assert_eq!(

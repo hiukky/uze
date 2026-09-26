@@ -16,7 +16,7 @@
 
 set -eu
 
-DEFAULT_BASE_URL="https://github.com/hiukky/uze/releases"
+DEFAULT_BASE_URL="https://github.com/uze-sh/uze/releases"
 
 # --- presentation -------------------------------------------------------------
 # The same rule `src/progress.rs` applies to the CLI itself (`color_enabled`),

@@ -20,7 +20,7 @@ vulnerability.** A public report is a disclosure, and it is the one step
 that cannot be undone.
 
 Report through GitHub's private vulnerability reporting:
-**[Security → Report a vulnerability](https://github.com/hiukky/uze/security/advisories/new)**.
+**[Security → Report a vulnerability](https://github.com/uze-sh/uze/security/advisories/new)**.
 
 It opens a draft advisory only you and the maintainer can read, keeps the
 discussion attached to the eventual fix, and issues the CVE from the same

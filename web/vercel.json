@@ -2,7 +2,7 @@
   "rewrites": [
     {
       "source": "/i",
-      "destination": "https://raw.githubusercontent.com/hiukky/uze/main/install.sh"
+      "destination": "https://raw.githubusercontent.com/uze-sh/uze/main/install.sh"
     }
   ],
   "redirects": [

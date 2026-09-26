@@ -54,7 +54,7 @@ it placed, and that file is the only one ever replaced.
   their hits and the management worker's intents.
 - `sha2` becomes a direct dependency of the root crate. It is already in the
   tree through `uze-core`; nothing new is compiled or vendored.
-- Network: `github.com/hiukky/uze/releases`, through `curl`, the same way the
+- Network: `github.com/uze-sh/uze/releases`, through `curl`, the same way the
   installer and every harness installer UZE runs already reach the network.
 - `journeys/journey.py` turns the check off inside a world.
 - `docs/versioning.md` gains the section an operator reads to know what the

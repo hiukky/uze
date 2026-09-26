@@ -9,7 +9,7 @@ export const docsImageRoute = '/og/docs';
 export const docsContentRoute = '/llms.mdx/docs';
 
 export const gitConfig = {
-  user: 'hiukky',
+  user: 'uze-sh',
   repo: 'uze',
   branch: 'main',
 };
