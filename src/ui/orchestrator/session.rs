@@ -3455,6 +3455,9 @@ impl Attach<'_> {
         while let Ok(resolution) = self.channels.code_changes.receiver.try_recv() {
             self.model.dirty |= self.model.absorb_changes(resolution);
         }
+        while let Ok(resolution) = self.channels.code_diffs.receiver.try_recv() {
+            self.model.dirty |= self.model.absorb_diff(resolution);
+        }
         while let Ok(resolution) = self.channels.code_files.receiver.try_recv() {
             self.model.dirty |= self.model.absorb_file_answer(resolution);
         }
@@ -3465,6 +3468,8 @@ impl Attach<'_> {
             self.model.dirty |= self.model.absorb_artifacts(resolution);
         }
         self.model.schedule_git_read(&self.channels.git.sender);
+        self.model
+            .schedule_diff_read(&self.channels.code_diffs.sender);
         self.model
             .schedule_changes_refresh(&self.channels.code_changes.sender);
         self.model

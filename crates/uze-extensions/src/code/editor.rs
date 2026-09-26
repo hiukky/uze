@@ -161,6 +161,12 @@ impl OpenFile {
     /// Installs a file the host read, keeping a line to put the caret on
     /// out of it — an empty file still has one line, or there is nowhere
     /// to start typing.
+    /// Whether `text` is what this buffer holds, line for line — so an
+    /// answer read while the file was something else is told apart.
+    pub(super) fn holds(&self, text: &str) -> bool {
+        split_lines(text).0 == self.lines
+    }
+
     pub(super) fn install(&mut self, loaded: LoadedFile) {
         // Taken apart in one move, here and nowhere else: a buffer
         // holding half of one file and half of another is the one state

@@ -8,8 +8,9 @@
 //! be one thing rather than the same shape written twice.
 
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeSet, HashMap},
     path::{Path, PathBuf},
+    sync::{Arc, Mutex, OnceLock, PoisonError},
     time::Instant,
 };
 
@@ -28,6 +29,9 @@ use crate::{
 /// One of the two halves [`super::CodeView`] holds. It answers about a
 /// path and knows nothing about the other half — see that type for why
 /// the two stay apart.
+/// The navigator's rows, and the folds they were built with.
+type FoldedTree = (BTreeSet<String>, Arc<Vec<FileTreeItem>>);
+
 #[derive(Default)]
 pub(super) struct Changes {
     pub(super) files: Vec<ChangedFile>,
@@ -51,6 +55,19 @@ pub(super) struct Changes {
     /// open at all.
     pub(super) error: Option<String>,
     pub(super) refreshed_at: Option<Instant>,
+    /// The list as a tree, worked out once per list rather than once per
+    /// frame — on a checkout with thousands of changes, building it was
+    /// most of what drawing a frame cost. Two: with the viewer's folds,
+    /// kept with the folds it was built for so a fold is never drawn
+    /// stale, and with none, for questions about where a file sits.
+    pub(super) tree: Mutex<Option<FoldedTree>>,
+    pub(super) unfolded: OnceLock<Arc<Vec<FileTreeItem>>>,
+    /// Each file's place in `files`, by path — what marks a changed file
+    /// in the other list, asked once per row per frame.
+    pub(super) positions: OnceLock<HashMap<PathBuf, usize>>,
+    /// How long the read that produced this took, for the pacing of the
+    /// next one (see [`super::PACE`]).
+    pub(super) took: std::time::Duration,
     /// What the diff on screen was read from — the raw output and the
     /// palette together, as one number.
     ///
@@ -105,7 +122,49 @@ impl Changes {
     /// Where `path` sits in the changed-file list, if it changed at all.
     pub(super) fn position_of(&self, path: Option<&Path>) -> Option<usize> {
         let path = path?;
-        self.files.iter().position(|file| file.path == path)
+        self.positions
+            .get_or_init(|| {
+                self.files
+                    .iter()
+                    .enumerate()
+                    .map(|(index, file)| (file.path.clone(), index))
+                    .collect()
+            })
+            .get(path)
+            .copied()
+    }
+
+    /// The navigator's rows, with the viewer's folds.
+    pub(super) fn tree(&self, root: &Path) -> Arc<Vec<FileTreeItem>> {
+        let mut built = self.tree.lock().unwrap_or_else(PoisonError::into_inner);
+        match built.as_ref() {
+            Some((folded, items)) if *folded == self.folded => Arc::clone(items),
+            _ => {
+                let items = Arc::new(tree_items(self, root, &self.folded));
+                *built = Some((self.folded.clone(), Arc::clone(&items)));
+                items
+            }
+        }
+    }
+
+    /// Takes over what `previous` already worked out about the list, when
+    /// the list is the same one — which, re-read every second or two, it
+    /// nearly always is.
+    pub(super) fn inherit(&mut self, previous: &mut Changes) {
+        if self.files != previous.files {
+            return;
+        }
+        self.tree = std::mem::take(&mut previous.tree);
+        self.unfolded = std::mem::take(&mut previous.unfolded);
+        self.positions = std::mem::take(&mut previous.positions);
+    }
+
+    /// The same rows with every directory open.
+    fn unfolded_tree(&self, root: &Path) -> Arc<Vec<FileTreeItem>> {
+        Arc::clone(
+            self.unfolded
+                .get_or_init(|| Arc::new(tree_items(self, root, &BTreeSet::new()))),
+        )
     }
 
     fn load_diff(&mut self, host: &dyn Host, root: &Path, selected: Option<&Path>, shown: u64) {
@@ -116,35 +175,24 @@ impl Changes {
             self.diff = Vec::new();
             return;
         };
-        let path = file.path.clone();
-        let status = file.status;
-        let relative = path.to_string_lossy();
-        let raw = if status == FileStatus::Untracked {
-            // `--no-index` exits 1 for "the two differ", which against
-            // `/dev/null` is every time.
-            host.git(
-                root,
-                &["diff", "--no-index", "--", "/dev/null", &relative],
-                &[1],
-            )
-        } else {
-            host.git(root, &["diff", "HEAD", "--", &relative], &[])
-        };
-        let output = match raw {
-            Ok(output) => output,
-            Err(message) => {
-                self.error = Some(message);
-                return;
+        let read = read_diff(host, root, &file.path.clone(), file.status, shown);
+        self.install_diff(read);
+    }
+
+    /// Puts a diff read in place, whichever read it came from.
+    pub(super) fn install_diff(&mut self, read: DiffRead) {
+        match read.outcome {
+            Err(message) => self.error = Some(message),
+            Ok(None) => {
+                self.diff_digest = read.digest;
+                self.diff_unchanged = true;
             }
-        };
-        let theme = host.syntax_theme();
-        self.diff_digest = Self::digest_of(&output, &theme);
-        // Nothing moved, and the palette is the one it was drawn in.
-        if self.diff_digest == shown && shown != 0 {
-            self.diff_unchanged = true;
-            return;
+            Ok(Some(cells)) => {
+                self.diff_digest = read.digest;
+                self.diff_unchanged = false;
+                self.diff = cells;
+            }
         }
-        self.diff = diff::read(&output, &path, &theme);
     }
 
     /// One number standing for a diff drawn in a palette: what a re-read
@@ -170,11 +218,13 @@ impl Changes {
         from: usize,
         direction: ScrollDirection,
     ) -> Option<usize> {
-        let order: Vec<usize> = tree_items(self, root, &BTreeSet::new())
+        let order: Vec<usize> = self
+            .unfolded_tree(root)
             .iter()
             .filter_map(FileTreeItem::file_index)
             .collect();
-        let shown: BTreeSet<usize> = tree_items(self, root, &self.folded)
+        let shown: BTreeSet<usize> = self
+            .tree(root)
             .iter()
             .filter_map(FileTreeItem::file_index)
             .collect();
@@ -190,7 +240,7 @@ impl Changes {
     /// The directories above `selected`, outermost first, by the path the
     /// navigator folds them under.
     fn ancestors_of(&self, root: &Path, selected: usize) -> Vec<String> {
-        let items = tree_items(self, root, &BTreeSet::new());
+        let items = self.unfolded_tree(root);
         let Some(row) = items
             .iter()
             .position(|item| item.file_index() == Some(selected))
@@ -251,6 +301,59 @@ impl Changes {
     }
 }
 
+/// One file's diff, read on its own: what moving the selection costs,
+/// with no `status` of the whole checkout in front of it.
+pub(super) struct DiffRead {
+    pub(super) path: PathBuf,
+    pub(super) digest: u64,
+    /// `Ok(None)` when the read found the diff already on screen
+    /// (`shown`), so nothing was coloured again.
+    pub(super) outcome: Result<Option<Vec<DiffCell>>, String>,
+}
+
+pub(super) fn read_diff(
+    host: &dyn Host,
+    root: &Path,
+    path: &Path,
+    status: FileStatus,
+    shown: u64,
+) -> DiffRead {
+    let relative = path.to_string_lossy();
+    let raw = if status == FileStatus::Untracked {
+        // `--no-index` exits 1 for "the two differ", which against
+        // `/dev/null` is every time.
+        host.git(
+            root,
+            &["diff", "--no-index", "--", "/dev/null", &relative],
+            &[1],
+        )
+    } else {
+        host.git(root, &["diff", "HEAD", "--", &relative], &[])
+    };
+    let output = match raw {
+        Ok(output) => output,
+        Err(message) => {
+            return DiffRead {
+                path: path.to_path_buf(),
+                digest: 0,
+                outcome: Err(message),
+            };
+        }
+    };
+    let theme = host.syntax_theme();
+    let digest = Changes::digest_of(&output, &theme);
+    // Nothing moved, and the palette is the one it was drawn in.
+    let outcome = match digest == shown && shown != 0 {
+        true => Ok(None),
+        false => Ok(Some(diff::read(&output, path, &theme))),
+    };
+    DiffRead {
+        path: path.to_path_buf(),
+        digest,
+        outcome,
+    }
+}
+
 /// A compact summary for the workspace tab strip. It is deliberately
 /// separate from [`Changes`]: the strip needs only a cheap indicator,
 /// while opening the surface can afford to load and highlight a full
@@ -266,12 +369,14 @@ pub struct ChangeSummary {
 /// clean worktree alike, which lets the caller omit its badge entirely.
 pub fn change_summary(host: &dyn Host, cwd: &Path) -> Option<ChangeSummary> {
     let root = host.repository_root(cwd).ok()?;
-    let status = host.git(&root, STATUS_ARGS, &[]).ok()?;
-    let files = parse_porcelain_status(&status, &root);
-    if files.is_empty() {
-        return None;
-    }
-
+    // The diff before the status, and the order is the whole point. When
+    // files were touched without changing — a formatter, a build, a
+    // `touch` — the index no longer vouches for them, and whichever read
+    // comes first re-hashes the checkout: seconds, on a large one. A
+    // `diff` writes what it learned back to the index and a `status`
+    // read this way does not, so the diff first is one re-hash, and the
+    // status after it is the cheap one it always was.
+    //
     // One diff against HEAD, not the staged and unstaged ones added
     // together: a line staged and then edited again appears in both, and
     // the sum counts it twice. A repository with no commit yet has no HEAD
@@ -280,6 +385,11 @@ pub fn change_summary(host: &dyn Host, cwd: &Path) -> Option<ChangeSummary> {
         .git(&root, &["diff", "--numstat", "HEAD"], &[])
         .or_else(|_| host.git(&root, &["diff", "--numstat", "--cached"], &[]))
         .ok()?;
+    let status = host.git(&root, STATUS_ARGS, &[]).ok()?;
+    let files = parse_porcelain_status(&status, &root);
+    if files.is_empty() {
+        return None;
+    }
     let (additions, deletions) = parse_numstat(&numstat);
     let mut summary = ChangeSummary {
         additions,
@@ -327,7 +437,7 @@ impl FileStatus {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 pub(super) struct ChangedFile {
     pub(super) status: FileStatus,
     /// Absolute — resolved against the repository root (`CodeView::root`),

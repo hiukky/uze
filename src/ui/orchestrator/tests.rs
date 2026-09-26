@@ -6,6 +6,9 @@
 
 use super::*;
 
+#[cfg(test)]
+mod perf;
+
 mod workspace_tests {
     use crate::ui::theme::{self, Token};
 
@@ -69,7 +72,7 @@ mod workspace_tests {
 
     /// A fresh one-space session over `root`, at the size every test
     /// frame is drawn at.
-    fn session(root: impl AsRef<Path>) -> Session {
+    pub(super) fn session(root: impl AsRef<Path>) -> Session {
         Session::new(
             uze_terminal::SpaceSeat {
                 root: root.as_ref().to_path_buf(),
@@ -80,7 +83,7 @@ mod workspace_tests {
     }
 
     /// A model attached to `session` and nothing else.
-    fn model_of(session: Session) -> WorkspaceModel {
+    pub(super) fn model_of(session: Session) -> WorkspaceModel {
         WorkspaceModel {
             session: Some(session),
             ..WorkspaceModel::default()
@@ -805,6 +808,11 @@ mod workspace_tests {
             "the map is there the moment the surface is"
         );
 
+        model
+            .code
+            .as_mut()
+            .expect("open")
+            .show(uze_extensions::code::ContentMode::Map);
         let (sender, _receiver) = mpsc::channel();
         model.schedule_code_measure(&sender);
         assert!(
@@ -3981,6 +3989,7 @@ mod workspace_tests {
         model.remembered.git_pending = Some(PathBuf::from("/elsewhere"));
 
         let changed = model.absorb_git_read(GitResolution {
+            took: Duration::ZERO,
             cwd: PathBuf::from("/elsewhere"),
             answer: GitAnswer::Full {
                 summary: None,
@@ -4016,6 +4025,7 @@ mod workspace_tests {
             .map(|badge| badge.timeline_checked_at);
 
         let changed = model.absorb_git_read(GitResolution {
+            took: Duration::ZERO,
             cwd: PathBuf::from("/repo"),
             answer: GitAnswer::Summary(Some(uze_extensions::code::ChangeSummary {
                 additions: 2,
@@ -7594,8 +7604,8 @@ mod workspace_tests {
     /// One attached client, driven the way the real loop drives it: hits
     /// from a real frame, a socket pair standing in for the server, and
     /// the channels a background read answers through.
-    struct Driven<'a> {
-        attach: Attach<'a>,
+    pub(super) struct Driven<'a> {
+        pub(super) attach: Attach<'a>,
         server: std::os::unix::net::UnixStream,
         events: std::sync::mpsc::Receiver<ClientEvent>,
         /// The reader thread's end, held so the channel stays connected.
@@ -7615,14 +7625,14 @@ mod workspace_tests {
         /// margin — the manage modal takes the whole frame below
         /// `management::ROOMY_*`, so the gestures that need something
         /// beside it need a screen that has one.
-        fn on_a_roomy_terminal(mut self) -> Self {
+        pub(super) fn on_a_roomy_terminal(mut self) -> Self {
             self.area = Rect::new(0, 0, 120, 40);
             self
         }
 
         /// Draws the frame the next click is tested against, storing its
         /// hits on the model exactly as the attach loop does.
-        fn frame(&mut self) {
+        pub(super) fn frame(&mut self) {
             full_frame_at(&mut self.attach.model, self.area);
         }
 
@@ -7646,7 +7656,7 @@ mod workspace_tests {
         }
 
         /// One key, through the same dispatch the attach loop uses.
-        fn press_key(&mut self, key: crossterm::event::KeyEvent) {
+        pub(super) fn press_key(&mut self, key: crossterm::event::KeyEvent) {
             let area = self.area;
             let layout = compute_layout(area, self.attach.model.sidebar_width);
             let viewport = Viewport {
@@ -7662,7 +7672,7 @@ mod workspace_tests {
 
         /// One turn of everything that is not an event — what absorbs a
         /// placement once its thread has answered.
-        fn pump(&mut self) -> Flow {
+        pub(super) fn pump(&mut self) -> Flow {
             self.attach.pump(&self.events)
         }
 
@@ -7737,7 +7747,7 @@ mod workspace_tests {
         }
     }
 
-    fn driven(model: WorkspaceModel, home: &UzeHome) -> Driven<'_> {
+    pub(super) fn driven(model: WorkspaceModel, home: &UzeHome) -> Driven<'_> {
         let (client, server) = std::os::unix::net::UnixStream::pair().unwrap();
         let (events, events_rx) = std::sync::mpsc::channel();
         Driven {

@@ -94,7 +94,10 @@ pub fn view(code: &CodeView, space: Size) -> View {
 fn map_content(code: &CodeView, space: Size) -> Content {
     let Some(map) = code.map_view() else {
         return Content::Message {
-            text: "The checkout has not been measured yet".to_owned(),
+            text: match code.unmeasurable() {
+                true => "Nothing to measure outside a repository".to_owned(),
+                false => "Measuring the checkout…".to_owned(),
+            },
             hint: None,
             role: Role::Muted,
         };
@@ -250,9 +253,7 @@ fn footer(code: &CodeView) -> Vec<Command> {
         commands.push(Command::Edit);
         commands.push(Command::Delete);
     }
-    if code.has_map() {
-        commands.push(Command::ToggleMap);
-    }
+    commands.push(Command::ToggleMap);
     commands.push(Command::FocusNext);
     commands.push(Command::Close);
     commands
