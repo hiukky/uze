@@ -402,11 +402,20 @@ mod tests {
             .unwrap();
         let mut took = [0 as libc::c_int; 2];
         assert_eq!(unsafe { libc::pipe(took.as_mut_ptr()) }, 0);
+        let highest_descriptor = unsafe { libc::sysconf(libc::_SC_OPEN_MAX) }.clamp(256, 65_536);
         let child = unsafe { libc::fork() };
         assert!(child >= 0, "fork failed");
         if child == 0 {
             unsafe {
-                libc::close(took[0]);
+                // No `exec` follows, so `O_CLOEXEC` never fires: without this
+                // the child would keep every lock the other tests of this
+                // process hold at the instant of the fork, for as long as it
+                // lives.
+                for descriptor in 3..highest_descriptor as libc::c_int {
+                    if descriptor != held.as_raw_fd() && descriptor != took[1] {
+                        libc::close(descriptor);
+                    }
+                }
                 let answer = [u8::from(libc::flock(held.as_raw_fd(), libc::LOCK_EX) == 0)];
                 libc::write(took[1], answer.as_ptr().cast(), 1);
                 loop {
