@@ -1,8 +1,8 @@
 {
   "name": "uze",
   "owner": {
-    "name": "hiukky",
-    "url": "https://github.com/hiukky/uze"
+    "name": "uze-sh",
+    "url": "https://github.com/uze-sh/uze"
   },
   "plugins": [
     {

@@ -1,6 +1,6 @@
 # uze docs
 
-Next.js + [Fumadocs](https://fumadocs.dev) site for [uze](https://github.com/hiukky/uze).
+Next.js + [Fumadocs](https://fumadocs.dev) site for [uze](https://github.com/uze-sh/uze).
 
 ```bash
 bun install

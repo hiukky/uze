@@ -29,7 +29,7 @@ use crate::shared::process::{json, run_quiet};
 /// The owner every catalogue UZE writes into Claude's marketplace UI
 /// declares. Named once so the two documents that carry it cannot drift
 /// into attributing UZE's local marketplace to someone else.
-const MARKETPLACE_OWNER_URL: &str = "https://github.com/hiukky/uze";
+const MARKETPLACE_OWNER_URL: &str = "https://github.com/uze-sh/uze";
 
 pub(super) struct ClaudeMarketplace;
 
@@ -873,7 +873,7 @@ mod claude_native_coverage_tests {
         assert_eq!(doc1, doc1_again);
         assert_eq!(doc1["name"], "uze-local");
         assert_eq!(
-            doc1["owner"]["url"], "https://github.com/hiukky/uze",
+            doc1["owner"]["url"], "https://github.com/uze-sh/uze",
             "the owner Claude's marketplace UI shows is this project, not another"
         );
         assert_eq!(doc1["plugins"].as_array().unwrap().len(), 2);

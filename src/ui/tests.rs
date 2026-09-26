@@ -76,7 +76,7 @@ fn model_with_data() -> TuiModel {
     model.remembered.marketplaces = vec![MarketplaceSummary {
         name: "uze-official".to_owned(),
         source: "embedded:uze-official".to_owned(),
-        homepage: Some("https://github.com/hiukky/uze".to_owned()),
+        homepage: Some("https://github.com/uze-sh/uze".to_owned()),
         plugin_count: 1,
         linked_to: None,
     }];
@@ -1892,7 +1892,7 @@ fn the_source_card_shows_the_marketplace_link_and_offers_to_open_it() {
     model.remembered.marketplaces = vec![MarketplaceSummary {
         name: "uze-official".to_owned(),
         source: "embedded:uze-official".to_owned(),
-        homepage: Some("https://github.com/hiukky/uze".to_owned()),
+        homepage: Some("https://github.com/uze-sh/uze".to_owned()),
         plugin_count: 1,
         linked_to: None,
     }];
@@ -1915,7 +1915,7 @@ fn the_source_card_shows_the_marketplace_link_and_offers_to_open_it() {
     let rows = buffer_rows(&terminal);
     assert!(
         rows.iter()
-            .any(|row| row.contains("https://github.com/hiukky/uze")),
+            .any(|row| row.contains("https://github.com/uze-sh/uze")),
         "the address reads on the card: {rows:#?}"
     );
 
@@ -1932,7 +1932,7 @@ fn the_source_card_shows_the_marketplace_link_and_offers_to_open_it() {
     for column in [rect.x, rect.x + rect.width / 2, rect.right() - 1] {
         assert_eq!(
             model.click(column, rect.y),
-            Intent::OpenLink("https://github.com/hiukky/uze".to_owned()),
+            Intent::OpenLink("https://github.com/uze-sh/uze".to_owned()),
             "clicking anywhere along it hands the address over"
         );
     }
@@ -1949,7 +1949,7 @@ fn the_source_link_is_clickable_on_the_row_it_is_drawn_on() {
     model.remembered.marketplaces = vec![MarketplaceSummary {
         name: "uze-official".to_owned(),
         source: "embedded:uze-official".to_owned(),
-        homepage: Some("https://github.com/hiukky/uze".to_owned()),
+        homepage: Some("https://github.com/uze-sh/uze".to_owned()),
         plugin_count: 1,
         linked_to: None,
     }];
@@ -1978,7 +1978,7 @@ fn the_source_link_is_clickable_on_the_row_it_is_drawn_on() {
     let rows = buffer_rows(&terminal);
     let drawn = rows
         .iter()
-        .position(|row| row.contains("https://github.com/hiukky/uze"))
+        .position(|row| row.contains("https://github.com/uze-sh/uze"))
         .expect("the address reads on the card") as u16;
     let rect = model
         .hits
@@ -1992,7 +1992,7 @@ fn the_source_link_is_clickable_on_the_row_it_is_drawn_on() {
     );
     assert_eq!(
         model.click(rect.x + 1, drawn),
-        Intent::OpenLink("https://github.com/hiukky/uze".to_owned()),
+        Intent::OpenLink("https://github.com/uze-sh/uze".to_owned()),
     );
 }
 
@@ -2006,7 +2006,7 @@ fn the_source_link_lights_up_only_under_the_pointer() {
     model.remembered.marketplaces = vec![MarketplaceSummary {
         name: "uze-official".to_owned(),
         source: "embedded:uze-official".to_owned(),
-        homepage: Some("https://github.com/hiukky/uze".to_owned()),
+        homepage: Some("https://github.com/uze-sh/uze".to_owned()),
         plugin_count: 1,
         linked_to: None,
     }];

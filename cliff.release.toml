@@ -23,13 +23,13 @@
 # generous. Nothing else here depends on the network.
 
 [remote.github]
-owner = "hiukky"
+owner = "uze-sh"
 repo = "uze"
 
 [changelog]
 header = ""
 body = """
-{% set repo = "https://github.com/hiukky/uze" %}\
+{% set repo = "https://github.com/uze-sh/uze" %}\
 {% set breaking = commits | filter(attribute="breaking", value=true) %}\
 {% if breaking | length > 0 %}
 > [!IMPORTANT]
@@ -104,7 +104,7 @@ workflow built it, from which commit, on which runner:
 
 ```sh
 sha256sum --ignore-missing -c SHASUMS256.txt   # macOS: shasum -a 256 --ignore-missing -c
-gh attestation verify uze-x86_64-linux-gnu.tar.gz --repo hiukky/uze
+gh attestation verify uze-x86_64-linux-gnu.tar.gz --repo uze-sh/uze
 ```
 
 The macOS binaries are not notarized. `curl | sh` installs and runs them; a
@@ -118,7 +118,7 @@ generated from this tag's own lockfile. Each tarball carries `LICENSE`,
 footer = ""
 trim = true
 postprocessors = [
-  { pattern = '\(#(\d+)\)', replace = "([#${1}](https://github.com/hiukky/uze/pull/${1}))" },
+  { pattern = '\(#(\d+)\)', replace = "([#${1}](https://github.com/uze-sh/uze/pull/${1}))" },
   # The conditional blocks above leave their own blank lines behind; one blank
   # line between blocks is what Markdown means by a paragraph break.
   { pattern = '\n{3,}', replace = "\n\n" },

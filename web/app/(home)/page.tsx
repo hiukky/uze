@@ -303,7 +303,7 @@ export default function HomePage() {
             Write a plugin
           </Link>
           <Link
-            href="https://github.com/hiukky/uze"
+            href="https://github.com/uze-sh/uze"
             className="inline-flex items-center gap-2 border border-line px-5 py-2.5 text-ink transition-colors hover:bg-surface"
           >
             <svg viewBox="0 0 16 16" className="size-3.5" fill="currentColor" aria-hidden="true">

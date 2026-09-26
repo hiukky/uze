@@ -1949,16 +1949,16 @@ mod tests {
     #[test]
     fn the_forge_is_read_off_the_remote_host_and_nothing_else() {
         for url in [
-            "https://github.com/hiukky/uze.git",
-            "git@github.com:hiukky/uze.git",
+            "https://github.com/uze-sh/uze.git",
+            "git@github.com:uze-sh/uze.git",
             "ssh://git@github.acme.example/team/service",
         ] {
             assert_eq!(Forge::from_remote_url(url), Forge::GitHub, "{url}");
         }
         for url in [
-            "https://gitlab.com/hiukky/uze.git",
+            "https://gitlab.com/uze-sh/uze.git",
             "git@gitlab.acme.example:team/service.git",
-            "https://GitLab.com/hiukky/uze.git",
+            "https://GitLab.com/uze-sh/uze.git",
         ] {
             assert_eq!(Forge::from_remote_url(url), Forge::GitLab, "{url}");
         }

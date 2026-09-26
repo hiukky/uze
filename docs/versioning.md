@@ -76,7 +76,7 @@ it stops there. When it does not:
      two must be changed together;
    - a CycloneDX SBOM is generated from the tag's own lockfile, provenance
      is signed for every asset (`gh attestation verify <file> --repo
-     hiukky/uze`), and the GitHub Release — named `v<v>`, the same
+     uze-sh/uze`), and the GitHub Release — named `v<v>`, the same
      identifier the tag, the changelog and `install.sh` all use — is
      created with the tarballs, the SBOM, `SHASUMS256.txt` and the notes
      described below. Re-runs upload assets with `--clobber` and rewrite
