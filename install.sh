@@ -1,7 +1,7 @@
 #!/bin/sh
 # uze — official installer.
 #
-#   curl -fsSL https://uze.hiukky.com/i | sh
+#   curl -fsSL https://uze.sh/i | sh
 #
 # Downloads the prebuilt `uze` binary for this machine from GitHub
 # Releases, verifies its SHA-256 checksum, and installs it into the user

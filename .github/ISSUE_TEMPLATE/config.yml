@@ -4,5 +4,5 @@ contact_links:
     url: https://github.com/hiukky/uze/security/policy
     about: Never in a public issue. Report it privately.
   - name: Question about how uze works
-    url: https://uze.hiukky.com/docs
+    url: https://uze.sh/docs
     about: The documentation covers the delivery model, the capability matrix and the CLI.
