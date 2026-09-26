@@ -1,0 +1,123 @@
+# The first five minutes, as a spec: install uze, set up one harness, open
+# the workspace. Shown at the top of the Installation page.
+#
+#   tui-record seed   .demo/install
+#   tui-record run    .demo/install
+#
+# Unlike the other demos this one records a *shell*, and what it installs is
+# the published release, not this checkout's build: the video is of what a
+# reader will get by running the same line. Its sandbox is its own, so a take
+# never touches the uze the other specs record.
+#
+# The installer prints the directory it installed into, so the sandbox home
+# is on screen here: it lives under /tmp, where a path carries no username.
+
+video:
+  title: uze — install
+  out: .demo/install/uze-install.gif
+  poster: .demo/install/uze-install-poster.png
+  publish:
+    - from: out
+      to: web/public/uze-install.gif
+    - from: poster
+      to: web/public/uze-install-poster.png
+  cast: '{root}/uze-install.cast'
+  # The same grade as every other demo, so the docs read as one set.
+  cols: 152
+  rows: 36
+  speed: 1.2
+  background: 0a0c0d        # crate::ui::BASE — a mismatch shows as a border
+  font_size: 20
+  font_family: FiraCode Nerd Font Mono,DejaVu Sans Mono
+  font_dir: ~/.cache/nerd-fonts/v3.5.1/FiraCode
+  # Two downloads happen on camera — uze's release and Claude Code's — and
+  # both are waits, squeezed to this.
+  wait_collapse: 1.2
+  poster_when: 'Setup completed'
+  sidebar: 31
+sandbox:
+  root: /tmp/uzeinstall
+  fixtures: /tmp/uzeinstall/work
+  cwd: '{fixtures}/my-app'
+  command:
+    - '{home}/demoshell'
+  shell: '{home}/demoshell'
+  # The installed binaries land in ~/.local/bin, and `uze setup` puts its
+  # shims first: the same order a real shell rc ends up with.
+  path:
+    - '{home}/.uze/shims'
+    - '{home}/.local/bin'
+    - /usr/local/bin
+    - /usr/bin
+    - /bin
+  env:
+    TZ: UTC
+    PS1: '\[\e[38;5;114m\]my-app\[\e[0m\] $ '
+  author: Ada Lovelace
+  author_email: ada@demo.dev
+  # Every take is a machine that has never seen uze or Claude Code: the
+  # install and the setup are what the video shows, so neither may be done.
+  clear:
+    - '{home}/.local/bin/uze'
+    - '{home}/.local/bin/claude'
+    - '{home}/.local/share/claude'
+    - '{home}/.claude'
+    - '{home}/.claude.json'
+    - '{home}/.uze'
+    - '{runtime}/uze-runtime'
+  write:
+    - path: '{home}/demoshell'
+      executable: true
+      text: |
+        #!/bin/sh
+        exec /bin/bash --norc --noprofile
+    - path: '{home}/.gitconfig'
+      text: "[user]\n\tname = Ada Lovelace\n\temail = ada@demo.dev\n[init]\n\tdefaultBranch = main\n"
+fixtures:
+  - name: my-app
+    commits:
+      - message: 'chore: initial commit'
+        days_ago: 6
+        files:
+          README.md: '# my-app'
+      - message: 'feat: add the entry point'
+        days_ago: 3
+        files:
+          src/main.rs: |-
+            fn main() {
+                println!("hello from my-app");
+            }
+beats:
+  - say: a project, and a shell with no uze on it
+    pause: 1.0
+  - say: install uze with one line
+    type: curl -fsSL https://uze.sh/i | sh
+    pause: 0.4
+  - say: the installer downloads, verifies and installs the release
+    wait: screen
+    # The installer ends on its "Next" list; the settled line above it is
+    # the version, which changes every release, so it is not the proof.
+    until: Open the terminal workspace
+    timeout: 120
+    pause: 2.4
+  - say: set up an agent — here Claude Code, through its own official installer
+    type: uze setup claude
+    pause: 0.4
+  - wait: screen
+    until: 'ready|Setup completed'
+    timeout: 300
+    pause: 2.6
+  - say: and open the workspace
+    type: uze
+    expect: first steps
+    expect_timeout: 20
+    pause: 2.0
+  - say: a new agent — Claude Code is ready to start
+    key: M-n
+    expect: new a
+    expect_timeout: 8
+    pause: 2.4
+  - key: Escape
+    pause: 0.8
+  - say: and out
+    end: C-q

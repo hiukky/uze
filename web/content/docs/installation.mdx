@@ -3,7 +3,7 @@ title: Installation
 description: Install uze, set up your agents, and keep it current
 ---
 
-<Tabs items={['Linux', 'macOS', 'Source']} defaultIndex={0}>
+<Tabs items={['Linux', 'macOS', 'Windows', 'Source']} defaultIndex={0}>
   <Tab value="Linux">
     ```bash
     curl -fsSL https://uze.sh/i | sh
@@ -20,6 +20,11 @@ description: Install uze, set up your agents, and keep it current
     Apple Silicon or Intel. **Experimental:** built and tested in CI, not yet
     on a real Mac.
   </Tab>
+  <Tab value="Windows">
+    **Coming soon.** Until then, run uze inside
+    [WSL](https://learn.microsoft.com/windows/wsl/install) with the Linux
+    command.
+  </Tab>
   <Tab value="Source">
     ```bash
     cargo install --git https://github.com/uze-sh/uze uze --locked
@@ -28,8 +33,6 @@ description: Install uze, set up your agents, and keep it current
     Rust 1.97 or newer.
   </Tab>
 </Tabs>
-
-Windows is not supported yet.
 
 ## Set up your agents
 
