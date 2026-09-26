@@ -1,0 +1,52 @@
+---
+title: How delivery works
+description: How one plugin reaches four agents, and what keeps that safe
+---
+
+## One copy, many deliveries
+
+An installed plugin's files live in one place, the **store** in `~/.uze`. uze
+never lets an agent write into it. Everything an agent reads is *delivered* from
+there: a link, a generated folder, an entry in the agent's config. A delivery can
+always be deleted and rebuilt from the store.
+
+## The most native route wins
+
+For every capability and every agent, uze picks the first route that keeps the
+capability's meaning intact:
+
+1. **Native**: the agent's own supported mechanism.
+2. **Generated native**: a folder uze generates, delivered through that
+   mechanism.
+3. **Adapted**: it works with a known difference, and uze says which.
+4. **Unsupported**: stated, with the reason.
+
+What each agent gets today is the [Harness support](/docs/reference/harnesses)
+table, generated from the code.
+
+## Nothing is touched blindly
+
+Every file or entry uze delivers is recorded with a **receipt**. Before it
+changes or removes anything, uze checks the current state against the receipt.
+If something drifted, because you edited it by hand, uze stops and reports it
+instead of overwriting.
+
+This is also what lets `uze doctor` repair a broken delivery without asking: it
+only rebuilds what it owns and can prove is safe to rebuild.
+
+## Running code is your decision
+
+A plugin's MCP servers and hooks run commands on your machine. Before installing,
+uze lists every command a plugin can run and asks; an update that adds one asks
+again. Where there is nobody to ask, it refuses unless you pass `--trust`.
+
+Plugins are fetched as untrusted input: without your Git config or credentials
+leaking into the clone, never running a repository's own hooks, and never
+following a path outside the plugin.
+
+## Machine and project
+
+The store and your agents' setup belong to the **machine** (`~/.uze`). What a
+project declares belongs to the **project** (`agents.yaml`, `agents.lock`,
+`AGENTS.md`). A command acts on the project it runs in; `-m` acts on the machine
+alone.

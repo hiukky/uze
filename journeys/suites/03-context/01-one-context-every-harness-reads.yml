@@ -1,6 +1,6 @@
 journey: one project context, composed once, and never rewriting what the team wrote
 tags: [gate, cli, context]
-proves: web/content/docs/concepts/context.mdx
+proves: web/content/docs/plugins/context.mdx
 about: |
   A project states its conventions once, in AGENTS.md. An installed plugin
   contributes to it in a region UZE owns and can take back; everything else

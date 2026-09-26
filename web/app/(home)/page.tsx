@@ -83,25 +83,25 @@ const harnesses = [
 const pillars = [
   {
     title: 'One package, four native surfaces',
-    body: 'The Store owns a plugin’s bytes and writes nothing a harness reads. Each integration delivers them through the most native mechanism that harness has — a real plugin where one exists, a safe adapter only as a last resort.',
+    body: 'The Store owns a plugin’s bytes and writes nothing a harness reads. Each integration delivers them through the most native mechanism that harness has: a real plugin where one exists, a safe adapter only as a last resort.',
     href: '/docs/concepts',
     link: 'How delivery is decided',
   },
   {
     title: 'Semantics survive the trip',
-    body: 'A skill’s invocation policy, a hook’s effect, an agent’s frontmatter — each is translated into the vendor’s own encoding, or reported as adapted. uze never claims a route is native without a passing real-harness scenario.',
-    href: '/docs/concepts/capabilities',
+    body: 'A skill’s invocation policy, a hook’s effect, an agent’s frontmatter: each is translated into the vendor’s own encoding, or reported as adapted. uze never claims a route is native without a passing real-harness scenario.',
+    href: '/docs/reference/plugin-format',
     link: 'What travels, and how',
   },
   {
     title: 'One project context',
-    body: 'AGENTS.md is the portable baseline. Every harness reads it natively or through the one bridge uze maintains, inside regions it owns — never four instruction files drifting apart.',
-    href: '/docs/concepts/context',
+    body: 'AGENTS.md is the portable baseline. Every harness reads it natively or through the one bridge uze maintains, inside regions it owns, never four instruction files drifting apart.',
+    href: '/docs/plugins/context',
     link: 'How context reaches each harness',
   },
   {
     title: 'Agents that don’t collide',
-    body: 'Run several at once in one terminal. Each can take an isolated checkout on a branch of its own, readiness is read from Git rather than announced, and finished work comes home through a delivery you trigger — with the diff, the file tree and the project’s own diagrams a keystroke away.',
+    body: 'Run several at once in one terminal. Each can take an isolated checkout on a branch of its own, readiness is read from Git rather than announced, and finished work comes home through a delivery you trigger, with the diff, the file tree and the project’s own diagrams a keystroke away.',
     href: '/docs/workspace',
     link: 'Inside the workspace',
   },
@@ -122,7 +122,7 @@ export default function HomePage() {
         </h1>
         <p className="mx-auto mt-6 max-w-[56ch] text-lg leading-relaxed text-muted">
           One plugin and one <code className="font-mono text-ink">AGENTS.md</code>, native in
-          every agent you run — today&apos;s and the ones after them. Run several at once; closing
+          every agent you run, today&apos;s and the ones after them. Run several at once; closing
           the terminal mid-run costs you nothing.
         </p>
 
@@ -131,7 +131,7 @@ export default function HomePage() {
             <InstallCommand command="curl -fsSL https://uze.sh/i | sh" />
           </div>
           <Link
-            href="/docs/getting-started"
+            href="/docs/quickstart"
             className="inline-flex shrink-0 items-center justify-center border border-ink bg-ink px-5 py-2.5 font-mono text-[13px] text-paper transition-opacity hover:opacity-85"
           >
             Get started
@@ -139,7 +139,7 @@ export default function HomePage() {
         </div>
         <p className="mt-3 text-xs text-muted">
           Linux and macOS, x86_64 or aarch64, checksum verified.{' '}
-          <Link href="/docs/getting-started" className="text-ink underline underline-offset-4 hover:text-accent transition-colors">
+          <Link href="/docs/quickstart" className="text-ink underline underline-offset-4 hover:text-accent transition-colors">
             Build from source
           </Link>{' '}
           on anything else.
@@ -269,10 +269,10 @@ export default function HomePage() {
 
         <p className="mt-8 text-center text-sm text-muted">
           A dash means that route does not exist for the harness, and the capability arrives another
-          way. {matrix.planned.join(', ')} are on the roadmap — cells appear when the integration
+          way. {matrix.planned.join(', ')} are on the roadmap; cells appear when the integration
           lands.{' '}
           <Link
-            href="/docs/harnesses"
+            href="/docs/reference/harnesses"
             className="text-ink underline underline-offset-4 hover:text-accent transition-colors"
           >
             The full matrix, per capability
@@ -291,13 +291,13 @@ export default function HomePage() {
         </p>
         <div className="mt-10 flex flex-wrap items-center justify-center gap-4 font-mono text-xs">
           <Link
-            href="/docs/getting-started"
+            href="/docs/quickstart"
             className="border border-ink bg-ink px-5 py-2.5 text-paper transition-opacity hover:opacity-85"
           >
             Get started
           </Link>
           <Link
-            href="/docs/creating-a-plugin"
+            href="/docs/plugins/creating"
             className="border border-line px-5 py-2.5 text-ink transition-colors hover:bg-surface"
           >
             Write a plugin

@@ -1,0 +1,55 @@
+---
+title: Installing plugins
+description: Add a plugin to a project once, and every agent receives it
+---
+
+A plugin bundles skills, MCP servers, agents and hooks. You install it once;
+uze delivers it to Claude Code, Codex, OpenCode and Antigravity, each through
+its own native mechanism.
+
+```bash
+uze <plugin>@<marketplace>    # add it to this project
+uze inspect <plugin>          # what it carries, and how each agent receives it
+uze remove <plugin>           # take it out of this project
+```
+
+A plugin that runs commands on your machine (an MCP server, a hook) lists them
+and asks before installing.
+
+## Your project remembers
+
+Adding a plugin writes two files at the project root. Commit them:
+
+- `agents.yaml`: the plugins this project wants.
+- `agents.lock`: the exact version each one resolved to.
+
+Anyone who clones the project gets the same plugins, at the same versions:
+
+```bash
+git clone …
+uze install
+```
+
+## Updating
+
+```bash
+uze update             # every plugin, to the newest version
+uze update <plugin>    # just one
+```
+
+`uze install` never moves a version; `uze update` does, and rewrites
+`agents.lock`.
+
+## Only on this machine
+
+To install a plugin for yourself without writing it into the project, add `-m`:
+
+```bash
+uze install <plugin>@<marketplace> -m
+uze remove <plugin> -m
+```
+
+<Cards>
+  <Card title="Marketplaces" href="/docs/plugins/marketplaces" />
+  <Card title="uze Skills" href="/docs/plugins/skills" />
+</Cards>

@@ -49,11 +49,11 @@ than inherited, and it is where anything you would object to will be.
 - `rust-toolchain.toml` is what picks the compiler: rustup reads it and
   installs `stable` with `rustfmt` and `clippy` on first use, so a clone
   needs no `rustup default`. Do not let a version manager name Rust as
-  well — an exported `RUSTUP_TOOLCHAIN` overrides the file for every
+  well: an exported `RUSTUP_TOOLCHAIN` overrides the file for every
   command in the directory, which is why `mise.toml` here lists only bun.
   The MSRV is checked past the file with an explicit `cargo +1.97`
   (`make msrv`); a `+toolchain` is the one thing that outranks it.
-- Building a musl artifact locally is rarely needed — CI builds all four —
+- Building a musl artifact locally is rarely needed (CI builds all four),
   but when it is: `sudo apt install musl-tools` and `rustup target add
   x86_64-unknown-linux-musl`. Which C compiler cc-rs asks for is already
   declared in `.cargo/config.toml`, so nothing else has to be exported.
@@ -87,7 +87,7 @@ the local proxy. Specifically:
   green.
 - `cargo deny check` clean: licence policy, advisories, bans and sources
   (`deny.toml`). A licence outside the allowlist is not allowlisted to get
-  green — say so in the pull request and let the dependency decision be
+  green; say so in the pull request and let the dependency decision be
   made. An `unmaintained` advisory may be accepted in `deny.toml` with a
   written reason that names what would remove it; a vulnerability never is.
 - `CREDITS.md` is generated. A dependency change regenerates it with
@@ -113,7 +113,7 @@ the local proxy. Specifically:
 - `unsafe` needs a `// SAFETY:` comment stating the invariant, and a
   reviewer will check it.
 - No new external dependency without a stated reason in the pull request.
-  Choose by **provenance**, not by whichever crate name matched the search —
+  Choose by **provenance**, not by whichever crate name matched the search:
   `AGENTS.md`'s "Dependencies" section is the bar, and the pull request answers
   its four questions (who publishes it, whether it compiles C, `cargo deny`,
   transitive weight). A dependency that becomes part of a public contract or a
@@ -131,8 +131,8 @@ the local proxy. Specifically:
 - Put the test where `tests/README.md` says it belongs (L0 unit through
   L4 conformance). Do not add a new top-level test binary when a domain
   suite already exists.
-- A user-facing *flow* — something a person performs through the CLI or the TUI
-  — belongs in `journeys/` as well, where the claim is checked against the
+- A user-facing *flow*, something a person performs through the CLI or the TUI,
+  belongs in `journeys/` as well, where the claim is checked against the
   filesystem, Git and the process table rather than against UZE's own output.
   `journeys/README.md` has the rules that decide what a journey is.
 - Tests run in an isolated `TestEnvironment` from `uze-testkit`. A test
@@ -188,13 +188,13 @@ Every commit follows [Conventional Commits](https://www.conventionalcommits.org/
 - **Pull requests are squash-merged.** `main` is linear; every commit on
   it is one reviewed change with a conventional title, taken from the
   pull request title. The body is assembled from the branch's own commit
-  messages, so write each of them as something worth reading on `main` —
+  messages, so write each of them as something worth reading on `main`,
   and trim the fixups out in the merge box, which stays editable. The
   pull request description is not the commit message: it is written for a
   reviewer, and a rich one full of tables reads badly in `git log`.
   The `(#N)` GitHub appends to the squashed subject is what links every
   changelog line back to the discussion behind it, and what credits you by
-  name on the release page — so a title that reads well on its own is the
+  name on the release page, so a title that reads well on its own is the
   whole of your entry.
 - Rebase on `main` before asking for review, and again if `main` moved
   under you. Merge commits into a feature branch are not accepted.
@@ -232,7 +232,7 @@ What GitHub itself enforces on `main` and on release tags is versioned in
 format the API imports.
 
 `main.json` forbids deleting the branch, force-pushing it, merge commits and
-rebase merges — squash only, which is what the history already is — and
+rebase merges (squash only, which is what the history already is), and
 requires exactly one status check: `Gate`. That is the job `ci.yml` closes
 every run with, and it is green when every other job either passed or was
 not needed, so an expensive tier that a documentation change never triggers
@@ -248,14 +248,14 @@ moving one changes what a user installs under a version they already have.
 enforcement is a repository setting, so the two can drift: a rule changed in
 the UI does not change the file, and merging a change to the file does not
 change the repository. Both ship with `"enforcement": "disabled"` for that
-reason — importing one is never what turns it on. Nothing in the repository
+reason: importing one is never what turns it on. Nothing in the repository
 can tell you what is enforced right now; `gh api /repos/:owner/:repo/rulesets`
 can, and is the only thing that can.
 
 ## Security
 
-Never open a public issue for a vulnerability. The policy — where to report,
-what a usable report contains, and what happens after — is in
+Never open a public issue for a vulnerability. The policy (where to report,
+what a usable report contains, and what happens after) is in
 [`SECURITY.md`](SECURITY.md).
 
 ## Conduct
@@ -265,4 +265,4 @@ settled by evidence: a failing test, a measurement, a recorded decision.
 Anyone who cannot do that is asked to leave.
 
 The formal version, and how to report someone, is
-[`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md) — Contributor Covenant 2.1.
+[`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md): Contributor Covenant 2.1.

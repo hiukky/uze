@@ -1,6 +1,6 @@
 journey: an install that cannot finish leaves nothing of itself behind
 tags: [gate, cli, packages]
-proves: web/content/docs/getting-started.mdx
+proves: web/content/docs/plugins/index.mdx
 about: |
   Every other journey in this chapter watches an install succeed. The ones
   that matter for trusting the machine are the ones that do not: a plugin

@@ -1,0 +1,52 @@
+---
+title: FAQ
+description: Short answers to the questions people ask first
+---
+
+## Why not a symlink or a script?
+
+A symlink works when every harness reads the same file in the same format. They
+don't. Each harness has its own plugin layout. Codex has no Markdown agent
+format, so an agent becomes a TOML file there. A skill only the user may run is
+written differently in each harness. Hooks run through a different mechanism in
+each one.
+
+A script can do the translation once. What it can't do is take it back safely.
+uze keeps a [receipt](/docs/reference/glossary#delivery) for everything it places. That is
+how it updates or removes a plugin without touching what you or another tool put
+next to it.
+
+## Will uze overwrite my files?
+
+No. In a file you own, uze writes only between its own
+`<!-- uze:begin … -->` and `<!-- uze:end … -->` markers. If a file already holds
+content uze doesn't own where it would write, uze reports it and leaves the file
+alone. See [Project context](/docs/plugins/context).
+
+## Does uze send anything over the network?
+
+It fetches the marketplaces you registered, to install and update plugins. The
+workspace checks GitHub for a new release when it opens and every hour after.
+Release builds contain no telemetry.
+
+## What if a harness can't do something a plugin needs?
+
+uze says so. Each capability is reported as native, adapted, or unsupported for
+each harness, with the reason. It never drops a capability silently. See
+[Harness support](/docs/reference/harnesses).
+
+## Can I delete `~/.uze/runtime` or `~/.uze/cache`?
+
+Yes. Both are rebuilt the next time they are needed. `~/.uze/store` holds the
+plugins you installed, which come back only by installing them again.
+`~/.uze/state` is the one to keep: it records what uze placed where.
+
+## Does it work on Windows?
+
+Not yet. Linux is supported, macOS is experimental, and Windows is planned. You
+can build from source on anything Rust targets. See
+[Installation](/docs/installation).
+
+## How do I take it off?
+
+See [Removing uze](/docs/installation#removing-uze).

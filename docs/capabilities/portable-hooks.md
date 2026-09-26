@@ -1,5 +1,10 @@
 # Portable Hooks
 
+The full contract, for plugin authors and contributors. The user-facing
+summary is the site's
+[Capabilities](../../web/content/docs/concepts/delivery.mdx) page; change
+both together.
+
 One authored declaration, one handler contract, four harnesses (ADR-033,
 ADR-040). A package ships a root `hooks.json` plus plain scripts; UZE
 compiles that, at install time, into each harness's own hook form plus a

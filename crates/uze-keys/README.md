@@ -18,4 +18,4 @@ chords.
 cargo test -p uze-keys
 ```
 
-See [Shortcuts](../../web/content/docs/keys.mdx) for the authoring guide.
+See [Shortcuts](../../web/content/docs/configuration/keys.mdx) for the authoring guide.

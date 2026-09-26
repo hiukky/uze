@@ -1,9 +1,7 @@
 ---
 title: Roadmap
-description: Where uze is going — from alpha to ecosystem
+description: Where uze is going, from alpha to ecosystem
 ---
-
-# Roadmap
 
 ## Status
 
@@ -11,53 +9,51 @@ description: Where uze is going — from alpha to ecosystem
 cross-harness model is validated. Linux and macOS releases are published on
 GitHub and installed by `curl -fsSL https://uze.sh/i | sh`; every
 version until v1 is an explicit pre-release. [macOS is
-experimental](/docs/getting-started).
+experimental](/docs/quickstart).
 
 ## Working today
 
-- **Harness management** — detection, provisioning through official routes, and
+- **Harness management**: detection, provisioning through official routes, and
   a cached readiness report for Claude Code, Codex, OpenCode and Antigravity.
-- **Capability portability** — skills with invocation policy, MCP servers,
-  portable agents, portable hooks, and package instructions, each delivered
+- **Capability portability**: skills with invocation policy, MCP servers,
+  portable agents and portable hooks, each delivered
   through the most native route the harness can preserve.
-- **Native package delivery** — a preserved vendor envelope where one exists, a
+- **Native package delivery**: a preserved vendor envelope where one exists, a
   deterministically generated one where it doesn't.
-- **Project context** — `AGENTS.md` as the baseline, with the one bridge that
+- **Project context**: `AGENTS.md` as the baseline, with the one bridge that
   needs maintaining, in regions uze owns and nothing else.
-- **Reproducible project environments** — `agents.yaml` declares, `agents.lock`
+- **Reproducible project environments**: `agents.yaml` declares, `agents.lock`
   pins each marketplace to a commit and each package to a digest, and
   `git clone && uze install` rebuilds both.
-- **Profiles** *(beta)* — autonomy, sandbox and model preferences translated into
-  each harness's own settings, with the fidelity reported per axis.
-- **Environment maintenance** — `doctor` repairs the uze-owned artifacts it can
+- **Environment maintenance**: `doctor` repairs the uze-owned artifacts it can
   prove are safe to rebuild, and escalates only real decisions.
-- **The terminal workspace** — persistent panes, parallel agents in isolated
+- **The terminal workspace**: persistent panes, parallel agents in isolated
   checkouts, readiness read from Git, explicit delivery, and a conversation that
   survives a reboot.
-- **Extensions** — [Code](/docs/workspace/extensions#code), for a checkout's
+- **Extensions**: [Code](/docs/workspace/extensions#code), for a checkout's
   changes, files, history and map, and
   [Architect](/docs/workspace/extensions#architect), for the project's own
   Mermaid diagrams drawn in the terminal.
-- **Freshness** — `uze plugin list` reports each package against its
+- **Freshness**: `uze status -m` reports each package against its
   marketplace's mirror, and `uze update` moves the pins when you decide to.
-- **Records that survive an upgrade** — a record written in a shape a build
+- **Records that survive an upgrade**: a record written in a shape a build
   knows is carried across silently; only a shape with no rung is set aside.
-- **Theming and keys** — one file restyles the CLI, the TUI and what a pane is
+- **Theming and keys**: one file restyles the CLI, the TUI and what a pane is
   told the terminal looks like; another rebinds every action, holding only what
   differs from the default.
 
 ## In progress
 
-- **Requirements & dependencies** — what a plugin needs from its host, declared
+- **Requirements & dependencies**: what a plugin needs from its host, declared
   and checked before install.
-- **Plugin versioning** — a plugin is pinned to a commit today. A version a
+- **Plugin versioning**: a plugin is pinned to a commit today. A version a
   project can ask for by range is not decided yet.
-- **Security & trust** — beyond today's executable-capability boundary.
-- **Runtime context projection** — the PATH shim that reaches a harness without
+- **Security & trust**: beyond today's executable-capability boundary.
+- **Runtime context projection**: the PATH shim that reaches a harness without
   writing into the project is still experimental.
-- **macOS out of experimental** — a real install on a Mac, an Intel machine
+- **macOS out of experimental**: a real install on a Mac, an Intel machine
   that runs the Intel build, a terminal that is not `tmux`.
-- **Windows releases** — Linux and macOS ship today (ADR-034).
+- **Windows releases**: Linux and macOS ship today.
 - **Migration tooling and ecosystem expansion.**
 
 ## Planned harnesses
@@ -68,8 +64,8 @@ experimental](/docs/getting-started).
 | Muse | ⚪ roadmap |
 | PI | ⚪ roadmap |
 
-Cells flip when the integration lands — the matrix on the
-[compatibility page](/docs/harnesses) is generated from the integration code
+Cells flip when the integration lands: the matrix on the
+[compatibility page](/docs/reference/harnesses) is generated from the integration code
 itself, so it can never silently rot.
 
 ## The marketplace

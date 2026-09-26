@@ -1,0 +1,302 @@
+# The keys screen, as a spec — see .demo/code/demo.yml for how the sandbox
+# is shared between the demos and why each sandbox key is what it is.
+#
+#   tui-record probe  .demo/keys
+#   tui-record run    .demo/keys
+#
+video:
+  title: uze — keys
+  out: .demo/keys/uze-keys.gif
+  poster: .demo/keys/uze-keys-poster.png
+  publish:
+    - from: out
+      to: web/public/uze-keys.gif
+    - from: poster
+      to: web/public/uze-keys-poster.png
+  cast: '{root}/uze-keys.cast'
+  # The same grade as the code and architect demos, so the docs read as one set.
+  cols: 152
+  rows: 36
+  speed: 1.3
+  background: 0a0c0d        # crate::ui::BASE — a mismatch shows as a border
+  font_size: 20
+  font_family: FiraCode Nerd Font Mono,DejaVu Sans Mono
+  font_dir: ~/.cache/nerd-fonts/v3.5.1/FiraCode
+  wait_collapse: 1.0
+  poster_when: 'Keyboard saved'
+  sidebar: 31
+sandbox:
+  root: ~/.uzedemo          # never on screen
+  fixtures: /tmp/demos      # on screen: a path under $HOME carries a username
+  cwd: '{fixtures}/demo-app'
+  command:
+    - '{project}/target/release/uze'
+  shell: '{home}/demoshell'
+  path:
+    - '{home}/.uze/shims'
+    - '{home}/.local/bin'
+    - '{home}/bin'
+    - /usr/local/bin
+    - /usr/bin
+    - /bin
+  env:
+    # UTC, so nothing the harness prints carries the operator's region. A
+    # provider's own status line names the timezone it resets in, and the
+    # leak scan looks for a username and a hostname — a place is neither.
+    TZ: UTC
+    PS1: '\[\e[38;5;114m\]demo-app\[\e[0m\] $ '
+  # The nerd set, declared here rather than left to whatever the sandbox
+  # home happens to hold: it is the set the docs recommend, and the one
+  # the product is drawn for. It needs a patched font in the *renderer*
+  # too — see `font_family` in `video`.
+  provision:
+    - '{project}/target/release/uze config icons nerd'
+  author: Ada Lovelace
+  author_email: ada@demo.dev
+  reset:
+    - |
+      for pid in $(pgrep -x uze 2>/dev/null); do
+        cmd=$(tr '\0' ' ' < /proc/$pid/cmdline 2>/dev/null) || continue
+        case "$cmd" in *"terminal serve --root /tmp/demos/"*) kill -TERM "$pid" 2>/dev/null ;; esac
+      done
+    # `git reset --hard` — the fixture rewind before every attempt — reverts
+    # tracked files and leaves untracked ones, so a file another spec's beats
+    # wrote is still there, counted in this take's changes badge. `.worktrees`
+    # is excluded: the rewind removes those itself, and pulling the directory
+    # out from under Git first leaves metadata to prune.
+    - git -C {fixtures}/demo-app clean -qfd -e .worktrees 2>/dev/null || true
+    # A home with no layout is a first run: the first-steps list opens and
+    # pushes the timeline off the sidebar. The video is of a project already
+    # in use, so the list starts folded and the timeline open — written here
+    # rather than left to whatever an earlier take folded or ticked, before
+    # every attempt, since a take ticks steps and moves the manage route.
+    - |
+      cat > {home}/.uze/state/layout.json <<'LAYOUT'
+      {
+        "sidebar": { "width": null },
+        "workspace": { "timeline_collapsed": false, "timeline_rows": null, "collapsed_space_roots": [] },
+        "management": { "route": "overview", "marketplace_drawer_width": null, "extension_drawer_width": null,
+                        "harness_drawer_width": null, "profile_columns_width": null, "collapsed_marketplaces": [] },
+        "first_steps": { "collapsed": true, "closed": false, "taken": [] }
+      }
+      LAYOUT
+    # The appearance demo shares this sandbox and ends in another theme.
+    - env -i HOME={home} PATH=/usr/bin:/bin {project}/target/release/uze config theme set default >/dev/null
+    - env -i HOME={home} PATH=/usr/bin:/bin {project}/target/release/uze config icons nerd >/dev/null
+  clear:
+    # The rewind removes the checkouts but leaves the directory that held
+    # them, and the `clean` above deliberately spares it — so an empty
+    # `.worktrees/` survives into the next take and shows up in the file
+    # tree. `clear` runs after the removal and the prune, so it is the one
+    # place this can be deleted without dangling Git's metadata.
+    - '{fixtures}/demo-app/.worktrees'
+    - '{home}/.uze/state/terminal'
+    - '{runtime}/uze-runtime'
+    # A take rebinds a key; the next one must find the defaults again.
+    - '{home}/.uze/keys.json'
+  write:
+    - path: '{home}/demoshell'
+      executable: true
+      text: |
+        #!/bin/sh
+        exec /bin/bash --norc --noprofile
+    - path: '{home}/.gitconfig'
+      text: "[user]\n\tname = Ada Lovelace\n\temail = ada@demo.dev\n[init]\n\tdefaultBranch = main\n"
+fixtures:
+  - name: demo-app
+    commits:
+      - message: 'chore: initial commit'
+        days_ago: 9
+        files:
+          README.md: '# demo-app'
+      - message: 'feat(api): add the health endpoint'
+        days_ago: 7
+        files:
+          src/main.rs: |-
+            mod router;
+
+            fn main() {
+                let port = config::port();
+                println!("demo-app listening on {}", port);
+                serve(port, router::route);
+            }
+          src/health.rs: |-
+            pub fn health() -> Response {
+                Response::json(200, r#"{"status":"ok"}"#)
+            }
+      - message: 'docs: describe the request lifecycle'
+        days_ago: 5
+        files:
+          docs/lifecycle.md: |
+            # Request lifecycle
+
+            A request arrives, the router looks its path up in the route
+            table, and the handler it finds answers. A path the table does
+            not carry falls through to the 404 handler.
+
+            ## Routes
+
+            | Path | Handler |
+            | --- | --- |
+            | `/health` | `health::health` |
+      - message: 'feat(config): read settings from config.toml'
+        days_ago: 4
+        files:
+          config.toml: |-
+            [app]
+            port = 8080
+            log = "info"
+          src/config.rs: |-
+            pub fn port() -> u16 {
+                settings().app.port
+            }
+      - message: 'docs: add AGENTS.md with the project''s conventions'
+        days_ago: 3
+        files:
+          AGENTS.md: |
+            # AGENTS.md
+
+            Guidance for agentic tools working in this repository.
+
+            ## What this is
+
+            `demo-app` is a small HTTP service. `src/router.rs` maps a path to a
+            response; `config.toml` carries the runtime settings.
+
+            ## Conventions
+
+            - Keep handlers total: every route returns a `Response`, never panics.
+            - Document a new route in `docs/lifecycle.md` in the same change.
+            - Conventional Commits for commit subjects.
+      # The policy belongs in the manifest, not the lock: `agents.lock` is
+      # derived, and an agent reading a worktree policy from it would be
+      # reading something UZE regenerates. `default: isolated` is what puts
+      # every agent this demo starts in a checkout of its own.
+      - message: 'chore: declare the project''s environment in agents.yaml'
+        days_ago: 2
+        files:
+          agents.yaml: |-
+            worktrees:
+              default: isolated
+              target: main
+              completion: handoff
+              branch: conventional
+              slots: 3
+
+            artifacts:
+              path: docs/architecture
+      - message: 'docs(architecture): draw the context, the containers and the lifecycle'
+        days_ago: 2
+        files:
+          docs/architecture/system-context.mmd: |
+            ---
+            title: System context
+            ---
+            C4Context
+              Person(dev, "Developer", "Runs the service and reads its logs")
+              System(app, "demo-app", "The HTTP service")
+              System_Ext(site, "demo-web", "The marketing site")
+              Rel(dev, app, "Runs, reviews")
+              Rel(site, app, "Calls /health")
+          docs/architecture/containers.mmd: |
+            ---
+            title: Containers
+            ---
+            C4Container
+              System_Boundary(app, "demo-app") {
+                Container(router, "Router", "Rust", "Maps a path to a response")
+                Container(health, "Health", "Rust", "Answers /health")
+                Container(config, "Config", "TOML", "Runtime settings")
+              }
+              Rel(router, health, "Dispatches /health")
+              Rel(router, config, "Reads the port")
+          docs/architecture/router-components.mmd: |
+            ---
+            title: Router components
+            ---
+            C4Component
+              Container_Boundary(router, "Router") {
+                Component(table, "Route table", "Rust", "Path to handler")
+                Component(dispatch, "Dispatch", "Rust", "Calls the handler it found")
+                Component(fallback, "Fallback", "Rust", "Answers 404")
+              }
+              Rel(table, dispatch, "Hands the match to")
+              Rel(table, fallback, "No match")
+          docs/architecture/request-lifecycle.mmd: |
+            ---
+            title: Request lifecycle
+            ---
+            flowchart LR
+              req([Request]) --> router[Router]
+              router --> known{Known route?}
+              known -- yes --> handler[Handler]
+              known -- no --> missing[404]
+              handler --> res([Response])
+              missing --> res
+              click router href "src/router.rs"
+              click handler href "src/health.rs"
+      - message: 'fix(api): return 404 for an unknown route'
+        days_ago: 1
+        files:
+          src/router.rs: |-
+            use crate::{config, health};
+
+            /// Every route this service answers, in the order they are tried.
+            pub fn route(path: &str) -> Response {
+                match path {
+                    "/health" => health::health(),
+                    _ => not_found(path),
+                }
+            }
+
+            fn not_found(path: &str) -> Response {
+                Response::text(404, format!("no route for {path}"))
+            }
+# What the video shows, in order. The status line under the content says
+# "Keyboard saved" only once the new binding is written, and the strip is the
+# proof the key works: a second shell tab exists only because F4 opened it.
+beats:
+  - say: uze is open on a project
+    pause: 1.2
+  - say: every key lives in management, under shortcuts
+    key: C-o
+    expect: status & health
+    expect_timeout: 8
+    pause: 0.6
+  - click: Shortcuts
+    in: screen
+    expect: Filter keys and actions
+    expect_timeout: 8
+    pause: 1.2
+  - say: find an action by name
+    click: Filter keys and actions
+    in: screen
+    expect: 'Filter keys and actions|▏'
+    pause: 0.3
+  - type: shell
+    submit: false
+    expect: New shell
+    expect_timeout: 6
+    pause: 1.2
+  - say: change its key — the screen waits for one
+    click: Change key
+    in: screen
+    expect: Waiting for a key
+    expect_timeout: 6
+    pause: 1.0
+  - say: press the new one; it is saved at once
+    key: F4
+    expect: Keyboard saved
+    expect_timeout: 6
+    pause: 2.4
+  - say: back in the workspace, F4 opens a shell
+    key: C-o
+    refuse: status & health
+    pause: 0.8
+  - key: F4
+    expect_in: strip
+    expect: 'shell.*shell'
+    expect_timeout: 8
+    pause: 2.2
+  - say: and out
+    end: C-q

@@ -1,0 +1,169 @@
+---
+title: Plugin format
+description: Every file a plugin can ship, and how each one reaches each agent
+---
+
+<Files>
+  <Folder name="my-plugin" defaultOpen>
+    <File name="plugin.json" />
+    <Folder name="skills" defaultOpen>
+      <Folder name="<name>" defaultOpen>
+        <File name="SKILL.md" />
+      </Folder>
+    </Folder>
+    <Folder name="agents" defaultOpen>
+      <File name="<name>.md" />
+    </Folder>
+    <File name="mcp.json" />
+    <File name="hooks.json" />
+  </Folder>
+</Files>
+
+Only `plugin.json` is required. uze stores every file byte for byte and never
+rewrites it into a format of its own.
+
+## `plugin.json`
+
+The [Agent Plugins](https://agent-plugins.org) 1.0 manifest:
+
+```json
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "flow",
+  "description": "What this plugin does, in one sentence."
+}
+```
+
+## Skills
+
+`skills/<name>/SKILL.md`, an [Agent Skill](https://agentskills.io). The optional
+`invoke` block says who may call it:
+
+```markdown
+---
+name: review
+description: Review the current changes
+invoke:
+  model: false   # the agent may not pick it on its own
+  user: true     # you may call it
+---
+
+What the agent does when the skill runs.
+```
+
+| `model` | `user` | The skill is |
+| --- | --- | --- |
+| `true` | `true` | Available to both (the default, and what no `invoke` block means) |
+| `true` | `false` | Background knowledge the agent uses on its own |
+| `false` | `true` | An explicit action only you can call |
+
+Each agent receives the policy in its own encoding. A skill is always called by
+its plugin-qualified name, like `/flow:review`; the prefix per agent is in
+[Harness support](/docs/reference/harnesses#invoking-a-plugin).
+
+## Agents
+
+`agents/<name>.md`: a `name`, a `description`, and the agent's instructions as
+the body.
+
+```markdown
+---
+name: planner
+description: Breaks a task into an ordered plan.
+---
+
+Everything below the front matter is the agent's instructions.
+```
+
+Codex has no Markdown agent format, so uze generates its TOML file from yours.
+Fields beyond `name` and `description`, such as a model or permissions, are not
+carried portably.
+
+## MCP servers
+
+`mcp.json`, the standard `mcpServers` shape:
+
+```json
+{
+  "mcpServers": {
+    "search": { "command": "my-mcp-server", "args": ["--stdio"] }
+  }
+}
+```
+
+Each agent receives it through its own mechanism (`claude mcp add`,
+`codex mcp add`, OpenCode's config, …).
+
+## Hooks
+
+`hooks.json` runs a command when an agent is about to use a tool, has used one,
+or stops:
+
+```json
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "shell|file.write",
+        "effect": "deny",
+        "hooks": [{ "type": "command", "command": "${PLUGIN_ROOT}/scripts/check", "timeout": 10 }]
+      }
+    ]
+  }
+}
+```
+
+- **Events:** `PreToolUse`, `PostToolUse`, `Stop`.
+- **Matcher:** tool aliases separated by `|`: `shell`, `file.read`,
+  `file.write`, `file.edit`, `search.files`, `search.web`, `agent.spawn`,
+  `agent.message`, or `native:<tool>`. Omitted, it matches every tool.
+- **Effect:** `observe` (default), `allow`, `ask`, `deny`, `transform`.
+
+The handler reads the context from `HOOK_*` environment variables and answers
+with its exit code:
+
+```sh
+#!/bin/sh
+case "$HOOK_COMMAND" in
+  *.env*|*id_rsa*)
+    echo "blocked: $HOOK_COMMAND touches a secret file" >&2
+    exit 3 ;;
+esac
+exit 0
+```
+
+`0` allows, `3` denies with stderr as the reason. Anything else, or a timeout,
+lets the tool run for `observe` and `allow` hooks and blocks it for the rest.
+
+Not every agent carries every effect:
+
+| Agent | Events | Effects |
+| --- | --- | --- |
+| Claude Code | `PreToolUse`, `PostToolUse`, `Stop` | `observe`, `allow`, `deny` |
+| Codex | `PreToolUse`, `PostToolUse`, `Stop` | `observe`, `allow`, `deny` |
+| Antigravity | `PreToolUse`, `PostToolUse`, `Stop` | `observe`, `allow`, `ask`, `deny` |
+| OpenCode | `PreToolUse`, `PostToolUse` | `observe`, `allow` |
+
+A hook an agent cannot honour is reported before it is installed, never
+silently weakened. The full contract, every variable included, is in
+[portable-hooks.md](https://github.com/uze-sh/uze/blob/main/docs/capabilities/portable-hooks.md).
+
+## Commands a plugin runs
+
+MCP servers and hooks run commands on the user's machine. uze lists every one
+before installing and asks, and asks again when an update adds a new one. Where
+it cannot ask, in CI, it refuses unless `--trust` is passed.
+
+## `marketplace.json`
+
+A marketplace is a Git repository with a `marketplace.json` at its root:
+
+```json
+{
+  "name": "my-marketplace",
+  "owner": { "name": "you" },
+  "plugins": [
+    { "name": "my-plugin", "source": "./plugins/my-plugin", "description": "One sentence." }
+  ]
+}
+```

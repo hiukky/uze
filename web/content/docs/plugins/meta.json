@@ -1,0 +1,11 @@
+{
+  "title": "Plugins",
+  "icon": "Puzzle",
+  "pages": [
+    "index",
+    "skills",
+    "marketplaces",
+    "context",
+    "creating"
+  ]
+}

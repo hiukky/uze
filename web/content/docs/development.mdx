@@ -1,9 +1,7 @@
 ---
 title: Development
-description: Build, test, and validate uze — and how the conformance lab proves harness behavior
+description: Build, test, and validate uze, and how the conformance lab proves harness behavior
 ---
-
-# Development
 
 ## Build and test
 
@@ -37,8 +35,8 @@ cargo llvm-cov --workspace --summary-only \
 
 Integration suites live under `tests/`, one `main.rs` per domain (`cli/`,
 `memory/`, `packages/`, `workspace/`, `lifecycle/`, `projection/`,
-`integrations/`, `acceptance/`), with shared infrastructure — an isolated
-`TestEnvironment`, a `FakeHarness`, canonical fixtures — in `crates/uze-testkit`.
+`integrations/`, `acceptance/`), with shared infrastructure (an isolated
+`TestEnvironment`, a `FakeHarness`, canonical fixtures) in `crates/uze-testkit`.
 `tests/README.md` documents the L0–L4 taxonomy and where a new test goes.
 
 Some of those tests are the architecture itself: the layering rules, the
@@ -48,7 +46,7 @@ never-block-on-Git rule all fail as ordinary test failures when broken.
 ## Product journeys
 
 A journey performs a user's flow through the real CLI and the real TUI, then
-checks the **machine it left behind** — the filesystem, Git, the recorded task
+checks the **machine it left behind**: the filesystem, Git, the recorded task
 state, the process table. It never asks uze whether uze is happy, which is what
 catches "exited zero, reported the artifact, wrote nothing". Screen text is only
 ever a gate that a gesture landed, never an assertion.
@@ -66,7 +64,7 @@ has the vocabulary and the rules that decide what a journey is.
 ## Seeing what uze did
 
 Every action opens a span, and the two processes that outlive the gesture that
-started them — the TUI and the terminal server — keep a journal without being
+started them (the TUI and the terminal server) keep a journal without being
 asked. It is on by default, because the run worth reading is the one nobody
 expected to have to read:
 
@@ -75,7 +73,7 @@ expected to have to read:
 ~/.uze/cache/logs/terminal.<date>.log    # the terminal server
 ```
 
-Rolled daily, pruned to seven days and a 64 MB floor, under `cache/` — deleting
+Rolled daily, pruned to seven days and a 64 MB floor, under `cache/`; deleting
 it costs nothing. `UZE_LOG` is both the switch and the filter for a *command's*
 own text:
 
@@ -90,7 +88,7 @@ release binaries. `docs/observability.md` is the full guide.
 
 ## OpenSpec
 
-Change proposals live under `openspec/` — a spec-driven work log, with archived
+Change proposals live under `openspec/`, a spec-driven work log, with archived
 changes kept:
 
 ```bash
@@ -100,8 +98,8 @@ openspec validate --all --strict
 ## Conformance Lab
 
 Real-harness evidence never links into the deterministic suite. `conformance/`
-runs the **real harness binary** against a **synthetic world** — a disposable
-Docker environment with a synthetic provider, zero internet, zero tokens — one
+runs the **real harness binary** against a **synthetic world**: a disposable
+Docker environment with a synthetic provider, zero internet, zero tokens, one
 vertical per supported harness:
 
 ```bash
@@ -112,7 +110,7 @@ make lab-replay                                   # replay a recorded run
 `contract/` states what **every** harness must prove, in outcome terms, and names
 no vendor; `harnesses/<vendor>/bindings.py` says how that harness is driven and
 carries no assertion. A harness that cannot deliver part of a contract declares
-that through its bindings, with a reason the run records — never by omitting the
+that through its bindings, with a reason the run records, never by omitting the
 check (ADR-043).
 
 The lab is vendor-specific by design; the deterministic suite (`cargo test`) runs
@@ -128,12 +126,12 @@ or `~/.local/bin` (ADR-034). `make test-installer` exercises it, and gates CI.
 A release enters `main` through a pull request like anything else: the **Release**
 workflow bumps the version, regenerates `CHANGELOG.md`, renders the release notes
 into the PR body, and publishes the six tarballs (Linux gnu/musl, macOS), an
-SBOM and signed provenance on the merge. Versions come from one place —
+SBOM and signed provenance on the merge. Versions come from one place:
 `[workspace.package].version` in the root `Cargo.toml`, inherited by every crate.
 `docs/versioning.md` is the full procedure.
 
 ## Marketplace
 
 This repository is itself the official uze marketplace: `marketplace.json` +
-`plugins/**` at the root, with `plugins/uze` — the `uze:init`, `uze:worktree`
-and `uze:architect` Skills — as the one official plugin.
+`plugins/**` at the root, with `plugins/uze` (the `uze:init`, `uze:worktree`,
+`uze:architect` and `uze:author` Skills) as the one official plugin.

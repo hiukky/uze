@@ -1,6 +1,6 @@
 journey: the first run asks which harnesses to set up before the workspace opens
 tags: [gate, tui, first-run]
-proves: web/content/docs/getting-started.mdx
+proves: web/content/docs/installation.mdx
 about: |
   Somebody who installs uze and runs it straight away, never having heard of
   `uze setup`, meets that question before the workspace — not a workspace

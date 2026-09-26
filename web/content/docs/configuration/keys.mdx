@@ -1,0 +1,67 @@
+---
+title: Keys
+description: The default shortcuts, and how to change them
+---
+
+<Demo
+  src="/uze-keys.gif"
+  poster="/uze-keys-poster.png"
+  alt="Management's shortcuts: New shell found by name, rebound from Ctrl+T to F4, then F4 opening a shell in the workspace."
+  caption="Ctrl+O → Shortcuts. Pick an action, press the new key."
+/>
+
+Everything in uze is clickable; keys are the shortcut. `F1` shows the ones that
+work where you are.
+
+## Defaults
+
+| Keys | Action |
+| --- | --- |
+| `Alt+N` | New agent |
+| `Ctrl+T` | New shell tab |
+| `Alt+S` | New space |
+| `Ctrl+W` | Close the tab |
+| `F2` | Rename the selection |
+| `Alt+↑` / `Alt+↓` | Previous / next agent |
+| `Ctrl+↑` / `Ctrl+↓` | Previous / next space |
+| `Alt+G` | What the agent changed ([Code](/docs/workspace/extensions#code)) |
+| `Alt+E` | The agent's files ([Code](/docs/workspace/extensions#code)) |
+| `Alt+A` | The project's diagrams ([Architect](/docs/workspace/extensions#architect)) |
+| `Alt+I` | [Deliver](/docs/workspace/agents#bringing-the-work-home) the agent's work |
+| `Alt+Shift+I` | Deliver every ready agent in the space |
+| `Alt+P` | [Work nobody finished](/docs/workspace/agents#work-nobody-finished) |
+| `Ctrl+O` | Management, and back |
+| `F1` | The keys that work here |
+| `Ctrl+Q` | Quit |
+
+Every other key goes to the agent in the pane.
+
+## Change a key
+
+In management (`Ctrl+O`), open **Shortcuts**, pick an action and press the new
+key. The screen tells you if your terminal cannot send it.
+
+Your changes live in `~/.uze/keys.json`, which holds only what differs from the
+defaults:
+
+```json
+{
+  "bindings": {
+    "workspace": {
+      "new-shell-tab": ["f4"],
+      "close-tab": []
+    }
+  }
+}
+```
+
+An empty list unbinds the action.
+
+<Callout type="info">
+  On macOS, `Alt` shortcuts need your terminal to send Option as Meta
+  (Terminal.app and iTerm2 have a setting for it).
+</Callout>
+
+<Cards>
+  <Card title="Keyboard in depth" href="/docs/advanced/keyboard" description="What a terminal can send, and the rules a keymap follows" />
+</Cards>

@@ -1,0 +1,47 @@
+---
+title: Project context
+description: One AGENTS.md that every agent reads
+---
+
+Write your project's instructions once, in `AGENTS.md` at the project root.
+Every agent reads it: Codex, OpenCode and Antigravity natively, and Claude Code
+through a one-line `CLAUDE.md` that uze keeps in place.
+
+## Set it up
+
+Ask any agent, with the `uze:init` skill:
+
+```text
+/uze:init
+```
+
+It reads your project and whatever instructions already exist (`CLAUDE.md`,
+`GEMINI.md`, …), proposes one `AGENTS.md`, and changes nothing until you agree.
+
+## Check it
+
+```bash
+uze status
+```
+
+Says which file your instructions come from and whether every agent reads it.
+If one does not, `uze install` fixes it.
+
+## What uze writes into it
+
+`AGENTS.md` is yours. uze only writes inside blocks it marks:
+
+```markdown
+<!-- uze:begin … -->
+…
+<!-- uze:end … -->
+```
+
+They hold what uze needs every agent to know, such as how this project isolates
+agents. Anything you write outside them is never touched, and a block you edit
+by hand is reported, not overwritten.
+
+<Cards>
+  <Card title="uze Skills" href="/docs/plugins/skills" />
+  <Card title="Harness support" href="/docs/reference/harnesses" />
+</Cards>

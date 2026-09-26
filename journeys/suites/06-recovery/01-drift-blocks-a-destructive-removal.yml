@@ -1,6 +1,6 @@
 journey: a managed artifact somebody changed is never destroyed to make a removal succeed
 tags: [gate, cli, recovery]
-proves: web/content/docs/cli.mdx
+proves: web/content/docs/reference/cli.mdx
 about: |
   Receipts exist for this moment. Something UZE delivered has been changed by
   a person or another tool — repointed, replaced, edited — and UZE is now

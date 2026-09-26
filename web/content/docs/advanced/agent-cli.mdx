@@ -1,0 +1,39 @@
+---
+title: The agent CLI
+description: The commands agents call, hidden from uze --help
+---
+
+`uze agent …` is written for agents, not for you: it is hidden from
+`uze --help`, and the agents learn it from the block uze writes into
+`AGENTS.md` and from the [uze Skills](/docs/plugins/skills). You can run any of
+it yourself.
+
+```bash
+uze agent work name <type>/<subject>   # name the work: renames the branch and the tab
+uze agent artifacts check [path]       # draw every declared diagram, fail on one that does not
+uze agent context inspect [path]       # what each agent currently sees of AGENTS.md
+uze agent context plan [path]          # what reconciling would change
+uze agent context reconcile [path]     # write AGENTS.md's uze blocks and the bridges
+
+uze agent market create <name> --at <dir>   # scaffold, register and link a marketplace
+uze agent market create <name> --local      # the project as its own marketplace
+uze agent market check <path>               # validate a marketplace, offline
+uze agent plugin create <name> --market <m> # scaffold a plugin (--hook --mcp --agent)
+uze agent plugin check <path>               # validate a plugin, offline
+```
+
+Every command takes `--format json`.
+
+## Naming work
+
+`uze agent work name` only works inside an agent uze launched, and names that
+agent's own work. The types it accepts come from `worktrees.branch` in
+`agents.yaml`: a preset (`conventional`, `gitflow`, `flat`) or your own list.
+Work that reaches a commit unnamed is named from the commit's subject; a branch
+you rename by hand is never renamed again.
+
+## Checking diagrams
+
+`uze agent artifacts check` exits non-zero when a diagram does not draw, or
+draws with a relation that found no path. Put it in your project's `gate` to
+catch a diagram that broke silently.

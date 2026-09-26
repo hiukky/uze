@@ -1,3 +1,5 @@
 {
-  "pages": ["index", "standards", "capabilities", "context"]
+  "title": "Concepts",
+  "icon": "Lightbulb",
+  "pages": ["index", "standards", "delivery"]
 }

@@ -1,0 +1,96 @@
+---
+title: Appearance
+description: Pick a theme and an icon set
+---
+
+<Demo
+  src="/uze-appearance.gif"
+  poster="/uze-appearance-poster.png"
+  alt="Management's settings: the workspace redrawn in dracula, tokyo-night-light and catppuccin-mocha, then the ASCII and Nerd Font icon sets."
+  caption="Ctrl+O → Settings. One click redraws everything."
+/>
+
+Two choices, made apart: the **theme** (colours) and the **icons** (the glyphs
+uze draws its marks with). Both apply to the workspace and the CLI at once, and
+both are also under management (`Ctrl+O`), where `t` opens the theme picker.
+
+## Theme
+
+```bash
+uze config theme list          # the themes you can use
+uze config theme set dracula   # use one
+```
+
+Built in: `default`, `dracula`, `catppuccin-mocha`, `tokyo-night` and
+`tokyo-night-light`. You can also [write your own](/docs/advanced/themes).
+
+## Icons
+
+<Callout type="info">
+  **Use a Nerd Font.** uze is drawn for one: its icons come from a single
+  patched font, at one weight, sized for the grid. Plain Unicode works, but most
+  fonts borrow some of its marks from other families, and it shows.
+</Callout>
+
+Pick one of these, install it, set it as your terminal's font, then:
+
+```bash
+uze config icons nerd
+```
+
+| Font | Download | Set your terminal to |
+| --- | --- | --- |
+| JetBrains Mono | [JetBrainsMono.zip](https://github.com/ryanoasis/nerd-fonts/releases/latest/download/JetBrainsMono.zip) | `JetBrainsMono Nerd Font Mono` |
+| Fira Code | [FiraCode.zip](https://github.com/ryanoasis/nerd-fonts/releases/latest/download/FiraCode.zip) | `FiraCode Nerd Font Mono` |
+| Cascadia Code | [CascadiaCode.zip](https://github.com/ryanoasis/nerd-fonts/releases/latest/download/CascadiaCode.zip) | `CaskaydiaCove Nerd Font Mono` |
+| IBM Plex Mono | [IBMPlexMono.zip](https://github.com/ryanoasis/nerd-fonts/releases/latest/download/IBMPlexMono.zip) | `BlexMono Nerd Font Mono` |
+| Geist Mono | [GeistMono.zip](https://github.com/ryanoasis/nerd-fonts/releases/latest/download/GeistMono.zip) | `GeistMono Nerd Font Mono` |
+| Commit Mono | [CommitMono.zip](https://github.com/ryanoasis/nerd-fonts/releases/latest/download/CommitMono.zip) | `CommitMono Nerd Font Mono` |
+| Hack | [Hack.zip](https://github.com/ryanoasis/nerd-fonts/releases/latest/download/Hack.zip) | `Hack Nerd Font Mono` |
+| Meslo | [Meslo.zip](https://github.com/ryanoasis/nerd-fonts/releases/latest/download/Meslo.zip) | `MesloLGS Nerd Font Mono` |
+| Iosevka | [Iosevka.zip](https://github.com/ryanoasis/nerd-fonts/releases/latest/download/Iosevka.zip) | `Iosevka Nerd Font Mono` |
+| Source Code Pro | [SourceCodePro.zip](https://github.com/ryanoasis/nerd-fonts/releases/latest/download/SourceCodePro.zip) | `SauceCodePro Nerd Font Mono` |
+
+Any family from the [full catalog](https://www.nerdfonts.com/font-downloads)
+works. Two things matter:
+
+- Choose the **Mono** name (`… Nerd Font Mono`): its icons fill exactly one
+  cell. The plain `… Nerd Font` draws them two cells wide.
+- Use **Nerd Fonts v3** or newer. The icons uze draws do not exist in v2.
+
+### Installing one
+
+<Tabs items={['Linux', 'macOS', 'Windows (WSL)']} defaultIndex={0}>
+  <Tab value="Linux">
+    ```bash
+    mkdir -p ~/.local/share/fonts/JetBrainsMono
+    curl -fsSL https://github.com/ryanoasis/nerd-fonts/releases/latest/download/JetBrainsMono.zip -o /tmp/font.zip
+    unzip -o /tmp/font.zip -d ~/.local/share/fonts/JetBrainsMono
+    fc-cache -f
+    ```
+  </Tab>
+  <Tab value="macOS">
+    ```bash
+    brew install --cask font-jetbrains-mono-nerd-font
+    ```
+  </Tab>
+  <Tab value="Windows (WSL)">
+    The terminal draws the text, so the font goes on **Windows**, not inside
+    WSL: download the zip, select the `.ttf` files, right-click → **Install**,
+    then pick the font in Windows Terminal's profile settings.
+  </Tab>
+</Tabs>
+
+### Without a Nerd Font
+
+The `default` set uses plain Unicode and works everywhere, and `ascii` is for a
+console with no Unicode at all. To compare them on your own terminal:
+
+```bash
+uze config icons    # each set drawn in its own glyphs
+```
+
+<Cards>
+  <Card title="Writing a theme" href="/docs/advanced/themes" />
+  <Card title="Keys" href="/docs/configuration/keys" />
+</Cards>

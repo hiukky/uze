@@ -3,8 +3,6 @@ title: agents.yaml & agents.lock
 description: The file a project writes, the file uze derives from it, and what each one is allowed to say
 ---
 
-# `agents.yaml` & `agents.lock`
-
 Two files at the project root, both committed, with one rule between them:
 
 | File | Written by | Holds |
@@ -12,14 +10,14 @@ Two files at the project root, both committed, with one rule between them:
 | **`agents.yaml`** | you | What the project *declares*: which marketplaces it draws from, which plugins it wants, what happens to an agent's finished work |
 | **`agents.lock`** | uze | What resolving those declarations *produced*: the commit each marketplace was read at, and a digest of the bytes that landed |
 
-The lock carries no intent, so deleting it loses nothing — `uze install`
+The lock carries no intent, so deleting it loses nothing: `uze install`
 regenerates it. Deleting `agents.yaml` loses the project's decisions.
 
 `git clone && uze install` reconstructs the environment from the pair alone.
 
 ## `agents.yaml`
 
-Created by `uze install` — an explicit act of setting a project up — with every
+Created by `uze install`, an explicit act of setting a project up, with every
 key it understands written out and commented, so the vocabulary is discoverable
 by opening the file. Nothing that merely *reads* a project creates it.
 
@@ -37,8 +35,8 @@ marketplaces:
 ```
 
 Every block is optional; a project declaring only an isolation policy is as
-valid as one declaring only plugins. Unknown keys are an **error**, not silence
-— a typo in a file a person wrote should not be read as a decision. Writing
+valid as one declaring only plugins. Unknown keys are an **error**, not silence:
+a typo in a file a person wrote should not be read as a decision. Writing
 `revision:` here is refused by name: that belongs to the lock.
 
 uze patches this document in place, so a comment you wrote beside an unrelated
@@ -47,7 +45,7 @@ entry survives `uze <plugin>@<market>`.
 ### `worktrees`
 
 What this project does with the work of an agent uze placed in an isolated
-checkout — see [Running agents](/docs/workspace/agents). The layout of those
+checkout; see [Agents](/docs/workspace/agents). The layout of those
 checkouts (`.worktrees/<id>`, branch `agent/<id>`) is fixed infrastructure and
 is deliberately *not* declared here.
 
@@ -57,7 +55,7 @@ is deliberately *not* declared here.
 | `target` | the branch the primary checkout is on when the task is created | The branch finished work targets |
 | `completion` | `handoff` | `handoff` (leave the branch), `merge` (fast-forward the target), `pr` (push and open a request) |
 | `branch` | `agent` | The vocabulary an agent's own name for its work is judged against: a preset (`conventional`, `gitflow`, `flat`, `agent`) or your own list of types. `agent` names no work |
-| `link` | none | Ignored files a fresh checkout links from the primary — `.env` and friends |
+| `link` | none | Ignored files a fresh checkout links from the primary, like `.env` |
 | `setup` | none | Prepares a checkout, run in it after linking. A failure warns; it never blocks a launch |
 | `gate` | none | Run in the task's checkout on the rebased commits. A non-zero exit refuses delivery |
 | `slots` | peak concurrency | The most checkouts that may exist at once |
@@ -81,7 +79,7 @@ worktrees:
 
 <Callout type="warn">
   A `link` entry must be relative, stay inside the repository, **and be ignored
-  by it** — a tracked file linked into a checkout would land in the agent's
+  by it**: a tracked file linked into a checkout would land in the agent's
   commits as a symlink. All three are checked when the file is read, not
   silently dropped. The agent writes *through* a link into your primary
   checkout, so only what it reads belongs there.
@@ -90,7 +88,7 @@ worktrees:
 The policy lives here rather than in machine state because
 `uze install` projects it into the tracked `AGENTS.md`: anything
 resolved outside the project would rewrite a shared file to whichever machine
-ran the command. A worktree's own manifest is ignored for the same reason —
+ran the command. A worktree's own manifest is ignored for the same reason:
 the primary checkout owns the policy.
 
 ### `marketplaces`
@@ -102,7 +100,7 @@ with what it takes from each. Exactly one source per marketplace:
 marketplaces:
   ours:
     git: https://github.com/acme/plugins
-    ref: main               # optional — branch, tag or sha; also the pin that moves
+    ref: main               # optional: branch, tag or sha; also the pin that moves
     subdirectory: market    # optional
     plugins: [review, changelog]
   local:
@@ -115,8 +113,8 @@ is what moves them.
 
 <Callout type="info">
   **A marketplace is a Git repository**, whether you spell it as a URL or as a
-  directory on this machine. Not because Git is how the bytes travel — a
-  directory does that — but because a commit is the only thing that answers *are
+  directory on this machine. Not because Git is how the bytes travel (a
+  directory does that), but because a commit is the only thing that answers *are
   these the bytes I installed?* and *is there something newer?* A `path:` is
   therefore where **this machine** reads the repository; what the lock records
   is its remote and a commit, which is what another machine can reproduce.
@@ -124,16 +122,16 @@ is what moves them.
 
 The lock records every Git source in one spelling: `git@github.com:acme/plugins.git`,
 `ssh://git@github.com/acme/plugins` and `https://github.com/acme/plugins.git` all
-become `https://github.com/acme/plugins`. That is a name, not a transport —
+become `https://github.com/acme/plugins`. That is a name, not a transport:
 each machine reaches it anonymously when it is public, and with its own
-credential helper or SSH key when it is private — so nothing in these files
+credential helper or SSH key when it is private, so nothing in these files
 says how to authenticate, and a collaborator with no key installs a public
 marketplace as easily as you do. A marketplace you develop is read from your
 checkout with `uze market link`, which touches neither file.
 
 uze's own marketplace is not declared here. `uze-official` is built into the
 binary, its plugins are installed for every project, and an entry claiming that
-name is refused — the only thing it could express is shadowing the built-in one.
+name is refused: the only thing it could express is shadowing the built-in one.
 
 ### `artifacts`
 
@@ -152,7 +150,7 @@ this file is checked in and would point somewhere else on every machine.
 
 Nothing lists the files. Each one says what it is in its own first word, which
 is also the area it appears under, and names itself with Mermaid's own front
-matter — falling back to its file name:
+matter, falling back to its file name:
 
 ```text
 ---
@@ -172,8 +170,8 @@ C4Context
 
 #### Levels, and the way down to the code
 
-C4 is a model of levels — a system, the containers inside it, the components
-inside one of those — and the files are joined into levels the same way they are
+C4 is a model of levels (a system, the containers inside it, the components
+inside one of those), and the files are joined into levels the same way they are
 sorted into areas: by what they already say. A box has a level below it when
 another C4 file draws its **inside**, which is a boundary carrying the box's
 alias:
@@ -195,16 +193,16 @@ Component(store, "store", "Rust module", "Owns installed bytes", $link="crates/c
 
 A flowchart says the same with `click store href "crates/core/src/store.rs"`.
 
-Within an area the files are listed by name — except C4, which is listed the way
+Within an area the files are listed by name, except C4, which is listed the way
 it is read: the context, then containers, then components, then the dynamic and
 deployment views.
 
 A `.mmd` or `.mermaid` file of any other kind is still listed, under *Other*,
-with the reason it was not drawn — a file that silently fails to appear looks
+with the reason it was not drawn: a file that silently fails to appear looks
 like a lost file.
 
-Everything here is a file somebody wrote. What the project *is* — where its
-lines are and which of them are hot — is measured rather than written, and is
+Everything here is a file somebody wrote. What the project *is* (where its
+lines are and which of them are hot) is measured rather than written, and is
 the code surface's **map**: press `m` beside the file tree, or its *Map* chip.
 
 ## `agents.lock`
@@ -227,11 +225,11 @@ plugins:
 
 Resolution adds exactly two things to a declaration:
 
-- **`revision`** — the immutable commit the marketplace was read at. Non-optional
+- **`revision`**: the immutable commit the marketplace was read at. Non-optional
   beside `git`, so "a marketplace with no pin" cannot be written down.
   Reproduction reads *this*, never the declared `ref:`: a lock that re-resolved
   `main` would install whatever had been pushed since.
-- **`integrity`** — SHA-256 over the bytes the Store ingested, verified on
+- **`integrity`**: SHA-256 over the bytes the Store ingested, verified on
   install **before** ingest and before any harness sees anything. A mismatch
   names both digests and installs nothing. A `path:` marketplace records none:
   a digest of a directory somebody is editing would be wrong by the next
@@ -239,7 +237,7 @@ Resolution adds exactly two things to a declaration:
 
 Everything else in the file was already in the manifest, and is repeated only
 so the lock stands alone on a machine that has never read one. `version` stays
-at `1` while uze is pre-release — the number exists to tell apart shapes a
+at `1` while uze is pre-release; the number exists to tell apart shapes a
 *released* uze wrote.
 
 ### Staleness is decidable offline
@@ -248,17 +246,17 @@ Comparing the two files answers whether the lock still stands: no network, no
 re-resolution, so `uze status` works in a tunnel. A declaration is stale when
 the lock never resolved it, resolved it from a different marketplace, or the
 marketplace it comes from is declared differently now. A lock entry the manifest
-no longer declares is not staleness — it is a removal.
+no longer declares is not staleness, it is a removal.
 
 ## What these files are not
 
-They are **project scope**. Neither records what is installed on your machine —
-that lives in the Store under `~/.uze`, and `uze plugin install` never writes
-here. The two are independent by design (ADR-019); see
-[Machine scope vs project scope](/docs/concepts#machine-scope-vs-project-scope).
+They are **project scope**. Neither records what is installed on your machine:
+that lives in the Store under `~/.uze`, and `uze install -m` never writes
+here. The two are independent by design; see
+[Machine and project](/docs/concepts/delivery#machine-and-project).
 
 <Cards>
   <Card title="The agent workspace" href="/docs/workspace" />
-  <Card title="CLI reference" href="/docs/cli" />
-  <Card title="Creating a plugin" href="/docs/creating-a-plugin" />
+  <Card title="CLI reference" href="/docs/reference/cli" />
+  <Card title="Creating a plugin" href="/docs/plugins/creating" />
 </Cards>

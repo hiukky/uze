@@ -1,0 +1,49 @@
+---
+title: Marketplaces
+description: Where plugins come from, how to add private ones, and how to create your own
+---
+
+A marketplace is a Git repository that lists plugins. `uze-official` is built
+in; add any other one by where it lives:
+
+```bash
+uze market add owner/repo                        # GitHub
+uze market add gitlab:group/repo                 # another host
+uze market add https://git.example.com/team/ai   # any Git URL
+uze market add ./my-marketplace                  # a directory on this machine
+```
+
+```bash
+uze market list            # what is registered
+uze market remove <name>   # take it and its plugins off this machine
+```
+
+## Private marketplaces
+
+Nothing to configure. uze tries public access first, then your Git credential
+helper (`gh auth setup-git`, `glab`, …), then your SSH keys, and remembers what
+worked. No token is ever written into a project file.
+
+To use `owner/repo` for your company's own forge, give it a short name:
+
+```bash
+uze market host work https://git.example.com
+uze market add work:team/plugins
+```
+
+## Create your own
+
+Ask any agent, with the `uze:author` skill:
+
+```text
+/uze:author create a marketplace for my team's plugins
+```
+
+It creates the repository, registers it, and links it: while you work on it,
+installs read your files directly, with nothing to publish. When it is ready,
+push it and share the address.
+
+<Cards>
+  <Card title="Creating a plugin" href="/docs/plugins/creating" />
+  <Card title="uze Skills" href="/docs/plugins/skills" />
+</Cards>

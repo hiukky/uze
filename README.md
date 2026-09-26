@@ -11,7 +11,7 @@
 
 A compatibility layer for agent tooling: install a plugin once, write one
 `AGENTS.md`, and every agent you run gets both through its own most native
-surface — Claude Code, Codex, OpenCode and Antigravity today, and whatever
+surface: Claude Code, Codex, OpenCode and Antigravity today, and whatever
 you switch to next. Then run several at once, each in a checkout of its
 own or beside you in yours, and close the terminal without losing any of
 it.
@@ -33,7 +33,7 @@ curl -fsSL https://uze.sh/i | sh
 - [x] Harness management · Skills & MCP portability · Project context · Marketplace · TUI
 - [x] Agent & hook portability · Native package delivery
 - [x] Profiles · Environment maintenance · Terminal workspace with isolated agents
-- [x] Reproducible project environments · Theming · Linux & macOS releases
+- [x] Reproducible project environments · Theming · Linux releases · macOS releases (experimental)
 - [x] Code & Architect extensions · Plugin freshness · Records that survive an upgrade
 - [ ] Requirements & dependencies · Plugin versioning · Security & trust
 - [ ] Windows releases · Runtime context projection · Migration tooling · Ecosystem expansion
@@ -53,6 +53,6 @@ the terms each comes under, are credited in [CREDITS.md](CREDITS.md).
 Author: [Romullo Sousa (hiukky)](https://github.com/hiukky) · [Apache License 2.0](LICENSE)
 
 <p align="center">
-  <sub>Built with 🖤 by <a href="https://hiukky.com">Hiukky</a>
+  <sub>Built with 🖤 by <a href="https://hiukky.com">hiukky</a>
   <br/>
 </p>

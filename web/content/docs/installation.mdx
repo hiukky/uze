@@ -1,0 +1,77 @@
+---
+title: Installation
+description: Install uze, set up your agents, and keep it current
+---
+
+<Tabs items={['Linux', 'macOS', 'Windows', 'Source']} defaultIndex={0}>
+  <Tab value="Linux">
+    ```bash
+    curl -fsSL https://uze.sh/i | sh
+    ```
+
+    `x86_64` or `aarch64`, glibc or musl. The installer verifies the release
+    checksum and installs into `~/.local/bin`.
+  </Tab>
+  <Tab value="macOS">
+    ```bash
+    curl -fsSL https://uze.sh/i | sh
+    ```
+
+    Apple Silicon or Intel. **Experimental:** built and tested in CI, not yet
+    on a real Mac.
+  </Tab>
+  <Tab value="Windows">
+    **Coming soon.** Until then, run uze inside
+    [WSL](https://learn.microsoft.com/windows/wsl/install) with the Linux
+    command.
+  </Tab>
+  <Tab value="Source">
+    ```bash
+    cargo install --git https://github.com/uze-sh/uze uze --locked
+    ```
+
+    Rust 1.97 or newer.
+  </Tab>
+</Tabs>
+
+## Set up your agents
+
+```bash
+uze setup
+```
+
+uze finds the coding agents on your machine and offers to install the missing
+ones through each vendor's official installer. Pick the ones you use. Running
+`uze` for the first time asks the same question.
+
+```bash
+uze setup list    # what is installed and ready
+```
+
+## Staying current
+
+uze updates itself. The workspace checks for a new release when it opens and
+every hour after, and tells you when one is installed; restart to use it.
+`uze upgrade` does the same on demand.
+
+## Removing uze
+
+1. Take every plugin off your agents, while uze is still here:
+
+   ```bash
+   uze status -m          # the plugins on this machine
+   uze remove <plugin> -m # once per plugin
+   ```
+
+2. Stop the workspace in each project where you opened it: `uze terminal stop`.
+3. In each project, delete `agents.yaml`, `agents.lock` and `.worktrees/` if you
+   no longer want them, and the `uze:begin … uze:end` blocks in `AGENTS.md`.
+4. Delete the `# >>> uze shims path >>>` block from your shell's rc file.
+5. Delete the binary and uze's home:
+
+   ```bash
+   rm ~/.local/bin/uze
+   rm -rf ~/.uze
+   ```
+
+The agents themselves stay installed; remove them the way their vendor says.

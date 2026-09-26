@@ -1,3 +1,5 @@
 {
+  "title": "Workspace",
+  "icon": "SquareTerminal",
   "pages": ["index", "agents", "extensions"]
 }

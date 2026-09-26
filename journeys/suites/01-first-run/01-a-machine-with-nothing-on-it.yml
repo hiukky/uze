@@ -1,6 +1,6 @@
 journey: a machine with nothing on it, made ready without being taken over
 tags: [gate, cli, first-run]
-proves: web/content/docs/getting-started.mdx
+proves: web/content/docs/installation.mdx
 about: |
   The first five minutes. UZE keeps its own state in one place it creates on
   demand, provisions each harness through that harness's own route, and puts

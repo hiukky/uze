@@ -1,0 +1,69 @@
+---
+title: Creating a plugin
+description: Write a plugin once and it works in every agent
+---
+
+## Ask an agent
+
+The fastest way is to describe what you want, with the `uze:author` skill:
+
+```text
+/uze:author create a plugin with a skill that writes our release notes
+```
+
+The agent picks or creates a marketplace, scaffolds the plugin, checks it, and
+installs it. Then you iterate on the files, and deliver each change to your
+agents with `uze update <plugin> -m`.
+
+## What a plugin is
+
+<Files>
+  <Folder name="my-plugin" defaultOpen>
+    <File name="plugin.json" />
+    <Folder name="skills" defaultOpen>
+      <Folder name="release-notes" defaultOpen>
+        <File name="SKILL.md" />
+      </Folder>
+    </Folder>
+    <Folder name="agents">
+      <File name="planner.md" />
+    </Folder>
+    <File name="mcp.json" />
+    <File name="hooks.json" />
+  </Folder>
+</Files>
+
+Only `plugin.json` is required; ship what you need. These are open standards
+([Agent Plugins](https://agent-plugins.org), [Agent Skills](https://agentskills.io),
+MCP), not a uze format, so a plugin written for uze is a plugin for everyone.
+
+A skill is a folder with a `SKILL.md`:
+
+```markdown
+---
+name: release-notes
+description: Write release notes from the commits since the last tag
+---
+
+What the agent should do when this skill runs.
+```
+
+## By hand
+
+The same steps the skill runs:
+
+```bash
+uze agent market create my-market --at ~/my-market   # once
+uze agent plugin create my-plugin --market my-market  # --mcp, --hook, --agent
+uze agent plugin check ~/my-market/plugins/my-plugin  # validate, offline
+uze install -m my-plugin@my-market                    # install it
+uze update my-plugin -m                               # after each change
+```
+
+To publish, push the marketplace repository. Anyone can then
+`uze market add` it.
+
+<Cards>
+  <Card title="Plugin format" href="/docs/reference/plugin-format" description="Every file and field, in full" />
+  <Card title="Marketplaces" href="/docs/plugins/marketplaces" />
+</Cards>

@@ -1,0 +1,56 @@
+---
+title: The terminal session
+description: The server behind the workspace, resuming after a reboot, prompt history and logs
+---
+
+The workspace's panes belong to a local server, not to the window you look at.
+That is why closing the workspace never stops an agent.
+
+```bash
+uze                    # attach the workspace, starting its server when needed
+uze terminal attach    # the same, explicitly
+uze terminal stop      # stop this workspace's server and every process in it
+```
+
+Running `uze` inside one of the workspace's own panes does not nest a second
+workspace: it opens a space for that directory in the one already running.
+
+## Resuming after a reboot
+
+The server does not survive a reboot, but your work does. The next `uze` brings
+back the spaces, tabs and agents, each relaunched in its checkout and resuming
+the conversation it was in.
+
+That resume is done by the **shim** `uze setup` installs for each agent in
+`~/.uze/shims/`, which your shell's `PATH` reaches first. It records which
+conversation belongs to which task, and nothing else; an agent you start by hand
+outside uze runs exactly as it would without it. Removing a shim turns the
+resume off for that agent. Whether each agent supports it is the **Session**
+column in [Harness support](/docs/reference/harnesses).
+
+## Prompt history
+
+What you send to an agent is recorded per workspace, and management lists it:
+click an entry to jump back to the tab it was typed in. It is a convenience,
+not a transcript: uze forwards keystrokes without interpreting them, so entries
+can be missing. The file is readable only by you and can be cleared.
+
+## Notifications
+
+`uze config notification` takes three states:
+
+| State | Rings for |
+| --- | --- |
+| `silent` | nothing (the default) |
+| `off` | a finished agent in a tab you are not looking at |
+| `on` | every finished agent |
+| `test` | once, now, so you hear what it sounds like |
+
+It is your terminal's own bell, rung after an agent has stayed finished for
+about ten seconds; agents finishing together ring once.
+
+## Logs
+
+The workspace and its server keep a journal without being asked, in
+`~/.uze/cache/logs/`, rolled daily and kept for a week. For a trace of a single
+command, set `UZE_LOG=info`.

@@ -1,6 +1,6 @@
 journey: a private marketplace is reached with the operator's own key, and the project names it by URL alone
 tags: [gate, cli, packages]
-proves: web/content/docs/cli.mdx
+proves: web/content/docs/reference/cli.mdx
 about: |
   A private repository refuses anonymous HTTPS and has no credential helper
   on this machine, so what reaches it is the operator's SSH agent. The

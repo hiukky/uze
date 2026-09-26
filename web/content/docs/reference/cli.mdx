@@ -1,0 +1,85 @@
+---
+title: CLI
+description: Every command
+---
+
+<Callout type="info">
+  The CLI is still taking shape during the alpha: commands may be renamed or
+  regrouped between releases, and their output, errors and logs are being
+  reworked. `uze --help` always describes the version you have.
+</Callout>
+
+```bash
+uze                       # open the workspace
+uze --help                # help, on the root or any command
+uze --version
+```
+
+A command run inside a project acts on that project and on the machine. `-m`
+makes it act on the machine alone.
+
+## Plugins
+
+```bash
+uze <plugin>@<market>         # add a plugin to this project
+uze install                   # install what agents.yaml and agents.lock declare (alias: i)
+uze install <plugin>@<market> # the same as the shorthand
+uze update [plugin]           # move plugins to where agents.yaml points now
+uze remove <plugin>           # take it out of this project
+uze remove <plugin> -m        # take it off this machine
+uze inspect <plugin>          # what it carries, and how each agent receives it
+uze status                    # this project: plugins, context, what is still owed
+uze status -m                 # this machine: every installed plugin
+```
+
+| Flag | On | Does |
+| --- | --- | --- |
+| `-m` | `install`, `update`, `remove`, `status` | Act on the machine only |
+| `--trust` | `install`, `update`, `<plugin>@<market>` | Approve the commands a plugin runs, for CI |
+| `--alias <name>` | `install` | Install under another name when another marketplace's plugin has it |
+| `--replace` | `install` | Replace the other marketplace's plugin of the same name |
+
+## Marketplaces
+
+```bash
+uze market add <source>            # owner/repo, host:owner/repo, a Git URL or ./a-directory
+uze market list
+uze market inspect <name>
+uze market remove <name>           # the marketplace and everything it delivered
+uze market link <name> <checkout>  # read it from a checkout you are developing
+uze market unlink <name>
+uze market host [alias] [url]      # the hosts owner/repo resolves against
+```
+
+## Setup and health
+
+```bash
+uze setup                   # choose the agents to set up
+uze setup <agent>...        # set up these (claude, codex, opencode, agy)
+uze setup list              # every agent and whether it is ready
+uze setup inspect <agent>
+uze doctor                  # diagnose, and repair what is safe to repair
+uze upgrade                 # install the latest uze
+```
+
+## Configuration
+
+```bash
+uze config theme list | set <id> | show [id]
+uze config icons [default | nerd | ascii]
+uze config notification [on | off | silent | test]
+```
+
+## Workspace
+
+```bash
+uze terminal attach         # the same as `uze`
+uze terminal stop           # stop the workspace and every process in it
+```
+
+## Everywhere
+
+`--verbose` prints what happened in detail. `--format json` gives
+machine-readable output on every command that reports something.
+
+The commands agents call are in [The agent CLI](/docs/advanced/agent-cli).

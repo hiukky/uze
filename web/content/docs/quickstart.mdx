@@ -1,0 +1,57 @@
+---
+title: Quickstart
+description: From an installed uze to two agents side by side, in five minutes
+---
+
+You have uze [installed](/docs/installation) and at least one agent set up.
+Open a terminal in any Git repository.
+
+## 1. Open the workspace
+
+```bash
+uze
+```
+
+Your project opens as a **space**. Everything on screen is clickable; `F1` lists
+the keys that act right now.
+
+## 2. Start two agents
+
+Press `Alt+N` and pick an agent. Do it again and pick another. Give each one a
+task, the way you normally would.
+
+Each agent is a tab in the sidebar. The tab shows the name of the work once
+the agent picks one, and a check when it finishes.
+
+## 3. See what one changed
+
+Select an agent and press `Alt+G`. You get its changed files and the diff. Press
+`Alt+G` again to go back to the agent.
+
+## 4. Give them a plugin
+
+Plugins come from marketplaces: Git repositories that list them. Add one, then
+add a plugin from it to this project:
+
+```bash
+uze market add owner/repo      # a marketplace on GitHub
+uze <plugin>@<marketplace>     # add one of its plugins
+```
+
+Every agent you start from now on has its skills.
+
+uze itself ships one plugin, `uze`, already installed. Try it from any agent:
+
+```text
+/uze:init
+```
+
+It sets up `AGENTS.md` as the one instructions file every agent reads. In Codex
+the prefix is `$`, in OpenCode `@`: see [uze Skills](/docs/plugins/skills).
+
+## Next
+
+<Cards>
+  <Card title="Running agents" href="/docs/workspace/agents" description="Checkouts of their own, and delivering finished work" />
+  <Card title="Installing plugins" href="/docs/plugins" description="Marketplaces, and how a project records its plugins" />
+</Cards>

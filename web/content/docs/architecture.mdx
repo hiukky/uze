@@ -3,10 +3,8 @@ title: Architecture
 description: The one-way dependency layering and the invariants that hold it together
 ---
 
-# Architecture
-
 Dependency direction is one-way and enforced by tests, not just convention. Both
-orchestration and the vendor adapters depend on the neutral core — never the
+orchestration and the vendor adapters depend on the neutral core, never the
 reverse:
 
 ```mermaid
@@ -36,12 +34,12 @@ graph TD
 ```
 
 - **`uze-core` never names a harness.** No Claude, Codex, OpenCode, or Antigravity
-  string in production code — enforced by `core_never_names_a_vendor_harness`; the
+  string in production code, enforced by `core_never_names_a_vendor_harness`; the
   same neutrality holds for `uze-application` and the CLI/TUI.
 - **`uze-integrations` is the only vendor-specific layer.** One module per harness
   implementing the shared `IntegrationPort`; its `registry` is the single
   composition root. A new harness should require no semantic change to Store,
-  Engine, or Router — only a new integration vertical, one registry entry,
+  Engine, or Router: only a new integration vertical, one registry entry,
   conformance, and docs.
 - **Presentation never reaches into the domain.** `src/` may not name `uze_core`
   or `uze_integrations`; it consumes read models from `uze-application`. The debt
@@ -51,38 +49,38 @@ graph TD
 
 ## The supporting crates
 
-- **`uze-git`** — the one transport for speaking to the Git binary: spawn
+- **`uze-git`**: the one transport for speaking to the Git binary: spawn
   convention, `read`/`write` entry points, and Git's exit code reported rather
   than classified. It carries no domain, and nothing else in the workspace spawns
-  `git` directly — two callers with two exit-code conventions is exactly what it
+  `git` directly; two callers with two exit-code conventions is exactly what it
   replaced.
-- **`uze-terminal`** — the local terminal runtime: a server owning the
+- **`uze-terminal`**: the local terminal runtime: a server owning the
   pseudoterminals and a versioned client protocol, so a pane survives the client
   leaving (ADR-038). It depends on nothing else in the workspace.
-- **`uze-theme`** — the design vocabulary: colour `Token`s, named `Symbol`s, the
+- **`uze-theme`**: the design vocabulary: colour `Token`s, named `Symbol`s, the
   theme file schema, and the resolver that completes a partial theme from the
   built-in default. A leaf crate that resolves no path, reads no environment and
   names no rendering library, so every consumer adapts its `Rgb` to what it draws
   with. **Nothing outside `src/ui/theme.rs` may name a colour value or write a
-  chrome glyph inline** — two architecture rules fail the build over it. See
-  [Appearance](/docs/appearance).
-- **`uze-extensions`** — built-in TUI extensions. An extension answers with a
+  chrome glyph inline**: two architecture rules fail the build over it. See
+  [Appearance](/docs/configuration/appearance).
+- **`uze-extensions`**: built-in TUI extensions. An extension answers with a
   view or a section and **never draws**: the host owns rendering, geometry,
   hit-testing and the palette, and every other capability (running Git, reading a
   file, resolving `$HOME`) arrives through a `Host` it is handed. The crate
   depends on no uze crate at all and names no process, filesystem or environment
-  API — an extension is code uze runs in its own process, a different trust class
+  API, since an extension is code uze runs in its own process, a different trust class
   from plugin bytes a harness reads (ADR-041). Two ship today:
   [Code and Architect](/docs/workspace/extensions).
-- **`uze-document`** — the one rule for reading a record another build wrote: the
+- **`uze-document`**: the one rule for reading a record another build wrote: the
   shape a record declares, the ladder that carries it across a version, and the
   floor beneath that. A record written in a shape this build knows is carried
   across silently; only a shape with no rung is set aside, and a record from a
   *newer* build is never taken. A leaf crate naming no domain, no path and no
-  harness — a durability rule written in two places is the failure it exists to
+  harness: a durability rule written in two places is the failure it exists to
   end.
-- **`uze-keys`** — actions, scopes and chords: the vocabulary
-  [Shortcuts](/docs/keys) is written in, and the resolver that answers which
+- **`uze-keys`**: actions, scopes and chords: the vocabulary
+  [Shortcuts](/docs/configuration/keys) is written in, and the resolver that answers which
   action a chord reaches in the surface that is open.
 
 ## Repository layout
@@ -93,7 +91,7 @@ part; everything else is where to look.
 | Path | What lives there |
 | --- | --- |
 | `crates/uze-core` | The harness-agnostic domain: package, store, engine, router, `IntegrationPort` |
-| `crates/uze-application` | Orchestration — add, install, remove, update, context |
+| `crates/uze-application` | Orchestration: add, install, remove, update, context |
 | `crates/uze-integrations` | The vendor adapters, one module per harness |
 | `crates/uze-extensions` | Built-in TUI extensions |
 | `crates/uze-terminal` | The local terminal runtime |
@@ -104,7 +102,7 @@ part; everything else is where to look.
 | `crates/uze-testkit` | Shared test infrastructure |
 | `src/` | The CLI, the TUI, and the runtime PATH shim |
 | `tests/` | Integration suites, L0–L4 (see `tests/README.md`) |
-| `journeys/` | Product journeys — a user's flow, checked against the machine it left behind |
+| `journeys/` | Product journeys: a user's flow, checked against the machine it left behind |
 | `conformance/` | The Harness Conformance Lab |
 | `docs/adr/` | Numbered decision records |
 | `docs/architecture/` | The invariants that hold today, each tied to its test |
@@ -119,7 +117,7 @@ not break this" behaviors, each tied to the test that proves it. Among them:
 - the Store is the single source of truth and writes nothing a harness reads;
 - receipts drive lifecycle safety, and derived artifacts are rebuildable;
 - the runtime shim never recurses into itself;
-- nothing the workspace client draws waits on a repository — every Git read runs
+- nothing the workspace client draws waits on a repository: every Git read runs
   on a thread and answers through a channel, and an answer that arrives after the
   viewer moved on is dropped rather than drawn;
 - every CLI leaf command is performance-classified.

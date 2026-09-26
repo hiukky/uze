@@ -1,24 +1,35 @@
 import { RootProvider } from 'fumadocs-ui/provider/next';
 import { Banner } from 'fumadocs-ui/components/banner';
 import './global.css';
-import { IBM_Plex_Mono, IBM_Plex_Sans } from 'next/font/google';
+import localFont from 'next/font/local';
 import type { Metadata } from 'next';
-import { appDescription, appName, appTagline } from '@/lib/shared';
+import { appDescription, appName, appTagline, siteUrl } from '@/lib/shared';
 
-const plexSans = IBM_Plex_Sans({
-  subsets: ['latin'],
-  weight: ['400', '500', '600'],
+// IBM's own release of Plex, not Google's: Google serves an unhinted build to
+// any client but a Windows browser, and `next/font/google` fetches at build
+// time — so every visitor got the unhinted outlines, which Windows renders
+// with strokes eaten away. IBM's woff2 carry their hinting. OFL-1.1, beside them.
+const plexSans = localFont({
+  src: [
+    { path: './fonts/IBMPlexSans-Regular.woff2', weight: '400' },
+    { path: './fonts/IBMPlexSans-Medium.woff2', weight: '500' },
+    { path: './fonts/IBMPlexSans-SemiBold.woff2', weight: '600' },
+  ],
   variable: '--font-body',
 });
 
-const plexMono = IBM_Plex_Mono({
-  subsets: ['latin'],
-  weight: ['400', '500', '700'],
+const plexMono = localFont({
+  src: [
+    { path: './fonts/IBMPlexMono-Regular.woff2', weight: '400' },
+    { path: './fonts/IBMPlexMono-Medium.woff2', weight: '500' },
+    { path: './fonts/IBMPlexMono-SemiBold.woff2', weight: '600' },
+    { path: './fonts/IBMPlexMono-Bold.woff2', weight: '700' },
+  ],
   variable: '--font-ui-mono',
 });
 
 export const metadata: Metadata = {
-  metadataBase: new URL(process.env.NEXT_PUBLIC_SITE_URL ?? 'http://localhost:3000'),
+  metadataBase: new URL(siteUrl),
   title: {
     default: `${appName} · ${appTagline}`,
     template: `%s · ${appName}`,

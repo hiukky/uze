@@ -1,22 +1,15 @@
 {
   "pages": [
-    "---Start here---",
+    "---[Rocket]Introduction---",
     "index",
-    "getting-started",
-    "concepts",
-    "---Guides---",
+    "installation",
+    "quickstart",
+    "---[Map]Guides---",
     "workspace",
-    "creating-a-plugin",
-    "---Reference---",
-    "harnesses",
-    "cli",
-    "project-files",
-    "---Customization---",
-    "appearance",
-    "keys",
-    "---Project---",
-    "architecture",
-    "development",
-    "roadmap"
+    "plugins",
+    "configuration",
+    "concepts",
+    "advanced",
+    "reference"
   ]
 }

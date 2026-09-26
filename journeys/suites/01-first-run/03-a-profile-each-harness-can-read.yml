@@ -1,6 +1,6 @@
 journey: a profile lands in each harness's own configuration, in words that harness accepts
 tags: [gate, tui, profiles]
-proves: web/content/docs/harnesses.mdx
+proves: web/content/docs/reference/harnesses.mdx
 about: |
   A profile is UZE's vocabulary — autonomy, sandbox, model — and no harness
   reads it. What a harness reads is its own configuration file, so the

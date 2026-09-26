@@ -117,7 +117,7 @@ html > body[data-scroll-locked] {
   opacity: 0.1;
 }
 
-/* harness logos inlined by uze-harness-matrix in content/docs/harnesses.mdx */
+/* harness logos inlined by uze-harness-matrix in content/docs/reference/harnesses.mdx */
 .harness-table-cell {
   display: inline-flex;
   align-items: center;
