@@ -16,7 +16,7 @@ uze-git = { path = "../uze-git" }
 uze-document = { path = "../uze-document" }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
-noyalib = { version = "0.0.45", features = ["compat-serde-yaml"] }
+noyalib = { version = "0.0.51", features = ["compat-serde-yaml"] }
 thiserror = "2"
 # The operator's `config.toml`: a document model rather than serde, so a
 # write keeps their comments and the sections this build does not know.
