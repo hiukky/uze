@@ -117,17 +117,36 @@ pub(super) fn parse_hunk_header(header: &str) -> Option<(u32, u32)> {
 /// file, not one continuous stream. A removal feeds only the old one, an
 /// addition only the new, and context both — so each stream sees exactly
 /// the file it stands for.
+/// How many lines of a diff are coloured. Colouring is per line and
+/// sequential — the highlighter's state is why a comment opened above
+/// stays one below — so a generated file or a lockfile rewritten whole
+/// was tens of seconds of it before its first line could be drawn. Past
+/// this many lines, forty screens or so, the rest is drawn as the text it
+/// is, in the theme's own ink.
+const COLOURED_DIFF_LINES: usize = 2000;
+
 pub(super) fn highlight(lines: Vec<DiffLine>, path: &Path, theme_name: &str) -> Vec<DiffCell> {
     let mut old = super::highlight::highlighter(path, theme_name);
     let mut new = super::highlight::highlighter(path, theme_name);
     lines
         .into_iter()
+        .enumerate()
         .map(
-            |DiffLine {
-                 kind,
-                 line_no,
-                 text,
-             }| {
+            |(
+                at,
+                DiffLine {
+                    kind,
+                    line_no,
+                    text,
+                },
+            )| {
+                if at >= COLOURED_DIFF_LINES {
+                    return DiffCell {
+                        line_no,
+                        kind,
+                        spans: super::highlight::plain(theme_name, &text),
+                    };
+                }
                 let spans = match kind {
                     DiffLineKind::Removed => super::highlight::line(&mut old, &text),
                     DiffLineKind::Added => super::highlight::line(&mut new, &text),
@@ -175,6 +194,28 @@ pub(super) fn content_line(cell: &DiffCell) -> ContentLine {
 mod tests {
     use super::*;
     use crate::code::highlight::FALLBACK_SYNTAX_THEME;
+
+    /// A diff longer than colouring pays for keeps every line and every
+    /// byte; only the lines past the bound are drawn in one ink.
+    #[test]
+    fn a_diff_past_the_colouring_bound_keeps_every_line_uncoloured() {
+        let total = COLOURED_DIFF_LINES + 50;
+        let mut output = format!("@@ -0,0 +1,{total} @@\n");
+        for line in 0..total {
+            output.push_str(&format!("+let value_{line} = {line}; // line\n"));
+        }
+        let cells = read(&output, Path::new("big.rs"), FALLBACK_SYNTAX_THEME);
+
+        assert_eq!(cells.len(), total);
+        assert!(cells[0].spans.len() > 1, "the head is coloured");
+        let tail = &cells[total - 1];
+        assert_eq!(tail.spans.len(), 1, "the tail is one span");
+        assert_eq!(
+            tail.spans[0].1,
+            format!("let value_{} = {}; // line", total - 1, total - 1)
+        );
+        assert_eq!(tail.line_no, total as u32);
+    }
 
     /// Highlighting is the one thing in this crate whose correctness depends
     /// on syntect's regex backend, and the failure mode of changing that

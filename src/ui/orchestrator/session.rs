@@ -102,8 +102,15 @@ pub(super) enum CodeDoor {
 }
 
 pub(super) fn code_door(showing: Option<code::ContentMode>, wanted: code::ContentMode) -> CodeDoor {
+    // A document read as its preview is still the files half: the door to
+    // the files is the door already open, and it shuts rather than
+    // turning the preview back into source first.
+    let half = |mode| match mode {
+        code::ContentMode::Preview => code::ContentMode::Contents,
+        other => other,
+    };
     match showing {
-        Some(mode) if mode == wanted => CodeDoor::Close,
+        Some(mode) if half(mode) == half(wanted) => CodeDoor::Close,
         Some(_) => CodeDoor::Switch,
         None => CodeDoor::Nothing,
     }
@@ -1108,7 +1115,7 @@ impl Attach<'_> {
     /// chosen when the press lands — see [`EdgeDrag`] — and once chosen
     /// it holds until release, so a hand that wanders does not switch
     /// gestures mid-drag.
-    fn drag_code_edge(&mut self, column: u16, row: u16, size: ratatui::layout::Size) {
+    fn drag_code_edge(&mut self, column: u16, row: u16, area: Rect) {
         let Some(mut drag) = self.model.code_edge_drag else {
             return;
         };
@@ -1116,12 +1123,8 @@ impl Attach<'_> {
         self.model.code_edge_drag = Some(drag);
         match intent {
             Some(EdgeIntent::Resize) => {
-                let frame_area = Rect::new(0, 0, size.width, size.height);
                 let (tree_column, content_column, _footer) =
-                    crate::ui::extension_view::content_columns(
-                        frame_area,
-                        self.model.code_tree_width,
-                    );
+                    crate::ui::extension_view::content_columns(area, self.model.code_tree_width);
                 let width = crate::ui::extension_view::clamp_navigator_width(
                     column.saturating_sub(tree_column.x),
                     tree_column.width + content_column.width,
@@ -1531,6 +1534,11 @@ impl Attach<'_> {
         if self.model.selection.take().is_some() {
             self.model.dirty = true;
         }
+        // An open extension answers only for the place it is drawn in: the
+        // sidebar and the strip around it are still the chrome's.
+        let in_pane = layout
+            .pane
+            .contains(ratatui::layout::Position::new(mouse.column, mouse.row));
         match mouse {
             _ if self.model.release_notes.is_some() && self.model.action_index.is_none() => {
                 if !matches!(
@@ -1675,10 +1683,10 @@ impl Attach<'_> {
                 }
                 self.model.dirty = true;
             }
-            _ if self.model.architect.is_some() => {
+            _ if self.model.architect.is_some() && in_pane => {
                 self.architect_press(mouse.column, mouse.row);
             }
-            _ if self.model.code.is_some() => {
+            _ if self.model.code.is_some() && in_pane => {
                 let hit = self
                     .model
                     .hits
@@ -1747,6 +1755,9 @@ impl Attach<'_> {
             _ => {
                 let Some((hit_rect, hit)) = self.model.hit_rect_at(mouse.column, mouse.row) else {
                     self.model.last_click = None;
+                    if !self.model.no_modal_open() {
+                        return Flow::Continue;
+                    }
                     if self.selects_in_pane(mouse, layout.pane) {
                         self.model.selection = Some(selection::PaneSelection::pressed(
                             self.model.focused_pane(),
@@ -1770,9 +1781,8 @@ impl Attach<'_> {
                 // "did it take my click".
                 self.model.pressed = Some((hit, now));
                 self.model.dirty = true;
-                if is_double_click {
+                if is_double_click && self.double_click(hit) {
                     self.model.last_click = None;
-                    self.double_click(hit);
                     return Flow::Continue;
                 }
                 return self.click(hit, hit_rect, mouse, viewport);
@@ -1803,7 +1813,7 @@ impl Attach<'_> {
                 self.scroll_code_content_to(mouse.row);
             }
             _ if self.model.code_edge_drag.is_some() => {
-                self.drag_code_edge(mouse.column, mouse.row, size);
+                self.drag_code_edge(mouse.column, mouse.row, layout.pane);
             }
             _ if self.model.dragging_timeline => {
                 // The divider follows the pointer; what is remembered
@@ -2239,6 +2249,9 @@ impl Attach<'_> {
         let Viewport {
             size, ref layout, ..
         } = *viewport;
+        let in_pane = layout
+            .pane
+            .contains(ratatui::layout::Position::new(mouse.column, mouse.row));
         match mouse {
             _ if self.model.release_notes.is_some() && self.model.action_index.is_none() => {
                 if let Some(modal) = &mut self.model.release_notes {
@@ -2257,7 +2270,7 @@ impl Attach<'_> {
                 };
                 return self.action_index_action(action, viewport);
             }
-            _ if self.model.architect.is_some() => {
+            _ if self.model.architect.is_some() && in_pane => {
                 let direction = if mouse.kind == MouseEventKind::ScrollUp {
                     ScrollDirection::Up
                 } else {
@@ -2269,14 +2282,14 @@ impl Attach<'_> {
                 }
                 self.model.dirty = true;
             }
-            _ if self.model.code.is_some() => {
+            _ if self.model.code.is_some() && in_pane => {
                 let direction = if mouse.kind == MouseEventKind::ScrollUp {
                     ScrollDirection::Up
                 } else {
                     ScrollDirection::Down
                 };
                 match crate::ui::extension_view::scroll_target(
-                    Rect::new(0, 0, size.width, size.height),
+                    layout.pane,
                     self.model.code_tree_width,
                     mouse.column,
                     mouse.row,
@@ -2326,7 +2339,7 @@ impl Attach<'_> {
                     self.model.dirty = true;
                 }
             }
-            _ if self.model.no_modal_open()
+            _ if self.model.chrome_answers()
                 && self.model.over_timeline(mouse.column, mouse.row) =>
             {
                 scroll_timeline(
@@ -2341,7 +2354,7 @@ impl Attach<'_> {
             // Anywhere else in the sidebar scrolls the space tree — the
             // timeline section took the wheel over itself in the branch
             // above, and the tree is the rest of that column.
-            _ if self.model.no_modal_open() && mouse.column < layout.sidebar.right() => {
+            _ if self.model.chrome_answers() && mouse.column < layout.sidebar.right() => {
                 scroll_tree(
                     &mut self.model,
                     if mouse.kind == MouseEventKind::ScrollUp {
@@ -2359,11 +2372,15 @@ impl Attach<'_> {
         Flow::Continue
     }
 
-    /// What a second click inside [`DOUBLE_CLICK_WINDOW`] means. Only a
-    /// few hits have an answer; the rest fall through to nothing rather
-    /// than repeating the single-click one.
-    fn double_click(&mut self, hit: WorkspaceHit) {
+    /// What a second click inside [`DOUBLE_CLICK_WINDOW`] means, and
+    /// whether it meant anything of its own. Where it does not, it is a
+    /// click like the first: swallowing it made a switch pressed twice in
+    /// quick succession answer once, which reads as a lost click.
+    fn double_click(&mut self, hit: WorkspaceHit) -> bool {
         match hit {
+            // The two that make something: a double click out of habit
+            // is one new shell or one new space, not two.
+            WorkspaceHit::NewTab | WorkspaceHit::NewSpace => {}
             WorkspaceHit::SelectTab(tab) => {
                 begin_rename(&mut self.model, MenuTarget::Tab(tab));
                 self.model.dirty = true;
@@ -2380,8 +2397,9 @@ impl Attach<'_> {
             WorkspaceHit::Extension(ExtensionHit::CodeTimeline(ViewHit::ToggleSection)) => {
                 toggle_timeline(&mut self.model);
             }
-            _ => {}
+            _ => return false,
         }
+        true
     }
 
     /// What one click on a piece of workspace chrome does.
@@ -2458,6 +2476,10 @@ impl Attach<'_> {
             | WorkspaceHit::ReleaseNotesBody
             | WorkspaceHit::ReleaseNotesClose => {}
             WorkspaceHit::SelectTab(tab) => {
+                // Choosing a tab is choosing to see it, the one already in
+                // front included: that is how the pane is had back from a
+                // surface standing in it.
+                self.model.close_extension();
                 // Whether this click landed on the tab already
                 // holding its space's selection — read before
                 // `SelectTab` is sent below, since the model
@@ -2558,6 +2580,7 @@ impl Attach<'_> {
                 // no-op.
             }
             WorkspaceHit::SelectSpace(space) => {
+                self.model.close_extension();
                 // A space's own row is its own context: it
                 // lands on a shell belonging to no agent, the
                 // way each agent row lands on that agent. That
@@ -2594,13 +2617,19 @@ impl Attach<'_> {
                 // which the guarded arm above already handles —
                 // same as `PickAgent` for the agent picker.
             }
-            WorkspaceHit::OpenChanges => {
-                open_code(&mut self.model, code::ContentMode::Diff);
+            // A lit button is the surface standing in the pane, whichever
+            // of its halves is showing, so pressing it puts the surface
+            // away in one click. Unlit, it is the keys' door: it opens, or
+            // switches from the other surface.
+            WorkspaceHit::OpenFiles if self.model.code.is_some() => self.model.close_code(),
+            WorkspaceHit::OpenArchitect if self.model.architect.is_some() => {
+                self.model.close_architect();
             }
-            WorkspaceHit::OpenFiles => {
-                open_code(&mut self.model, code::ContentMode::Contents);
-            }
-            WorkspaceHit::OpenArchitect => open_architect(&mut self.model),
+            // The counts are the changes' door, not the surface's, and
+            // keep the keys' toggle.
+            WorkspaceHit::OpenChanges => return self.act(Action::ToggleChanges, viewport),
+            WorkspaceHit::OpenFiles => return self.act(Action::ToggleFiles, viewport),
+            WorkspaceHit::OpenArchitect => return self.act(Action::ToggleArchitect, viewport),
             WorkspaceHit::Deliver(_) => {
                 deliver_selected_tab(&mut self.model, self.home, &self.channels.deliveries.sender);
             }
@@ -3444,6 +3473,9 @@ impl Attach<'_> {
         while let Ok(resolution) = self.channels.code_changes.receiver.try_recv() {
             self.model.dirty |= self.model.absorb_changes(resolution);
         }
+        while let Ok(resolution) = self.channels.code_diffs.receiver.try_recv() {
+            self.model.dirty |= self.model.absorb_diff(resolution);
+        }
         while let Ok(resolution) = self.channels.code_files.receiver.try_recv() {
             self.model.dirty |= self.model.absorb_file_answer(resolution);
         }
@@ -3454,6 +3486,8 @@ impl Attach<'_> {
             self.model.dirty |= self.model.absorb_artifacts(resolution);
         }
         self.model.schedule_git_read(&self.channels.git.sender);
+        self.model
+            .schedule_diff_read(&self.channels.code_diffs.sender);
         self.model
             .schedule_changes_refresh(&self.channels.code_changes.sender);
         self.model

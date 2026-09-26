@@ -106,6 +106,19 @@ pub(crate) fn line(highlighter: &mut HighlightLines<'_>, text: &str) -> Vec<(Rgb
         .collect()
 }
 
+/// `text` uncoloured: one span in the theme's own foreground, for a line
+/// past the point where colouring stopped paying for itself.
+pub(crate) fn plain(theme_name: &str, text: &str) -> Vec<(Rgb, String)> {
+    let foreground = theme(theme_name)
+        .settings
+        .foreground
+        .unwrap_or(syntect::highlighting::Color::WHITE);
+    vec![(
+        Rgb(foreground.r, foreground.g, foreground.b),
+        text.to_owned(),
+    )]
+}
+
 /// The first `limit` lines of `text`, highlighted as one continuous
 /// stream.
 ///

@@ -62,7 +62,7 @@
 use std::{
     collections::{BTreeSet, VecDeque},
     path::{Path, PathBuf},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use crate::{
@@ -106,10 +106,18 @@ pub const CATALOG: crate::registry::BuiltinExtension = crate::registry::BuiltinE
     name: "Code",
     description: "Changes, contents, history and a map of the active checkout.",
     surface: "Workspace TUI",
-    usage: "The timeline sits in the sidebar; open the changes with Ctrl+G or the changes chip, and the files with Ctrl+E or the code chip. `m`, or the Map chip, shows the checkout as a map of where its lines are.",
+    usage: "The timeline sits in the sidebar; open the changes with Alt+G or the changes chip, and the files with Alt+E or the code chip. `m`, or the Map chip, shows the checkout as a map of where its lines are.",
 };
 
 const REFRESH_INTERVAL: Duration = Duration::from_millis(750);
+
+/// How many times its own duration a periodic read waits before the next
+/// one: Git gets at most a fifth of the clock, however large the checkout.
+/// Below [`REFRESH_INTERVAL`] it changes nothing; on a checkout whose
+/// `status` takes a few hundred milliseconds, reading back to back would
+/// be a core spent on Git for as long as the surface is open. The host
+/// paces its own reads by the same factor.
+pub const PACE: u32 = 5;
 
 /// What to do after an event reaches an open [`CodeView`] — the host only
 /// needs to know whether to keep the surface open.
@@ -221,9 +229,12 @@ pub struct CodeView {
     /// than guesses.
     before_map: ContentMode,
     /// The checkout measured and laid out as a treemap, once the
-    /// measurement has arrived. Absent until then, and the map is not
-    /// offered while it is.
+    /// measurement has arrived. Absent until then: the map is offered
+    /// all the same, and entering it is what asks for the measurement.
     map: Option<Map>,
+    /// The checkout could not be measured — it is no repository — so
+    /// the map says that rather than that it is on its way.
+    unmeasurable: bool,
     map_showing: MapShowing,
     focus: Focus,
     scroll: u16,
@@ -254,7 +265,7 @@ pub struct CodeView {
 /// What it holds is navigation and nothing else — the file being read,
 /// the directories opened to reach it, the ones folded away, and how far
 /// down it. Deliberately not the content mode: the mode is the door that
-/// was used (`Ctrl+G` reviews, `Ctrl+E` navigates), and a door that
+/// was used (`Alt+G` reviews, `Alt+E` navigates), and a door that
 /// remembered where it last led would stop being one. Deliberately not a
 /// buffer either: an unsaved edit belongs to the surface that has it
 /// open, and reopening a closed one must not resurrect typing.
@@ -320,8 +331,8 @@ impl CodeView {
     /// instant it is asked for, saying it is reading, and fills in when
     /// the host's answers land.
     ///
-    /// `mode` is the door: the changes chip and `Ctrl+G` open on the
-    /// diff, the code chip and `Ctrl+E` on the tree.
+    /// `mode` is the door: the changes chip and `Alt+G` open on the
+    /// diff, the code chip and `Alt+E` on the tree.
     pub fn opening(cwd: PathBuf, display_root: String, mode: ContentMode) -> Self {
         let mut view = Self {
             root: cwd,
@@ -331,6 +342,7 @@ impl CodeView {
             content: mode,
             before_map: mode,
             map: None,
+            unmeasurable: false,
             map_showing: MapShowing::default(),
             focus: Focus::Navigator,
             scroll: 0,
@@ -452,15 +464,58 @@ impl CodeView {
                 .is_some_and(|open| open.editing && open.error.is_none())
     }
 
+    /// The path the cursor stands on, whichever half it is in.
+    pub fn selected(&self) -> Option<&Path> {
+        self.selected.as_deref()
+    }
+
+    /// The one diff to read because only the selection moved — nothing a
+    /// `status` of the whole checkout has to come before. `None` while
+    /// the diff on screen is the selection's, or while the changed-file
+    /// list it has to be found in has not been read yet.
+    pub fn diff_request(&self) -> Option<DiffRequest> {
+        if !self.changes.diff_pending {
+            return None;
+        }
+        let file = self.changes.files.get(self.selected_change()?)?;
+        Some(DiffRequest {
+            path: file.path.clone(),
+            status: file.status,
+        })
+    }
+
+    /// Reads the diff a [`DiffRequest`] names. Takes no `&self`, for the
+    /// reason [`Self::refresh`] does not.
+    pub fn read_diff(host: &dyn Host, root: &Path, request: DiffRequest) -> DiffAnswer {
+        DiffAnswer(changes::read_diff(
+            host,
+            root,
+            &request.path,
+            request.status,
+            0,
+        ))
+    }
+
+    /// Installs a diff read on its own, if it is still the selection's.
+    pub fn absorb_diff(&mut self, answer: DiffAnswer) {
+        let DiffAnswer(read) = answer;
+        if self.selected.as_deref() != Some(read.path.as_path()) {
+            return;
+        }
+        self.changes.install_diff(read);
+        self.changes.diff_pending = false;
+    }
+
     /// Whether the diff on screen is the selected file's yet.
     pub fn diff_pending(&self) -> bool {
         self.changes.diff_pending
     }
 
     pub fn refresh_due(&self) -> bool {
+        let every = REFRESH_INTERVAL.max(self.changes.took * PACE);
         self.changes
             .refreshed_at
-            .is_none_or(|at| at.elapsed() >= REFRESH_INTERVAL)
+            .is_none_or(|at| at.elapsed() >= every)
     }
 
     /// Where the viewer is, for the re-read to answer about.
@@ -483,13 +538,15 @@ impl CodeView {
     /// It answers with a [`Changes`] rather than a whole view, because
     /// the view now holds a buffer — see the module doc.
     pub fn refresh(host: &dyn Host, root: PathBuf, placement: ViewPlacement) -> RefreshedChanges {
+        let started = Instant::now();
         let branch = checkout::branch_of(host, &root);
-        let changes = match host.repository_root(&root) {
+        let mut changes = match host.repository_root(&root) {
             Ok(resolved) => {
                 Changes::read(host, &resolved, placement.path.as_deref(), placement.diff)
             }
             Err(message) => Changes::failed(message),
         };
+        changes.took = started.elapsed();
         RefreshedChanges {
             placement,
             branch,
@@ -502,28 +559,29 @@ impl CodeView {
         let RefreshedChanges {
             placement,
             branch,
-            changes,
+            mut changes,
         } = refreshed;
         self.branch = branch;
         // The folds are the viewer's, not the read's: a refresh answers
         // what changed, and tidying the tree around it is not something
         // it gets to undo.
-        let folded = std::mem::take(&mut self.changes.folded);
-        // The read found the diff exactly as it is here, so here is where
-        // it stays — the cells were never sent back.
-        let diff = match changes.diff_unchanged {
-            true => std::mem::take(&mut self.changes.diff),
-            false => Vec::new(),
-        };
-        self.changes = changes;
-        self.changes.folded = folded;
-        if self.changes.diff_unchanged {
-            self.changes.diff = diff;
+        changes.folded = std::mem::take(&mut self.changes.folded);
+        changes.inherit(&mut self.changes);
+        if placement.path != self.selected {
+            // The selection moved while the read was out, so its diff is
+            // of a file nobody is looking at: the list is taken, and the
+            // diff on screen — or the one-file read already asked for it
+            // — is left as it stands.
+            changes.diff = std::mem::take(&mut self.changes.diff);
+            changes.diff_digest = self.changes.diff_digest;
+            changes.diff_unchanged = false;
+            changes.diff_pending = self.changes.diff_pending;
+        } else if changes.diff_unchanged {
+            // The read found the diff exactly as it is here, so here is
+            // where it stays — the cells were never sent back.
+            changes.diff = std::mem::take(&mut self.changes.diff);
         }
-        // The selection moved while the read was out, so what came back
-        // is a diff of a file nobody is looking at. Keep the list, ask
-        // again for the diff.
-        self.changes.diff_pending = placement.path != self.selected;
+        self.changes = changes;
         if self.selected.is_none() {
             self.selected = self.changes.files.first().map(|file| file.path.clone());
             self.changes.diff_pending = self.selected.is_some();
@@ -604,11 +662,12 @@ impl CodeView {
                 let Ok(loaded) = file else {
                     return;
                 };
-                let Some(open) = self
-                    .open
-                    .as_mut()
-                    .filter(|open| open.path == path && !open.modified && !open.loading)
-                else {
+                // Coloured off the queue, so it may have been read before
+                // a save and a re-read of the same file: only colour for
+                // the text on screen is installed.
+                let Some(open) = self.open.as_mut().filter(|open| {
+                    open.path == path && !open.modified && !open.loading && open.holds(&loaded.text)
+                }) else {
                     return;
                 };
                 let wanted = open.caret.line;
@@ -726,9 +785,28 @@ impl CodeView {
         }
     }
 
-    /// Whether there is a map to show — what decides if it is offered.
+    /// Whether there is a map to show yet.
     pub fn has_map(&self) -> bool {
         self.map.is_some()
+    }
+
+    /// Whether the map is on show, so its measurement is worth taking.
+    ///
+    /// Asked only from inside it: measuring opens every file the checkout
+    /// has and walks its history, which on a large repository is seconds
+    /// of CPU that opening the surface for a diff must not pay for.
+    pub fn wants_measure(&self) -> bool {
+        self.content == ContentMode::Map && !self.unmeasurable
+    }
+
+    /// The measurement came back empty-handed: the checkout is no
+    /// repository, and the map says so instead of waiting.
+    pub fn absorb_unmeasurable(&mut self) {
+        self.unmeasurable = true;
+    }
+
+    pub(super) fn unmeasurable(&self) -> bool {
+        self.unmeasurable
     }
 
     /// The checkout as a person would name it — the last part of the
@@ -812,9 +890,6 @@ impl CodeView {
                     false => ContentMode::Contents,
                 };
                 self.show(mode);
-            }
-            Half::Map if self.map.is_none() => {
-                self.notice = Some("the checkout has not been measured yet".to_owned());
             }
             Half::Map => {
                 if self.content != ContentMode::Map {
@@ -1054,6 +1129,27 @@ impl CodeView {
         } else if line >= self.scroll + visible {
             self.scroll = line.saturating_sub(visible - 1);
         }
+    }
+}
+
+/// A diff to read on its own — see [`CodeView::diff_request`].
+pub struct DiffRequest {
+    path: PathBuf,
+    status: changes::FileStatus,
+}
+
+/// What reading a [`DiffRequest`] found.
+pub struct DiffAnswer(changes::DiffRead);
+
+impl DiffAnswer {
+    /// What a diff read that never ran answers: the reason, where the
+    /// diff would be.
+    pub fn failed(request: &DiffRequest, reason: String) -> Self {
+        Self(changes::DiffRead {
+            path: request.path.clone(),
+            digest: 0,
+            outcome: Err(reason),
+        })
     }
 }
 
@@ -1387,10 +1483,9 @@ pub fn handle_mouse(view: &mut CodeView, hit: Option<ViewHit>, space: Size) -> C
                 // view last described — rebuilt here from the same state,
                 // so it names the same directory.
                 if let Some(FileTreeItem::Directory { path, .. }) =
-                    file_tree_items(&view.changes, &view.root)
-                        .into_iter()
-                        .nth(row)
+                    file_tree_items(&view.changes, &view.root).get(row)
                 {
+                    let path = path.clone();
                     view.changes.toggle_directory(path);
                 }
             }

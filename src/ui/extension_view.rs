@@ -25,7 +25,9 @@ use uze_extensions::view::{
 };
 
 use crate::ui::theme::{self, Symbol, Token};
-use crate::ui::widget::{Edge, Rule, Scrollbar, Surface, TRAILING_PAD, hint, mark, row, text};
+use crate::ui::widget::{
+    self, Edge, Rule, Scrollbar, Surface, TRAILING_PAD, hint, mark, row, text,
+};
 
 /// Narrowest/widest the navigator can be dragged, and the floor left for
 /// the content column — the same shape as the host TUI's own
@@ -139,15 +141,7 @@ pub(crate) fn clamp_navigator_width(width: u16, total_width: u16) -> u16 {
 /// the eye had to find again after every press. It is also why the row
 /// is the list's and the content's alike: neither owns it.
 pub(crate) fn nav_row(frame_area: Rect) -> Rect {
-    // Under the title's own first letter, which is the leftmost thing
-    // the surface says: a row of controls indented past it reads as
-    // belonging to the column beneath rather than to the frame.
-    Rect::new(
-        frame_area.x + 2,
-        frame_area.y + 1,
-        frame_area.width.saturating_sub(4),
-        1,
-    )
+    Rect::new(frame_area.x, frame_area.y, frame_area.width, 1)
 }
 
 /// Everything below the nav row — or from the frame's edge, for a surface
@@ -165,17 +159,10 @@ pub(crate) fn content_columns(
     frame_area: Rect,
     navigator_width_override: Option<u16>,
 ) -> (Rect, Rect, Rect) {
-    // The frame takes a row and a column at each edge, and one more
-    // column of breathing room inside it. No blank row under the title:
-    // the title is on the border, the row beneath it is a row of
-    // controls, and a gap between them left the controls belonging to
-    // neither. The board never had one.
-    let inner = Rect::new(
-        frame_area.x + 2,
-        frame_area.y + 1,
-        frame_area.width.saturating_sub(4),
-        frame_area.height.saturating_sub(2),
-    );
+    // No frame and no margin: the surface stands where the pane is, and
+    // the pane's own edges — the sidebar's divider, the strip's rule —
+    // already say where it begins, the way they do for a shell.
+    let inner = frame_area;
     let navigator_width = navigator_width_override
         .map(|width| clamp_navigator_width(width, inner.width))
         .unwrap_or_else(|| (inner.width / 4).clamp(MIN_NAVIGATOR_WIDTH, MAX_NAVIGATOR_WIDTH));
@@ -185,7 +172,7 @@ pub(crate) fn content_columns(
         .split(inner);
     let content_rows = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Min(1), Constraint::Length(2)])
+        .constraints([Constraint::Min(1), Constraint::Length(FOOTER_ROWS)])
         .split(columns[1]);
     (columns[0], content_rows[0], content_rows[1])
 }
@@ -200,20 +187,14 @@ pub(crate) fn content_columns(
 /// nothing else, and where it is open is written along the foot. A row
 /// of chips under one word is a row of chips, not a continuation.
 pub(crate) fn board_rows(frame_area: Rect) -> (Rect, Rect, Rect) {
-    let inner = Rect::new(
-        frame_area.x + 2,
-        frame_area.y + 1,
-        frame_area.width.saturating_sub(4),
-        frame_area.height.saturating_sub(2),
-    );
     let rows = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(1),
             Constraint::Min(1),
-            Constraint::Length(2),
+            Constraint::Length(FOOTER_ROWS),
         ])
-        .split(inner);
+        .split(frame_area);
     (rows[0], rows[1], rows[2])
 }
 
@@ -259,6 +240,10 @@ pub(crate) fn code_space(
 /// is a constant so the room an extension is told it has and the room it
 /// is drawn in cannot disagree.
 const NAV_ROWS: u16 = 1;
+
+/// The keys that act here, on one row: with no frame beneath it there is
+/// no edge the row needs keeping off.
+const FOOTER_ROWS: u16 = 1;
 
 pub(crate) fn content_space(frame_area: Rect, navigator_width_override: Option<u16>) -> Size {
     let (_, content, _) = content_columns(frame_area, navigator_width_override);
@@ -376,44 +361,12 @@ pub(crate) fn render(
     scope: uze_keys::Scope,
     hits: &mut Vec<(Rect, ViewHit)>,
 ) -> Rendered {
+    // The pane's own ground, and nothing drawn around it: the surface
+    // stands where a shell would, and is put away the way one is left —
+    // its button in the strip, `Esc`, or another tab — so it carries no
+    // frame, no name and no close mark of its own.
     frame.render_widget(Clear, area);
-    // The frame is back, and quiet. What made it wrong before was not
-    // that it existed but that every line here weighed the same: a box,
-    // a divider and two grooves in one hue, arguing. The weights are a
-    // hierarchy now — the frame is the faintest thing on screen, the
-    // divider is ordinary, and the scroll handle is the only bright rule
-    // — so the box reads as the edge of a surface rather than as another
-    // control.
-    let mut title: Vec<TextSpan<'static>> = vec![TextSpan::raw(" ")];
-    title.extend(view.title.iter().map(styled));
-    title.push(TextSpan::raw(" "));
-    let mut surface = Surface::card().title(Line::from(title));
-    // What the surface is at the top, where it is open at the foot. The
-    // second is the one a reader comes back to, and it sits on the edge
-    // nothing else is written along.
-    if !view.caption.is_empty() {
-        let mut caption: Vec<TextSpan<'static>> = vec![TextSpan::raw(" ")];
-        caption.extend(view.caption.iter().map(styled));
-        caption.push(TextSpan::raw(" "));
-        surface = surface.caption(Line::from(caption));
-    }
-    surface.render(frame, area);
-    // The mark alone. It carried the word "close" beside it while the top
-    // edge was a whole sentence and the mark would have been lost in it;
-    // opposite one word it is the only other thing up there, and a
-    // control that says what every ✕ in every window says is a control
-    // spelling out its own glyph. The gap it punches in the hairline is
-    // as wide as the drawn mark and no wider: a hit larger than what is
-    // drawn closes the surface from a cell that looks like the frame.
-    let close = format!(" {} ", theme::glyph(Symbol::MarkClose));
-    let width = TextSpan::raw(close.as_str()).width() as u16;
-    let close_rect = Rect::new(area.right().saturating_sub(width + 1), area.y, width, 1);
-    frame.render_widget(
-        Paragraph::new(TextSpan::styled(close, theme::fg(Token::StateDanger))),
-        close_rect,
-    );
-    hits.push((close_rect, ViewHit::Close));
-
+    widget::fill(frame, area, Token::SurfaceBackground);
     if view.layout == ViewLayout::Board {
         let mut rendered = render_board(frame, view, area, scope, hits);
         rendered.content_space = board_space(area);
@@ -1037,9 +990,8 @@ fn render_navigator(
     hits: &mut Vec<(Rect, ViewHit)>,
 ) -> (NavigatorScroll, Option<Scrollbar>) {
     // Padding on the divider's side only: a column indented from the
-    // frame's own edge as well leaves its rows further in than the
-    // title and the nav above them, and there is nothing on that side
-    // for them to clear.
+    // pane's own edge as well leaves its rows further in than the nav
+    // above them, and there is nothing on that side for them to clear.
     let inner = Rule::new(Edge::Right)
         .tone(Token::BorderDefault)
         .ground(Token::SurfaceBackground)
@@ -1071,14 +1023,11 @@ fn render_navigator(
         Rect::new(inner.x, inner.y, inner.width, 1),
     );
 
-    // A row short of the column's foot, so the last file is not read
-    // against the frame's own edge — which carries the caption, and so
-    // is a line of text the list would be touching.
     let rows = Rect::new(
         inner.x,
         inner.y.saturating_add(1),
         inner.width,
-        inner.height.saturating_sub(2),
+        inner.height.saturating_sub(1),
     );
     // The groove comes out of the list's own width, so a row is never
     // drawn under the handle that would sit on top of it.
@@ -2071,9 +2020,9 @@ mod tests {
         );
     }
 
-    /// Which drawn row a board's menu lands on: the frame's own top edge
-    /// carrying the title, then the menu straight under it.
-    const MENU_ROW: usize = 1;
+    /// Which drawn row a board's menu lands on: the first, with no frame
+    /// above it.
+    const MENU_ROW: usize = 0;
 
     fn sample() -> View {
         View {
@@ -2158,66 +2107,6 @@ mod tests {
         (rows, hits)
     }
 
-    /// A list longer than its column stops a row short of the frame,
-    /// which carries the caption: a file name read against a line of
-    /// text is one the eye has to separate from it first.
-    #[test]
-    fn a_list_is_not_read_against_the_frames_own_edge() {
-        let rows: Vec<NavigatorRow> = (0..40)
-            .map(|index| NavigatorRow::Item {
-                id: index,
-                name: format!("file-{index}.rs"),
-                depth: 0,
-                marker: Span::new("", Role::Muted),
-                selected: false,
-                icon: RowIcon::None,
-            })
-            .collect();
-        let view = View {
-            title: vec![Span::new("code", Role::Muted)],
-            caption: vec![Span::new("~/repo", Role::Dim)],
-            navigator: Some(Navigator {
-                heading: String::new(),
-                badge: "40".to_owned(),
-                focused: true,
-                rows,
-                anchor: None,
-                choosing: None,
-            }),
-            content: Content::Message {
-                text: "nothing selected".to_owned(),
-                hint: None,
-                role: Role::Muted,
-            },
-            footer: Vec::new(),
-            modes: Vec::new(),
-            subjects: vec![Mode {
-                label: "Files".to_owned(),
-                active: true,
-                icon: RowIcon::None,
-            }],
-            layout: ViewLayout::Sidebar,
-            trail: Vec::new(),
-        };
-        let height = 12;
-        let (drawn, _) = draw_sized(&view, 80, height);
-        let column: Vec<String> = drawn
-            .iter()
-            .map(|row| row.chars().take(20).collect())
-            .collect();
-        let last = height as usize - 1;
-        assert!(
-            column[last - 2].contains("file-"),
-            "the list fills the column: {:?}",
-            column[last - 2]
-        );
-        assert!(
-            !column[last - 1].contains("file-"),
-            "and stops before the edge: {:?}",
-            column[last - 1]
-        );
-    }
-
     /// The control that says where you are wears the same neutral lift
     /// the board's own selector does — never the accent tint, which is
     /// what a *list* marks its selection with. One extension, two
@@ -2269,8 +2158,8 @@ mod tests {
     /// The header is one row with a question at each end: which half you
     /// are in, and how the half you are in is drawn.
     ///
-    /// The row is the frame's own — it starts under the title's first
-    /// letter and spans both columns — so switching halves, which
+    /// The row is the surface's own — it starts at the pane's edge and
+    /// spans both columns — so switching halves, which
     /// switches the layout under it, leaves every control on it exactly
     /// where it was.
     #[test]
@@ -2341,24 +2230,24 @@ mod tests {
         };
         let (rows, hits) = draw_sized(&sidebar, 80, 12);
         assert!(
-            rows[1].contains("Files") && rows[1].contains("Changes"),
-            "the halves are the row under the frame's edge: {:?}",
-            rows[1]
+            rows[0].contains("Files") && rows[0].contains("Changes"),
+            "the halves are the surface's first row: {:?}",
+            rows[0]
         );
         assert!(
-            rows[1].contains("Preview") && rows[1].contains("Source"),
+            rows[0].contains("Preview") && rows[0].contains("Source"),
             "and the ways of drawing that half ride the same row: {:?}",
-            rows[1]
+            rows[0]
         );
         assert!(
-            rows[1].find("Files") < rows[1].find("Preview"),
+            rows[0].find("Files") < rows[0].find("Preview"),
             "one question at each end: {:?}",
-            rows[1]
+            rows[0]
         );
         assert!(
-            rows[2].contains("main.rs") && !rows[2].contains("Preview"),
+            rows[1].contains("main.rs") && !rows[1].contains("Preview"),
             "the row below is the columns' own, and carries no control: {:?}",
-            rows[2]
+            rows[1]
         );
         let nav_at = |hits: &[(Rect, ViewHit)]| {
             hits.iter()
@@ -2367,18 +2256,7 @@ mod tests {
                 .expect("the halves can be pointed at")
         };
         let sidebar_at = nav_at(&hits);
-        // The chip is a filled box and the title is bare text, so it is
-        // the box's own edge that goes under the title's first letter.
-        let column_of = |row: &str, text: &str| {
-            row.find(text)
-                .map(|byte| row[..byte].chars().count() as u16)
-                .expect("drawn")
-        };
-        assert_eq!(
-            sidebar_at.0,
-            column_of(&rows[0], "code"),
-            "the row starts where the title does"
-        );
+        assert_eq!(sidebar_at, (0, 0), "flush with the pane's corner");
 
         // The map takes the frame, which is the switch that used to move
         // the control a column sideways.
@@ -2393,7 +2271,7 @@ mod tests {
             ..sidebar
         };
         let (rows, hits) = draw_sized(&board, 80, 12);
-        assert!(rows[1].contains("Files"), "the same row: {:?}", rows[1]);
+        assert!(rows[0].contains("Files"), "the same row: {:?}", rows[0]);
         assert_eq!(nav_at(&hits), sidebar_at, "at the same cell");
     }
 
@@ -2864,7 +2742,7 @@ mod tests {
             "and nothing of any other area: {}",
             rows[MENU_ROW]
         );
-        let footer = rows[usize::from(height) - 3].as_str();
+        let footer = rows[usize::from(height) - 1].as_str();
         assert!(
             footer.contains("o artifacts")
                 && footer.contains("tab next artifact")
@@ -2931,7 +2809,6 @@ mod tests {
                 .any(|(_, hit)| *hit == ViewHit::GrabNavigatorEdge),
             "the edge is one target for both of its jobs"
         );
-        assert!(hits.iter().any(|(_, hit)| *hit == ViewHit::Close));
     }
 
     /// An extension says what a row *is*; the vocabulary says what that

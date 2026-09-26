@@ -93,6 +93,10 @@ pub fn measure(host: &dyn Host, within: &Path) -> Result<Measure, String> {
             "--name-only",
             "-z",
             "--since=1.year",
+            // A year of a busy repository is tens of thousands of commits
+            // and seconds of reading; how often a file moves shows in the
+            // most recent few thousand just as well.
+            "--max-count=5000",
         ],
         &[128],
     )?;

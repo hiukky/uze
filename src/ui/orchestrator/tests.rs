@@ -6,6 +6,9 @@
 
 use super::*;
 
+#[cfg(test)]
+mod perf;
+
 mod workspace_tests {
     use crate::ui::theme::{self, Token};
 
@@ -69,7 +72,7 @@ mod workspace_tests {
 
     /// A fresh one-space session over `root`, at the size every test
     /// frame is drawn at.
-    fn session(root: impl AsRef<Path>) -> Session {
+    pub(super) fn session(root: impl AsRef<Path>) -> Session {
         Session::new(
             uze_terminal::SpaceSeat {
                 root: root.as_ref().to_path_buf(),
@@ -80,7 +83,7 @@ mod workspace_tests {
     }
 
     /// A model attached to `session` and nothing else.
-    fn model_of(session: Session) -> WorkspaceModel {
+    pub(super) fn model_of(session: Session) -> WorkspaceModel {
         WorkspaceModel {
             session: Some(session),
             ..WorkspaceModel::default()
@@ -628,7 +631,7 @@ mod workspace_tests {
         );
 
         model.session.as_mut().expect("session").select_tab(first);
-        open_code(&mut model, code::ContentMode::Contents);
+        open_code(&mut model, uze_extensions::code::ContentMode::Contents);
         answer_listing(&mut model, "/repo/.worktrees/a");
         // Walked away from the row the tree opened on, which is the part
         // that must survive the round trip.
@@ -644,7 +647,7 @@ mod workspace_tests {
 
         // Another agent's checkout is a different place, not this one.
         model.session.as_mut().expect("session").select_tab(second);
-        open_code(&mut model, code::ContentMode::Contents);
+        open_code(&mut model, uze_extensions::code::ContentMode::Contents);
         answer_listing(&mut model, "/repo/.worktrees/b");
         assert_ne!(
             model.code.as_ref().expect("open").place(),
@@ -654,7 +657,7 @@ mod workspace_tests {
         model.close_code();
 
         model.session.as_mut().expect("session").select_tab(first);
-        open_code(&mut model, code::ContentMode::Contents);
+        open_code(&mut model, uze_extensions::code::ContentMode::Contents);
         assert_eq!(
             model.code.as_ref().expect("open").place(),
             walked_to,
@@ -745,7 +748,7 @@ mod workspace_tests {
             root.clone(),
             code::CodePlace::at(&root, &root.join("src/ui/widget/row.rs"), false),
         );
-        open_code(&mut model, code::ContentMode::Contents);
+        open_code(&mut model, uze_extensions::code::ContentMode::Contents);
 
         let (sender, _receiver) = mpsc::channel();
         model.schedule_file_request(&sender);
@@ -781,7 +784,7 @@ mod workspace_tests {
         let root = PathBuf::from("/repo/.worktrees/a");
         let (mut model, first, _second) = two_agents_with_shells();
         model.session.as_mut().expect("session").select_tab(first);
-        open_code(&mut model, code::ContentMode::Contents);
+        open_code(&mut model, uze_extensions::code::ContentMode::Contents);
 
         let measured = code::Measure {
             root: root.clone(),
@@ -799,12 +802,17 @@ mod workspace_tests {
         assert!(model.code.as_ref().expect("open").has_map());
 
         model.close_code();
-        open_code(&mut model, code::ContentMode::Contents);
+        open_code(&mut model, uze_extensions::code::ContentMode::Contents);
         assert!(
             model.code.as_ref().expect("open").has_map(),
             "the map is there the moment the surface is"
         );
 
+        model
+            .code
+            .as_mut()
+            .expect("open")
+            .show(uze_extensions::code::ContentMode::Map);
         let (sender, _receiver) = mpsc::channel();
         model.schedule_code_measure(&sender);
         assert!(
@@ -813,14 +821,11 @@ mod workspace_tests {
         );
     }
 
-    /// The header row is the first row inside the frame, and the control
-    /// that says which half you are in stands where the heading did.
-    ///
-    /// A blank row between the frame's own edge and a row of controls
-    /// left those controls belonging to neither, and the list's heading
-    /// named the half it was already the only thing showing.
+    /// The header row is the pane's first row, and the control that says
+    /// which half you are in stands where the heading did — the list's
+    /// heading named the half it was already the only thing showing.
     #[test]
-    fn the_code_header_is_one_row_in_and_carries_the_control() {
+    fn the_code_header_is_the_panes_first_row_and_carries_the_control() {
         use uze_extensions::{DirEntry, ExtensionHit, code, view::ViewHit};
 
         let root = PathBuf::from("/repo");
@@ -853,18 +858,19 @@ mod workspace_tests {
         model.code = Some(view);
 
         let rows = frame_rows(&mut model);
+        let layout = full_frame(&mut model);
+        let header = layout.pane.y as usize;
         assert!(
-            rows[1].contains("Files") && rows[1].contains("Map"),
-            "the control is on the row under the frame's edge: {:?}",
-            rows[1]
+            rows[header].contains("Files") && rows[header].contains("Map"),
+            "the control is on the pane's first row: {:?}",
+            rows[header]
         );
         assert!(
-            !rows[1].contains("FILES"),
+            !rows[header].contains("FILES"),
             "and the heading it replaced is gone: {:?}",
-            rows[1]
+            rows[header]
         );
 
-        full_frame(&mut model);
         let control = model.hits.iter().find(|(_, hit)| {
             matches!(
                 hit,
@@ -872,7 +878,231 @@ mod workspace_tests {
             )
         });
         let (rect, _) = control.expect("the control can be pointed at");
-        assert_eq!(rect.y, 1, "on that same row");
+        assert_eq!(rect.y as usize, header, "on that same row");
+    }
+
+    /// An open surface stands where the pane is: the sidebar and the
+    /// strip are still drawn and still answer, and nothing the surface
+    /// draws reaches outside the pane's own rectangle.
+    #[test]
+    fn an_open_surface_is_drawn_where_the_pane_is() {
+        let (mut model, first, _second) = two_agents_with_shells();
+        model.session.as_mut().expect("session").select_tab(first);
+        open_code(&mut model, uze_extensions::code::ContentMode::Contents);
+
+        let layout = full_frame(&mut model);
+        let extension_hits: Vec<Rect> = model
+            .hits
+            .iter()
+            .filter(|(_, hit)| matches!(hit, WorkspaceHit::Extension(ExtensionHit::Code(_))))
+            .map(|(rect, _)| *rect)
+            .collect();
+        assert!(!extension_hits.is_empty(), "the surface is drawn");
+        assert!(
+            extension_hits
+                .iter()
+                .all(|rect| layout.pane.intersection(*rect) == *rect),
+            "inside the pane: {extension_hits:?} vs {:?}",
+            layout.pane
+        );
+        assert!(
+            model
+                .hits
+                .iter()
+                .any(|(_, hit)| *hit == WorkspaceHit::SelectTab(first)),
+            "the strip and the sidebar are still there to be clicked"
+        );
+    }
+
+    /// The strip lights one thing, the one in the pane: the selected tab,
+    /// or — while a surface stands over it — that surface's button.
+    #[test]
+    fn the_strip_lights_one_thing_the_one_in_the_pane() {
+        let (mut model, first, _second) = two_agents_with_shells();
+        model.session.as_mut().expect("session").select_tab(first);
+        let raised = crate::ui::theme::color(Token::SurfaceRaised);
+        let lit = crate::ui::theme::color(Token::TextBright);
+        let ink = crate::ui::theme::color(Token::SurfaceBackground);
+        let resting = crate::ui::theme::color(Token::TextSecondary);
+
+        let tab = hit_rect(&model, WorkspaceHit::SelectTab(first));
+        let button = hit_rect(&model, WorkspaceHit::OpenFiles);
+        assert_eq!(chip_colors(&model, tab).1, raised, "the tab, at first");
+        assert_eq!(chip_colors(&model, button), (resting, raised));
+
+        open_code(&mut model, uze_extensions::code::ContentMode::Contents);
+        let tab = hit_rect(&model, WorkspaceHit::SelectTab(first));
+        let button = hit_rect(&model, WorkspaceHit::OpenFiles);
+        assert_ne!(chip_colors(&model, tab).1, raised, "the tab gives it up");
+        assert_eq!(
+            chip_colors(&model, button),
+            (ink, lit),
+            "to the surface, filled"
+        );
+    }
+
+    /// Each surface's chord leads to it from the other, without closing
+    /// first: the pane shows one surface, and the keys walk between them.
+    /// Only the chord of the half already showing closes it.
+    #[test]
+    fn the_surface_chords_walk_between_surfaces_without_closing_first() {
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        use uze_extensions::code::CodeView;
+        let home = UzeHome::at(uze_testkit::temp::scratch("orchestrator-surface-chords"));
+        let (mut model, first, _second) = two_agents_with_shells();
+        model.session.as_mut().expect("session").select_tab(first);
+        let mut driven = driven(model, &home);
+        let showing = |driven: &Driven<'_>| {
+            let model = &driven.attach.model;
+            match (
+                model.code.as_ref().map(CodeView::showing),
+                model.architect.is_some(),
+            ) {
+                (Some(mode), false) => format!("code {mode:?}"),
+                (None, true) => "architect".to_owned(),
+                (None, false) => "pane".to_owned(),
+                (Some(_), true) => panic!("two surfaces at once"),
+            }
+        };
+        for (key, expected) in [
+            ('e', "code Contents"),
+            ('g', "code Diff"),
+            ('e', "code Contents"),
+            ('a', "architect"),
+            ('g', "code Diff"),
+            ('a', "architect"),
+            ('e', "code Contents"),
+            ('e', "pane"),
+            ('g', "code Diff"),
+            ('g', "pane"),
+            ('a', "architect"),
+            ('a', "pane"),
+        ] {
+            driven.frame();
+            driven.press_key(KeyEvent::new(KeyCode::Char(key), KeyModifiers::ALT));
+            assert_eq!(showing(&driven), expected, "after alt+{key}");
+        }
+    }
+
+    /// The lit button is the surface, whichever half of it is showing:
+    /// one click puts it away. It used to be the files door, so from the
+    /// changes it switched to the files and only a second click closed.
+    #[test]
+    fn a_lit_surface_button_closes_it_in_one_click() {
+        let home = UzeHome::at(uze_testkit::temp::scratch("orchestrator-lit-button"));
+        let (mut model, first, _second) = two_agents_with_shells();
+        model.session.as_mut().expect("session").select_tab(first);
+        open_code(&mut model, uze_extensions::code::ContentMode::Diff);
+        let mut driven = driven(model, &home);
+        driven.frame();
+
+        let button = driven
+            .attach
+            .model
+            .hits
+            .iter()
+            .find(|(_, hit)| *hit == WorkspaceHit::OpenFiles)
+            .map(|(rect, _)| *rect)
+            .expect("the code button");
+        driven.press(button.x, button.y);
+        assert!(driven.attach.model.code.is_none(), "closed in one click");
+    }
+
+    /// A surface's button is a switch: the press is answered by it
+    /// lighting or going out, and no press flash is drawn between the
+    /// two — that flash was a third look, between lit and unlit.
+    #[test]
+    fn a_surface_button_goes_out_without_a_press_flash() {
+        let (mut model, first, _second) = two_agents_with_shells();
+        model.session.as_mut().expect("session").select_tab(first);
+        open_code(&mut model, uze_extensions::code::ContentMode::Contents);
+        model.close_code();
+        model.pressed = Some((WorkspaceHit::OpenFiles, std::time::Instant::now()));
+        model.hovered = Some(WorkspaceHit::OpenFiles);
+
+        let button = hit_rect(&model, WorkspaceHit::OpenFiles);
+        assert_eq!(
+            chip_colors(&model, button),
+            (
+                crate::ui::theme::color(Token::TextSecondary),
+                crate::ui::theme::color(Token::SurfaceHover)
+            ),
+            "straight to what a pointer over it looks like"
+        );
+    }
+
+    /// Two quick clicks on a switch are two presses: it opens, then puts
+    /// the surface away. The second used to be read as a double click,
+    /// which a surface button has no meaning for, and was dropped.
+    #[test]
+    fn two_quick_clicks_on_a_surface_button_open_and_close_it() {
+        let home = UzeHome::at(uze_testkit::temp::scratch("orchestrator-quick-clicks"));
+        let (mut model, first, _second) = two_agents_with_shells();
+        model.session.as_mut().expect("session").select_tab(first);
+        let mut driven = driven(model, &home);
+        driven.frame();
+        let button = driven
+            .attach
+            .model
+            .hits
+            .iter()
+            .find(|(_, hit)| *hit == WorkspaceHit::OpenFiles)
+            .map(|(rect, _)| *rect)
+            .expect("the code button");
+
+        driven.press(button.x, button.y);
+        assert!(driven.attach.model.code.is_some(), "the first opens");
+        driven.frame();
+        driven.press(button.x, button.y);
+        assert!(driven.attach.model.code.is_none(), "the second closes");
+    }
+
+    /// Choosing a tab is choosing to see it — the one already in front
+    /// included, which is how the pane is had back from a surface.
+    #[test]
+    fn choosing_a_tab_puts_the_open_surface_away() {
+        let home = UzeHome::at(uze_testkit::temp::scratch("orchestrator-surface-tab"));
+        let (mut model, first, _second) = two_agents_with_shells();
+        model.session.as_mut().expect("session").select_tab(first);
+        open_code(&mut model, uze_extensions::code::ContentMode::Contents);
+        let mut driven = driven(model, &home);
+        driven.frame();
+
+        let tab = driven
+            .attach
+            .model
+            .hits
+            .iter()
+            .find(|(_, hit)| *hit == WorkspaceHit::SelectTab(first))
+            .map(|(rect, _)| *rect)
+            .expect("the agent's own row");
+        driven.press(tab.x, tab.y);
+        assert!(driven.attach.model.code.is_none());
+    }
+
+    /// A surface is about the tab it was opened on. Another tab coming to
+    /// the front — by whatever way it got there — takes the pane back.
+    #[test]
+    fn another_tab_in_front_puts_the_open_surface_away() {
+        let (mut model, first, second) = two_agents_with_shells();
+        model.session.as_mut().expect("session").select_tab(first);
+        open_architect(&mut model);
+
+        let mut session = model.session.clone().expect("session");
+        session.rename_tab(first, "renamed".to_owned());
+        model.apply(
+            ClientEvent::SessionUpdated { session },
+            &identities_fixture(),
+        );
+        assert!(model.architect.is_some(), "the same tab in front keeps it");
+
+        let mut session = model.session.clone().expect("session");
+        session.select_tab(second);
+        model.apply(
+            ClientEvent::SessionUpdated { session },
+            &identities_fixture(),
+        );
+        assert!(model.architect.is_none());
     }
 
     /// A click on the map lands on the column the pointer is over.
@@ -889,7 +1119,7 @@ mod workspace_tests {
         let root = PathBuf::from("/repo/.worktrees/a");
         let (mut model, first, _second) = two_agents_with_shells();
         model.session.as_mut().expect("session").select_tab(first);
-        open_code(&mut model, code::ContentMode::Contents);
+        open_code(&mut model, uze_extensions::code::ContentMode::Contents);
         let view = model.code.as_mut().expect("the surface is open");
         view.absorb_measure(code::Measure {
             root,
@@ -3832,6 +4062,7 @@ mod workspace_tests {
         model.remembered.git_pending = Some(PathBuf::from("/elsewhere"));
 
         let changed = model.absorb_git_read(GitResolution {
+            took: Duration::ZERO,
             cwd: PathBuf::from("/elsewhere"),
             answer: GitAnswer::Full {
                 summary: None,
@@ -3867,6 +4098,7 @@ mod workspace_tests {
             .map(|badge| badge.timeline_checked_at);
 
         let changed = model.absorb_git_read(GitResolution {
+            took: Duration::ZERO,
             cwd: PathBuf::from("/repo"),
             answer: GitAnswer::Summary(Some(uze_extensions::code::ChangeSummary {
                 additions: 2,
@@ -7445,8 +7677,8 @@ mod workspace_tests {
     /// One attached client, driven the way the real loop drives it: hits
     /// from a real frame, a socket pair standing in for the server, and
     /// the channels a background read answers through.
-    struct Driven<'a> {
-        attach: Attach<'a>,
+    pub(super) struct Driven<'a> {
+        pub(super) attach: Attach<'a>,
         server: std::os::unix::net::UnixStream,
         events: std::sync::mpsc::Receiver<ClientEvent>,
         /// The reader thread's end, held so the channel stays connected.
@@ -7466,14 +7698,14 @@ mod workspace_tests {
         /// margin — the manage modal takes the whole frame below
         /// `management::ROOMY_*`, so the gestures that need something
         /// beside it need a screen that has one.
-        fn on_a_roomy_terminal(mut self) -> Self {
+        pub(super) fn on_a_roomy_terminal(mut self) -> Self {
             self.area = Rect::new(0, 0, 120, 40);
             self
         }
 
         /// Draws the frame the next click is tested against, storing its
         /// hits on the model exactly as the attach loop does.
-        fn frame(&mut self) {
+        pub(super) fn frame(&mut self) {
             full_frame_at(&mut self.attach.model, self.area);
         }
 
@@ -7497,7 +7729,7 @@ mod workspace_tests {
         }
 
         /// One key, through the same dispatch the attach loop uses.
-        fn press_key(&mut self, key: crossterm::event::KeyEvent) {
+        pub(super) fn press_key(&mut self, key: crossterm::event::KeyEvent) {
             let area = self.area;
             let layout = compute_layout(area, self.attach.model.sidebar_width);
             let viewport = Viewport {
@@ -7513,7 +7745,7 @@ mod workspace_tests {
 
         /// One turn of everything that is not an event — what absorbs a
         /// placement once its thread has answered.
-        fn pump(&mut self) -> Flow {
+        pub(super) fn pump(&mut self) -> Flow {
             self.attach.pump(&self.events)
         }
 
@@ -7588,7 +7820,7 @@ mod workspace_tests {
         }
     }
 
-    fn driven(model: WorkspaceModel, home: &UzeHome) -> Driven<'_> {
+    pub(super) fn driven(model: WorkspaceModel, home: &UzeHome) -> Driven<'_> {
         let (client, server) = std::os::unix::net::UnixStream::pair().unwrap();
         let (events, events_rx) = std::sync::mpsc::channel();
         Driven {
@@ -7814,9 +8046,11 @@ mod workspace_tests {
         });
         let mut model = model_of(session("/repo"));
         model.architect = Some(view);
-        let mut driven = driven(model, &home);
+        // Roomy, because the board is drawn beside the sidebar: at the
+        // default width the menu has no room to name what it chooses.
+        let mut driven = driven(model, &home).on_a_roomy_terminal();
 
-        let space = crate::ui::extension_view::board_space(Rect::new(0, 0, 80, 24));
+        let space = crate::ui::extension_view::board_space(compute_layout(driven.area, None).pane);
         let highlighted = |driven: &Driven<'_>| {
             architect::view(driven.attach.model.architect.as_ref().unwrap(), space)
                 .navigator
@@ -9968,7 +10202,7 @@ mod prompt_buffer_tests {
     }
 }
 
-/// A door pressed twice closes. `ctrl+e` on a surface already showing
+/// A door pressed twice closes. `alt+e` on a surface already showing
 /// files used to re-show them, which is indistinguishable from a key that
 /// does nothing — and the action is called a toggle.
 #[test]
@@ -9990,6 +10224,12 @@ fn a_code_door_pressed_on_the_surface_it_opened_closes_it() {
     assert_eq!(
         code_door(Some(ContentMode::Diff), ContentMode::Contents),
         CodeDoor::Switch
+    );
+    // A document in its preview is the files half all the same: the
+    // files door shuts it rather than turning it back into source.
+    assert_eq!(
+        code_door(Some(ContentMode::Preview), ContentMode::Contents),
+        CodeDoor::Close
     );
     // With nothing open, this scope is not live at all — the workspace's
     // own binding is what opens the surface.

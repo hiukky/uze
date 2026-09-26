@@ -545,6 +545,62 @@ fn a_diff_that_has_not_moved_is_not_coloured_again() {
     );
 }
 
+/// Moving the selection costs the one diff it asks for: never a `status`
+/// of the whole checkout, which on a large repository is the difference
+/// between a click and a wait.
+#[test]
+fn moving_the_selection_reads_one_diff_and_no_status() {
+    let host = StillRepository {
+        diffs: std::cell::Cell::new(0),
+    };
+    let mut open = fixture();
+    press(&mut open, Command::SelectPrevious);
+    let request = open
+        .diff_request()
+        .expect("the moved selection is owed a diff");
+
+    let answer = CodeView::read_diff(&host, &PathBuf::from("/repo"), request);
+    open.absorb_diff(answer);
+
+    assert_eq!(host.diffs.get(), 1);
+    assert!(
+        !open.diff_pending(),
+        "the diff on screen is the selection's"
+    );
+    assert!(!open.changes.diff.is_empty());
+    assert!(open.diff_request().is_none(), "and nothing more is owed");
+}
+
+/// A periodic re-read asked for before the selection moved lands after
+/// the selection's own diff did. It brings the list, and leaves the diff
+/// on screen alone — wiping it would show the viewer an empty file and
+/// ask for the same diff twice.
+#[test]
+fn a_refresh_from_before_the_selection_moved_keeps_the_new_diff() {
+    let host = StillRepository {
+        diffs: std::cell::Cell::new(0),
+    };
+    let mut open = fixture();
+    let before = open.placement();
+    press(&mut open, Command::SelectPrevious);
+    let request = open.diff_request().expect("owed a diff");
+    open.absorb_diff(CodeView::read_diff(&host, &PathBuf::from("/repo"), request));
+    let shown = open.changes.diff.len();
+
+    let files = open.changes.files.clone();
+    open.absorb_changes(RefreshedChanges {
+        placement: before,
+        branch: "main".to_owned(),
+        changes: Changes {
+            files,
+            ..Changes::default()
+        },
+    });
+
+    assert_eq!(open.changes.diff.len(), shown, "the new diff stays");
+    assert!(!open.diff_pending(), "and is not asked for again");
+}
+
 /// A filesystem that only ever existed in memory, so these prove the
 /// surface's own behaviour rather than a temp directory's.
 #[derive(Default)]
@@ -1067,6 +1123,37 @@ fn moving_to_another_file_in_the_tree_asks_for_its_diff() {
     assert!(view.diff_pending(), "and so did the click");
 }
 
+/// The second colouring pass runs beside the reads rather than behind
+/// them, so it can land after a save and its re-read of the same file.
+/// Colour read from the text before is colour for text nobody holds.
+#[test]
+fn colour_read_from_an_older_text_is_not_installed() {
+    let machine = FakeMachine::default().with_file("/w/notes.txt", "two\n");
+    let mut view = files_at("/w");
+    settle(&mut view, &machine);
+    press(&mut view, Command::Activate);
+    settle(&mut view, &machine);
+
+    view.absorb(FileAnswer::Coloured {
+        path: PathBuf::from("/w/notes.txt"),
+        file: Ok(LoadedFile::of("one\n")),
+    });
+    assert_eq!(
+        view.open.as_ref().map(|open| open.lines.clone()),
+        Some(vec!["two".to_owned()]),
+        "the text on screen is the newer one"
+    );
+
+    view.absorb(FileAnswer::Coloured {
+        path: PathBuf::from("/w/notes.txt"),
+        file: Ok(LoadedFile::of("two\n")),
+    });
+    assert!(
+        view.open.as_ref().is_some_and(|open| !open.partial),
+        "colour for the same text is taken"
+    );
+}
+
 /// An answer names the file it is about, so one that lands after the
 /// viewer opened something else is dropped.
 #[test]
@@ -1414,7 +1501,7 @@ fn reopening_a_checkout_returns_to_where_the_viewer_was() {
 }
 
 /// The door still decides what the surface is showing. A place that
-/// carried the mode would make `Ctrl+G` mean "wherever I was last time",
+/// carried the mode would make `Alt+G` mean "wherever I was last time",
 /// which is the one thing a door must not mean.
 #[test]
 fn a_restored_place_does_not_outrank_the_door_it_came_through() {
@@ -1741,11 +1828,13 @@ fn a_tile_followed_on_the_map_is_the_file_the_surface_goes_back_to() {
     view.show(ContentMode::Contents);
     assert!(!view.has_map(), "nothing measured yet");
     press(&mut view, Command::ToggleMap);
-    assert_ne!(view.showing(), ContentMode::Map, "and nothing to show");
+    assert_eq!(view.showing(), ContentMode::Map, "entered all the same");
+    assert!(
+        view.wants_measure(),
+        "which is what asks for the measurement"
+    );
 
     view.absorb_measure(measured());
-    press(&mut view, Command::ToggleMap);
-    assert_eq!(view.showing(), ContentMode::Map);
 
     let tile = |view: &CodeView, path: &str| {
         view.map_view()

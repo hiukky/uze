@@ -4658,13 +4658,13 @@ fn a_key_that_would_break_something_is_refused_with_the_reason() {
     model.key_screen.selected = row;
     model.keys_capture = true;
 
-    // `ctrl+g` already opens the changes in this same keyboard.
-    model.apply_key(KeyEvent::new(KeyCode::Char('g'), KeyModifiers::CONTROL));
+    // `alt+g` already opens the changes in this same keyboard.
+    model.apply_key(KeyEvent::new(KeyCode::Char('g'), KeyModifiers::ALT));
     assert!(
         model
             .keys_problem
             .as_deref()
-            .is_some_and(|problem| problem.contains("ctrl+g")),
+            .is_some_and(|problem| problem.contains("alt+g")),
         "{:?}",
         model.keys_problem
     );
@@ -4680,7 +4680,7 @@ fn a_key_that_would_break_something_is_refused_with_the_reason() {
         model
             .keys_probe
             .as_deref()
-            .is_some_and(|probe| probe.contains("ctrl+g")),
+            .is_some_and(|probe| probe.contains("alt+g")),
         "{:?}",
         model.keys_probe
     );

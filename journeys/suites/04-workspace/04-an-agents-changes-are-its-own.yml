@@ -67,7 +67,7 @@ scenes:
 
   - scene: deleting from the selected agent's changes touches its checkout alone
     when:
-      - key: "C-g"
+      - key: "M-g"
         say: open the changes of the selected agent
         # The half is named by the nav, which is drawn whichever half is
         # up; what says this one opened is the diff it is read in.

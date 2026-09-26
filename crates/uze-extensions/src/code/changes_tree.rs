@@ -49,8 +49,8 @@ impl FileTreeItem {
 /// Builds a stable, compact change navigator from repository-relative paths.
 /// The model retains a flat `files` vec because diff loading and selection
 /// are file-oriented; this projection is strictly presentation state.
-pub(super) fn file_tree_items(changes: &Changes, root: &Path) -> Vec<FileTreeItem> {
-    tree_items(changes, root, &changes.folded)
+pub(super) fn file_tree_items(changes: &Changes, root: &Path) -> std::sync::Arc<Vec<FileTreeItem>> {
+    changes.tree(root)
 }
 
 /// The navigator's rows with `folded` directories shut — the view's own

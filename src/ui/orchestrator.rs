@@ -68,6 +68,17 @@ const TIMELINE_COMMITS: usize = 30;
 /// not move at the pace a working tree does.
 const TIMELINE_REFRESH: Duration = Duration::from_secs(3);
 
+/// How far apart two reads of the same thing are kept: never closer than
+/// `floor`, and never closer than a few times what the last one took.
+///
+/// A fixed period assumes the read is cheap. On a large checkout a
+/// `status` takes longer than the period itself, and a read that starts
+/// the moment the last one ends is a core spent on Git for as long as the
+/// workspace is open — for an answer that changes a few times a minute.
+fn paced(floor: Duration, took: Duration) -> Duration {
+    floor.max(took * uze_extensions::code::PACE)
+}
+
 /// The same frames configure the hidden `indicatif` spinner that schedules
 /// this animation. Ratatui owns the alternate screen, so it paints the frame
 /// instead of letting indicatif write to stderr.
@@ -681,6 +692,8 @@ enum GitAnswer {
 struct GitResolution {
     cwd: PathBuf,
     answer: GitAnswer,
+    /// How long the read took — what the next one waits in proportion to.
+    took: Duration,
 }
 
 /// Reads the badge — and, when `history` is set, the timeline behind it —
@@ -701,6 +714,7 @@ fn spawn_git_read(
     thread::spawn(move || {
         let _parent = parent.enter();
         let _span = tracing::debug_span!("tui.git_read").entered();
+        let started = Instant::now();
         let answer = answered_or(
             || {
                 let summary = code::change_summary(&WorkspaceHost, &cwd);
@@ -720,7 +734,8 @@ fn spawn_git_read(
             },
             GitAnswer::Summary(None),
         );
-        let _ = sender.send(GitResolution { cwd, answer });
+        let took = started.elapsed();
+        let _ = sender.send(GitResolution { cwd, answer, took });
     });
 }
 
@@ -966,6 +981,13 @@ struct ChangesResolution {
     refreshed: code::RefreshedChanges,
 }
 
+/// One file's diff, read because the selection moved — tagged like a
+/// refresh, and dropped by the view if the selection has moved again.
+struct DiffResolution {
+    root: PathBuf,
+    answer: code::DiffAnswer,
+}
+
 /// One answered [`code::FileRequest`], tagged the same way and for the
 /// same reason: an answer landing after the viewer moved to another tab
 /// describes a tree nobody is looking at any more.
@@ -989,6 +1011,26 @@ fn spawn_file_request(
         let silence = code::unanswered(&request, "reading it failed");
         let answer = answered_or(|| code::fulfill(&WorkspaceHost, request), silence);
         let _ = sender.send(FileResolution { root, answer });
+    });
+}
+
+/// One diff, on its own: moving the selection is a `git diff` of that
+/// file, never a `status` of the whole checkout in front of it.
+fn spawn_diff_read(
+    root: PathBuf,
+    request: code::DiffRequest,
+    sender: mpsc::Sender<DiffResolution>,
+) {
+    let parent = tracing::Span::current();
+    thread::spawn(move || {
+        let _parent = parent.enter();
+        let _span = tracing::debug_span!("tui.code_diff_read").entered();
+        let silence = code::DiffAnswer::failed(&request, "reading the diff failed".to_owned());
+        let answer = answered_or(
+            || code::CodeView::read_diff(&WorkspaceHost, &root, request),
+            silence,
+        );
+        let _ = sender.send(DiffResolution { root, answer });
     });
 }
 
@@ -2311,6 +2353,7 @@ struct Channels {
     commit_details: Answers<CommitDetailResolution>,
     release_notes: Answers<ReleaseNotesResolution>,
     code_changes: Answers<ChangesResolution>,
+    code_diffs: Answers<DiffResolution>,
     /// The surface's file reads and writes, off-thread for the same
     /// reason its changes are.
     code_files: Answers<FileResolution>,
@@ -2359,6 +2402,8 @@ struct Remembered {
     /// The checkout a background Git read is out for, so the workspace
     /// asks once rather than once per frame — see [`spawn_git_read`].
     git_pending: Option<PathBuf>,
+    /// How long the last of those reads took (see [`paced`]).
+    git_took: Duration,
     /// Per-pane reconstruction of the line being typed, flushed on Enter.
     prompt_buffers: BTreeMap<PaneId, PromptBuffer>,
     /// Where the viewer was on each checkout's code surface, keyed by the
@@ -2554,16 +2599,22 @@ struct WorkspaceModel {
     /// Open state of the right-click close-confirmation popup; `None` when
     /// closed. Same "click outside discards" rule as `renaming`.
     context_menu: Option<ContextMenu>,
-    /// Open state of the code surface; `None` when closed. Unlike
-    /// `renaming`/`agent_picker`/`context_menu` there is no "click outside
-    /// discards" rule — it covers the full frame, so there is no outside;
-    /// `Esc` (or either shortcut that opens it) is the only dismissal.
+    /// Open state of the code surface; `None` when closed. Drawn where the
+    /// pane is, with the sidebar and the strip live around it — so unlike
+    /// `renaming`/`agent_picker`/`context_menu` a click outside it is not a
+    /// dismissal but a click on whatever it landed on. `Esc`, either
+    /// shortcut that opens it, or putting another tab in front closes it.
     code: Option<code::CodeView>,
     /// Open state of the architect surface. It borrows the code surface's
     /// frame — the navigator width, its scroll, the scrollbars — because
     /// the two are never open together and the frame is the host's, not
     /// either extension's.
     architect: Option<architect::ArchitectView>,
+    /// The tab the open surface stands in for. It is drawn where that
+    /// tab's pane is, about that tab's checkout, so a different tab coming
+    /// to the front — however it got there — puts it away rather than
+    /// leaving it answering for a checkout nobody is looking at.
+    extension_tab: Option<TabId>,
     /// The diagram held by the pointer. A press on it is not yet a click
     /// or a drag — the first movement says which, as it does for
     /// [`EdgeDrag`] — so the click it might turn out to be is kept here
@@ -2617,6 +2668,10 @@ struct WorkspaceModel {
     /// whether one of its file requests is. Two flags because the two
     /// halves have two cadences and can be in flight at once.
     code_changes_pending: bool,
+    /// Whether a one-file diff read is out. Its own flag, apart from the
+    /// refresh's: a click must not wait behind a `status` it does not
+    /// need.
+    code_diff_pending: bool,
     code_request_pending: bool,
     /// The checkout the map's measurement was asked about. Not a flag:
     /// the answer outside a repository is nothing, and a flag cleared on
@@ -2844,11 +2899,13 @@ impl WorkspaceModel {
                 self.session = Some(session);
                 self.panes.clear();
                 self.note_strip_selection(identities);
+                self.close_extension_left_behind();
                 self.occupancy_stale = true;
             }
             ClientEvent::SessionUpdated { session } => {
                 self.session = Some(session);
                 self.note_strip_selection(identities);
+                self.close_extension_left_behind();
                 self.prune_dragging_tab();
                 self.prune_dragging_space();
                 self.occupancy_stale = true;
@@ -3002,6 +3059,13 @@ impl WorkspaceModel {
     /// that isn't already claimed by one of them straight into the focused
     /// pane's PTY instead of dropping it.
     fn no_modal_open(&self) -> bool {
+        self.chrome_answers() && self.code.is_none() && self.architect.is_none()
+    }
+
+    /// Whether the sidebar and the strip answer the pointer: nothing is
+    /// drawn over them. An open extension is not — it stands where the
+    /// pane is, and only the pane is covered.
+    fn chrome_answers(&self) -> bool {
         self.renaming.is_none()
             && self.root_picker.is_none()
             && self.agent_picker.is_none()
@@ -3009,8 +3073,6 @@ impl WorkspaceModel {
             && self.status_catalog.is_none()
             && self.preserved.is_none()
             && self.context_menu.is_none()
-            && self.code.is_none()
-            && self.architect.is_none()
             && self.action_index.is_none()
             && self.release_notes.is_none()
             && self.manage.is_none()
@@ -3851,8 +3913,9 @@ impl WorkspaceModel {
             .git_badge
             .as_ref()
             .filter(|badge| badge.cwd == cwd);
+        let every = paced(GIT_BADGE_REFRESH, self.remembered.git_took);
         let summary_fresh =
-            current.is_some_and(|badge| now.duration_since(badge.checked_at) < GIT_BADGE_REFRESH);
+            current.is_some_and(|badge| now.duration_since(badge.checked_at) < every);
         let timeline_fresh = current
             .is_some_and(|badge| now.duration_since(badge.timeline_checked_at) < TIMELINE_REFRESH);
         if summary_fresh && timeline_fresh {
@@ -3873,6 +3936,7 @@ impl WorkspaceModel {
         if self.remembered.git_pending.as_ref() == Some(&resolution.cwd) {
             self.remembered.git_pending = None;
         }
+        self.remembered.git_took = resolution.took;
         if self.focused_cwd().as_ref() != Some(&resolution.cwd) {
             return false;
         }
@@ -3939,10 +4003,16 @@ impl WorkspaceModel {
 
     /// Hands the surface's file requests to threads.
     ///
-    /// Everything that reads, writes or colours a *file* stays
-    /// serialised: a save followed by the re-read that re-colours it must
-    /// land in that order, and two reads racing would let the older one
-    /// describe the newer one's file.
+    /// Everything that reads or writes a *file* stays serialised: a save
+    /// followed by the re-read that re-colours it must land in that
+    /// order, and two reads racing would let the older one describe the
+    /// newer one's file.
+    ///
+    /// The second colouring pass is not in that chain. It is the slowest
+    /// request there is — seconds for a long file — and the next file
+    /// opened used to wait behind the colour of the one being left. It
+    /// cannot describe a newer file than the one on screen, because the
+    /// view installs colour only for the text it already holds.
     ///
     /// Listings are not in that chain. They answer about directories
     /// nothing else in the queue names, they cost a `readdir` each, and
@@ -3957,7 +4027,10 @@ impl WorkspaceModel {
         let root = view.root().to_path_buf();
         loop {
             let listing = match view.peek_request() {
-                Some(code::FileRequest::List(_)) => true,
+                // A second colouring pass is off the chain too: it is the
+                // slowest request there is, and a file opened after it
+                // must not wait for the colour of one being left.
+                Some(code::FileRequest::List(_) | code::FileRequest::Colour(_)) => true,
                 // The chain is busy, and the queue is in the order the
                 // surface asked: stopping here rather than looking past
                 // it is what keeps a save ahead of the read that follows
@@ -3999,7 +4072,10 @@ impl WorkspaceModel {
         // A listing never took the chain, so it does not release it — a
         // pass that let one clear a read's reservation would put the next
         // read alongside the read it has to follow.
-        if !matches!(resolution.answer, code::FileAnswer::Listed { .. }) {
+        if !matches!(
+            resolution.answer,
+            code::FileAnswer::Listed { .. } | code::FileAnswer::Coloured { .. }
+        ) {
             self.code_request_pending = false;
         }
         let Some(view) = self
@@ -4013,6 +4089,34 @@ impl WorkspaceModel {
         true
     }
 
+    /// Asks for the selection's diff alone, the moment it moved.
+    fn schedule_diff_read(&mut self, sender: &mpsc::Sender<DiffResolution>) {
+        if self.code_diff_pending {
+            return;
+        }
+        let Some(view) = self.code.as_ref() else {
+            return;
+        };
+        let Some(request) = view.diff_request() else {
+            return;
+        };
+        self.code_diff_pending = true;
+        spawn_diff_read(view.root().to_path_buf(), request, sender.clone());
+    }
+
+    fn absorb_diff(&mut self, resolution: DiffResolution) -> bool {
+        self.code_diff_pending = false;
+        let Some(view) = self
+            .code
+            .as_mut()
+            .filter(|view| view.root() == resolution.root)
+        else {
+            return false;
+        };
+        view.absorb_diff(resolution.answer);
+        true
+    }
+
     /// Asks for the changes half again, on its own cadence.
     fn schedule_changes_refresh(&mut self, sender: &mpsc::Sender<ChangesResolution>) {
         if self.code_changes_pending {
@@ -4021,9 +4125,11 @@ impl WorkspaceModel {
         let Some(view) = self.code.as_ref() else {
             return;
         };
-        // A moved selection is asked for at once; the periodic re-read is
-        // what the cadence governs.
-        if !view.diff_pending() && !view.refresh_due() {
+        // The periodic re-read is what the cadence governs. A moved
+        // selection is the one-file read's, unless there is no list yet
+        // to find it in — the first read is a whole one.
+        let first = view.diff_pending() && view.diff_request().is_none();
+        if !first && !view.refresh_due() {
             return;
         }
         self.code_changes_pending = true;
@@ -4048,7 +4154,7 @@ impl WorkspaceModel {
     /// being in flight: outside a repository the answer is nothing, and
     /// nothing must not be asked for again.
     fn schedule_code_measure(&mut self, sender: &mpsc::Sender<MeasureResolution>) {
-        let Some(view) = self.code.as_ref() else {
+        let Some(view) = self.code.as_ref().filter(|view| view.wants_measure()) else {
             return;
         };
         let root = view.root().to_path_buf();
@@ -4073,7 +4179,15 @@ impl WorkspaceModel {
     /// checkout it was measured from.
     fn absorb_measure(&mut self, resolution: MeasureResolution) -> bool {
         let Some(measure) = resolution.measure else {
-            return false;
+            let Some(view) = self
+                .code
+                .as_mut()
+                .filter(|view| view.root() == resolution.root)
+            else {
+                return false;
+            };
+            view.absorb_unmeasurable();
+            return true;
         };
         // Kept whether or not there is still a surface to show it: the
         // next one to open on this checkout is the reason it was worth
@@ -5065,6 +5179,32 @@ impl WorkspaceModel {
         };
         self.remembered.architect_places.insert(root, view.place());
     }
+
+    /// Closes whichever surface is standing in the pane.
+    fn close_extension(&mut self) {
+        self.close_code();
+        self.close_architect();
+    }
+
+    /// Closes the open surface once its tab is no longer the one in front.
+    fn close_extension_left_behind(&mut self) {
+        let in_front = self
+            .session
+            .as_ref()
+            .map(|session| session.selected_tab().id);
+        if in_front != self.extension_tab {
+            self.close_extension();
+        }
+    }
+
+    /// Notes the tab in front as the one a surface opening now stands in
+    /// for.
+    fn stand_extension_in_front(&mut self) {
+        self.extension_tab = self
+            .session
+            .as_ref()
+            .map(|session| session.selected_tab().id);
+    }
 }
 
 fn open_architect(model: &mut WorkspaceModel) {
@@ -5075,6 +5215,7 @@ fn open_architect(model: &mut WorkspaceModel) {
     model.close_code();
     let place = model.remembered.architect_places.get(&root).cloned();
     let display_root = crate::ui::display_project_path(&root);
+    model.stand_extension_in_front();
     model.architect_root = Some(root);
     model.architect_asked = false;
     let view = architect::ArchitectView::opening(display_root);
@@ -5101,6 +5242,7 @@ fn open_code_at(model: &mut WorkspaceModel, project: &Path, target: &Path) {
         code::ContentMode::Contents,
     );
     model.close_architect();
+    model.stand_extension_in_front();
     model.code = Some(view.resuming(place));
     model.code_tree_scroll = extension_view::NavigatorScroll::default();
     model.code_measure_asked = None;
@@ -5118,6 +5260,7 @@ fn open_code(model: &mut WorkspaceModel, mode: code::ContentMode) {
     let place = model.remembered.code_places.get(&cwd).cloned();
     let view = code::CodeView::opening(cwd, display_root, mode);
     model.close_architect();
+    model.stand_extension_in_front();
     model.code = Some(match place {
         Some(place) => view.resuming(place),
         None => view,

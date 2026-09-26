@@ -144,62 +144,6 @@ pub(super) fn render(
     metrics: &mut FrameMetrics,
 ) {
     widget::root(frame, frame.area());
-    // The Git changes overlay covers the entire frame when open (see
-    // `git::view`) — everything below would just be drawn and
-    // immediately hidden underneath it, so skip it outright rather than
-    // paying for a sidebar/tab-strip/pane render this frame will never
-    // show.
-    if let Some(architect) = &model.architect {
-        let mut view_hits = Vec::new();
-        let area = frame.area();
-        let view = uze_extensions::architect::view(
-            architect,
-            crate::ui::extension_view::board_space(area),
-        );
-        metrics.code = Some(crate::ui::extension_view::render(
-            frame,
-            &view,
-            area,
-            model.code_tree_width,
-            model.code_tree_scroll,
-            uze_keys::Scope::Architect,
-            &mut view_hits,
-        ));
-        hits.extend(
-            view_hits
-                .into_iter()
-                .map(|(rect, hit)| (rect, WorkspaceHit::Extension(ExtensionHit::Architect(hit)))),
-        );
-        return;
-    }
-    if let Some(code) = &model.code {
-        // The extension answers with content; the host lays it out and
-        // therefore is the only side that can say which rectangle a click
-        // landed in. The hits come back in the view's own vocabulary and
-        // are tagged with the extension they belong to on the way into the
-        // shared `hits` vec — the one place that translation happens.
-        let mut view_hits = Vec::new();
-        let area = frame.area();
-        let view = uze_extensions::code::view(
-            code,
-            crate::ui::extension_view::code_space(area, model.code_tree_width, Some(code)),
-        );
-        metrics.code = Some(crate::ui::extension_view::render(
-            frame,
-            &view,
-            area,
-            model.code_tree_width,
-            model.code_tree_scroll,
-            uze_keys::Scope::Code,
-            &mut view_hits,
-        ));
-        hits.extend(
-            view_hits
-                .into_iter()
-                .map(|(rect, hit)| (rect, WorkspaceHit::Extension(ExtensionHit::Code(hit)))),
-        );
-        return;
-    }
     let layout = compute_layout(frame.area(), model.sidebar_width);
     render_sidebar(frame, layout.sidebar, model, identities, hits, metrics);
     // The sidebar's own hairline right border doubles as a drag handle —
@@ -215,7 +159,9 @@ pub(super) fn render(
         WorkspaceHit::ResizeSidebar,
     ));
     render_tab_strip(frame, layout.tab_strip, model, identities, hits);
-    render_pane(frame, layout.pane, model);
+    if !render_extension(frame, layout.pane, model, hits, metrics) {
+        render_pane(frame, layout.pane, model);
+    }
     // Over the pane, under the modals: an outcome is worth covering some
     // output for, and worth nothing at all if it draws over the dialog the
     // reader is answering.
@@ -291,6 +237,64 @@ pub(super) fn render(
             ],
         );
     }
+}
+
+/// The open extension, drawn where the pane is — a third kind of thing
+/// that place shows, beside an agent and a shell. The sidebar and the
+/// strip stay live around it, because the surface is about the checkout
+/// they are selecting; covering them made reaching another agent a
+/// matter of closing the surface first. Whether one was drawn is the
+/// answer, since the pane is drawn only when none was.
+fn render_extension(
+    frame: &mut ratatui::Frame<'_>,
+    area: Rect,
+    model: &WorkspaceModel,
+    hits: &mut Vec<(Rect, WorkspaceHit)>,
+    metrics: &mut FrameMetrics,
+) -> bool {
+    // The extension answers with content; the host lays it out and
+    // therefore is the only side that can say which rectangle a click
+    // landed in. The hits come back in the view's own vocabulary and are
+    // tagged with the extension they belong to on the way into the shared
+    // `hits` vec — the one place that translation happens.
+    let mut view_hits = Vec::new();
+    let (view, scope, tag): (_, _, fn(ViewHit) -> ExtensionHit) =
+        if let Some(architect) = &model.architect {
+            (
+                uze_extensions::architect::view(
+                    architect,
+                    crate::ui::extension_view::board_space(area),
+                ),
+                uze_keys::Scope::Architect,
+                ExtensionHit::Architect,
+            )
+        } else if let Some(code) = &model.code {
+            (
+                uze_extensions::code::view(
+                    code,
+                    crate::ui::extension_view::code_space(area, model.code_tree_width, Some(code)),
+                ),
+                uze_keys::Scope::Code,
+                ExtensionHit::Code,
+            )
+        } else {
+            return false;
+        };
+    metrics.code = Some(crate::ui::extension_view::render(
+        frame,
+        &view,
+        area,
+        model.code_tree_width,
+        model.code_tree_scroll,
+        scope,
+        &mut view_hits,
+    ));
+    hits.extend(
+        view_hits
+            .into_iter()
+            .map(|(rect, hit)| (rect, WorkspaceHit::Extension(tag(hit)))),
+    );
+    true
 }
 
 /// A small popup listing `agent_options`, opened by the selected space
@@ -2893,7 +2897,7 @@ pub(super) fn render_tab_strip(
 
     // ── actions ────────────────────────────────────────────────────────
     // The two extensions are one group of buttons, not two chips with air
-    // between them: each opens a full-frame surface over the pane — the
+    // between them: each puts its surface where the pane is — the
     // same kind of errand — and one continuous ground says that, where
     // two detached chips read as two unrelated controls.
     //
@@ -2906,15 +2910,31 @@ pub(super) fn render_tab_strip(
     // own. The pair of glyphs at the tab side's end is the other way
     // round, and says why in its own place.
     {
+        // The one standing in the pane wears the strip's one highlight —
+        // the pane shows one thing, so the strip lights one thing, and
+        // while a surface is up that is its button, not the tab it
+        // covers. Said by the ground, not by the word's hue or weight.
         let buttons = [
-            (WorkspaceHit::OpenArchitect, Symbol::Architect, "architect"),
-            (WorkspaceHit::OpenFiles, Symbol::Code, "code"),
+            (
+                WorkspaceHit::OpenArchitect,
+                Symbol::Architect,
+                "architect",
+                model.architect.is_some(),
+            ),
+            (
+                WorkspaceHit::OpenFiles,
+                Symbol::Code,
+                "code",
+                model.code.is_some(),
+            ),
         ]
-        .map(|(hit, symbol, name)| GroupButton {
+        .map(|(hit, symbol, name, open)| GroupButton {
             hit,
             label: surface_label(symbol, name),
             hue: theme::color(Token::TextSecondary),
             strong: false,
+            lit: open,
+            switch: true,
         });
         let width = group_width(&buttons);
         let rect = Rect::new(trailing_right.saturating_sub(width), inner.y, width, 1);
@@ -3019,6 +3039,7 @@ pub(super) fn render_tab_strip(
     // loses a tab's tail, which the strip can scroll back to, rather than
     // the button that makes the next tab, which nothing else offers.
     let limit = trailing_right;
+    let extension_in_front = model.code.is_some() || model.architect.is_some();
     let mut spans = Vec::new();
     let mut x = inner.x;
     let strip_len = strip.len();
@@ -3034,7 +3055,9 @@ pub(super) fn render_tab_strip(
         }
         let is_last = strip_index + 1 == strip_len;
         let is_agent = Some(tab.id) == context;
-        let selected = tab.id == space.selected_tab;
+        // One highlight on the strip: a surface standing in the pane
+        // takes it from the tab it covers.
+        let selected = tab.id == space.selected_tab && !extension_in_front;
         let marker_fg = if selected {
             theme::color(Token::Accent)
         } else {
@@ -3167,6 +3190,8 @@ pub(super) fn render_tab_strip(
         label: "+".to_owned(),
         hue: theme::color(Token::TextInactive),
         strong: true,
+        lit: false,
+        switch: false,
     }];
     if x + group_width(&buttons) <= limit {
         let (actions, group_hits) =
@@ -3218,6 +3243,12 @@ struct GroupButton {
     /// itself at any weight; a lone "+" on a lifted fill reads as barely
     /// there beside one.
     strong: bool,
+    /// Standing in the pane: the strip's one highlight, filled.
+    lit: bool,
+    /// A switch rather than a push: pressing it lights it or puts it out,
+    /// and that change is its answer. The press flash on top of it drew a
+    /// third look between the two — lit, then the flash, then unlit.
+    switch: bool,
 }
 
 /// The columns one member of a group claims: its label, and the air each
@@ -3273,7 +3304,17 @@ fn button_group(
     let mut hits = Vec::new();
     for button in buttons {
         let (hue, ground) = match chip_state(model, Some(button.hit)) {
+            // Filled with the brightest ink and written in the backdrop,
+            // the way a strong button is: a lit member is the one thing
+            // on the strip that must be found at a glance, and a shade
+            // over its neighbour's plate was not enough to find it. It
+            // stays lit under the pointer — it is already the answer.
+            _ if button.lit => (
+                theme::color(Token::SurfaceBackground),
+                theme::color(Token::TextBright),
+            ),
             ChipState::Resting => (button.hue, theme::color(resting)),
+            ChipState::Pressed if button.switch => ChipState::Hovered.skin(button.hue),
             other => other.skin(button.hue),
         };
         let mut label = Style::default().fg(hue).bg(ground);

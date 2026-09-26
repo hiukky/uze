@@ -19,7 +19,10 @@
 //! machine". Both are narrow on purpose: a write replaces a file that
 //! already exists, and a delete removes a file and never a directory.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Condvar, LazyLock, Mutex, MutexGuard, PoisonError};
+use std::time::{Duration, Instant, SystemTime};
 
 /// How much of a file this host will hand an extension.
 ///
@@ -64,10 +67,20 @@ pub struct WorkspaceHost;
 impl uze_extensions::Host for WorkspaceHost {
     /// Through `uze-git`'s read path, so an overlay refreshing every few
     /// seconds cannot contend with an agent writing in a sibling checkout.
+    ///
+    /// A `status` is shared (see [`shared_status`]): the badge and the
+    /// code surface ask the same one on their own clocks, and on a large
+    /// checkout each is a walk of the whole tree.
     fn git(&self, root: &Path, args: &[&str], answers: &[i32]) -> Result<String, String> {
-        uze_git::read(root, args)
-            .map_err(|error| error.to_string())?
-            .or_exit(answers)
+        let run = || {
+            uze_git::read(root, args)
+                .map_err(|error| error.to_string())?
+                .or_exit(answers)
+        };
+        match args.first() {
+            Some(&"status") => shared_status(root, args, run),
+            _ => run(),
+        }
     }
 
     /// Remembered by `uze-git`: a quarter of the Git processes a session
@@ -136,6 +149,7 @@ impl uze_extensions::Host for WorkspaceHost {
         if !path.is_file() {
             return Err(format!("{} is not a file", path.display()));
         }
+        forget_statuses_around(path);
         std::fs::write(path, contents).map_err(|error| error.to_string())
     }
 
@@ -146,6 +160,7 @@ impl uze_extensions::Host for WorkspaceHost {
         if !path.is_file() {
             return Err(format!("{} is not a file", path.display()));
         }
+        forget_statuses_around(path);
         std::fs::remove_file(path).map_err(|error| error.to_string())
     }
 
@@ -153,35 +168,24 @@ impl uze_extensions::Host for WorkspaceHost {
     /// badge asks this of every untracked file every refresh, and an
     /// untracked directory a project never gitignored is megabytes read
     /// into memory on a timer for a line count.
+    ///
+    /// And remembered while the file's size and modification time stay
+    /// what they were: the badge asks again every few hundred
+    /// milliseconds about files that mostly have not moved.
     fn count_lines(&self, path: &Path) -> u32 {
-        use std::io::{BufReader, Read};
-        let Ok(file) = std::fs::File::open(path) else {
-            return 0;
-        };
-        let mut reader = BufReader::new(file);
-        let mut buffer = [0u8; 16 * 1024];
-        let mut lines: u32 = 0;
-        let mut last = None;
-        loop {
-            match reader.read(&mut buffer) {
-                Ok(0) => break,
-                Ok(read) => {
-                    lines = lines.saturating_add(
-                        buffer[..read].iter().filter(|byte| **byte == b'\n').count() as u32,
-                    );
-                    last = buffer[..read].last().copied();
-                }
-                Err(_) => return 0,
-            }
+        let stamp = std::fs::metadata(path)
+            .ok()
+            .and_then(|meta| Some((meta.len(), meta.modified().ok()?)));
+        if let Some(stamp) = stamp
+            && let Some(count) = counted(path, stamp)
+        {
+            return count;
         }
-        // `str::lines` yields nothing for an empty file and does not add a
-        // line for a trailing newline, so only unterminated content counts
-        // one more than its newlines.
-        match last {
-            None => 0,
-            Some(b'\n') => lines,
-            Some(_) => lines.saturating_add(1),
+        let count = count_lines_of(path);
+        if let Some(stamp) = stamp {
+            remember_count(path, stamp, count);
         }
+        count
     }
 
     /// The active theme's, so highlighted content is drawn for the same
@@ -191,11 +195,236 @@ impl uze_extensions::Host for WorkspaceHost {
     }
 }
 
+/// How long a `status` answer is handed to whoever asks the same one
+/// again. Under the badge's own period, so a reader never sees an answer
+/// older than the one it would have read itself.
+const STATUS_SHARED_FOR: Duration = Duration::from_millis(500);
+
+/// One `status`, run once however many readers are waiting on it.
+#[derive(Default)]
+struct StatusRead {
+    answer: Mutex<Option<(Instant, Result<String, String>)>>,
+    landed: Condvar,
+}
+
+impl StatusRead {
+    fn answer(&self) -> MutexGuard<'_, Option<(Instant, Result<String, String>)>> {
+        self.answer.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Still running, or answered recently enough to hand out.
+    fn usable(&self) -> bool {
+        self.answer()
+            .as_ref()
+            .is_none_or(|(at, _)| at.elapsed() < STATUS_SHARED_FOR)
+    }
+
+    fn settle(&self, answer: Result<String, String>) {
+        *self.answer() = Some((Instant::now(), answer));
+        self.landed.notify_all();
+    }
+}
+
+type StatusKey = (PathBuf, Vec<String>);
+
+static STATUS_READS: LazyLock<Mutex<HashMap<StatusKey, Arc<StatusRead>>>> =
+    LazyLock::new(Mutex::default);
+
+fn status_reads() -> MutexGuard<'static, HashMap<StatusKey, Arc<StatusRead>>> {
+    STATUS_READS.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// Runs `run` for this `status`, unless the same one is already running
+/// or has just answered — then that answer is the answer.
+fn shared_status(
+    root: &Path,
+    args: &[&str],
+    run: impl FnOnce() -> Result<String, String>,
+) -> Result<String, String> {
+    let key = (
+        root.to_path_buf(),
+        args.iter().map(|arg| arg.to_string()).collect(),
+    );
+    let (read, ours) = {
+        let mut reads = status_reads();
+        match reads.get(&key) {
+            Some(read) if read.usable() => (Arc::clone(read), false),
+            _ => {
+                let read = Arc::new(StatusRead::default());
+                reads.insert(key, Arc::clone(&read));
+                (read, true)
+            }
+        }
+    };
+    if ours {
+        // Settled even if the read unwinds: a reader waiting on an answer
+        // that never comes is a thread that never ends.
+        struct Settle<'a>(&'a StatusRead, Option<Result<String, String>>);
+        impl Drop for Settle<'_> {
+            fn drop(&mut self) {
+                let answer = self
+                    .1
+                    .take()
+                    .unwrap_or_else(|| Err("the status read did not finish".to_owned()));
+                self.0.settle(answer);
+            }
+        }
+        let mut settle = Settle(&read, None);
+        let answer = run();
+        settle.1 = Some(answer.clone());
+        return answer;
+    }
+    let mut answer = read.answer();
+    loop {
+        if let Some((_, answer)) = answer.as_ref() {
+            return answer.clone();
+        }
+        answer = read
+            .landed
+            .wait(answer)
+            .unwrap_or_else(PoisonError::into_inner);
+    }
+}
+
+/// Drops the shared answers about the checkout `path` is in: this host
+/// just changed it, and the next `status` there must see it.
+fn forget_statuses_around(path: &Path) {
+    status_reads().retain(|(root, _), _| !path.starts_with(root));
+}
+
+type LineStamp = (u64, SystemTime);
+
+/// Line counts by path, while the file is the one that was counted. A
+/// few thousand at most: past that it starts over, which costs a recount
+/// and nothing else.
+static LINE_COUNTS: LazyLock<Mutex<HashMap<PathBuf, (LineStamp, u32)>>> =
+    LazyLock::new(Mutex::default);
+const LINE_COUNTS_KEPT: usize = 4096;
+
+fn line_counts() -> MutexGuard<'static, HashMap<PathBuf, (LineStamp, u32)>> {
+    LINE_COUNTS.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+fn counted(path: &Path, stamp: LineStamp) -> Option<u32> {
+    line_counts()
+        .get(path)
+        .filter(|(counted_at, _)| *counted_at == stamp)
+        .map(|(_, count)| *count)
+}
+
+fn remember_count(path: &Path, stamp: LineStamp, count: u32) {
+    let mut counts = line_counts();
+    if counts.len() >= LINE_COUNTS_KEPT {
+        counts.clear();
+    }
+    counts.insert(path.to_path_buf(), (stamp, count));
+}
+
+/// Counted off a buffered read rather than the whole file (see
+/// [`WorkspaceHost::count_lines`]).
+fn count_lines_of(path: &Path) -> u32 {
+    use std::io::{BufReader, Read};
+    let Ok(file) = std::fs::File::open(path) else {
+        return 0;
+    };
+    let mut reader = BufReader::new(file);
+    let mut buffer = [0u8; 16 * 1024];
+    let mut lines: u32 = 0;
+    let mut last = None;
+    loop {
+        match reader.read(&mut buffer) {
+            Ok(0) => break,
+            Ok(read) => {
+                lines = lines.saturating_add(
+                    buffer[..read].iter().filter(|byte| **byte == b'\n').count() as u32,
+                );
+                last = buffer[..read].last().copied();
+            }
+            Err(_) => return 0,
+        }
+    }
+    // `str::lines` yields nothing for an empty file and does not add a
+    // line for a trailing newline, so only unterminated content counts
+    // one more than its newlines.
+    match last {
+        None => 0,
+        Some(b'\n') => lines,
+        Some(_) => lines.saturating_add(1),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use uze_extensions::Host;
 
     use super::WorkspaceHost;
+
+    /// Two readers asking the same `status` at once are one walk of the
+    /// tree, and an answer just given is handed to the next asker.
+    #[test]
+    fn a_status_asked_twice_at_once_is_run_once() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::{Arc, Barrier};
+
+        let root = super::PathBuf::from("/shared-status/at-once");
+        let runs = Arc::new(AtomicUsize::new(0));
+        let started = Arc::new(Barrier::new(2));
+        let readers: Vec<_> = (0..2)
+            .map(|_| {
+                let (runs, started, root) = (Arc::clone(&runs), Arc::clone(&started), root.clone());
+                std::thread::spawn(move || {
+                    started.wait();
+                    super::shared_status(&root, &["status"], || {
+                        runs.fetch_add(1, Ordering::SeqCst);
+                        std::thread::sleep(std::time::Duration::from_millis(100));
+                        Ok("M a\n".to_owned())
+                    })
+                })
+            })
+            .collect();
+        for reader in readers {
+            assert_eq!(reader.join().unwrap(), Ok("M a\n".to_owned()));
+        }
+        assert_eq!(runs.load(Ordering::SeqCst), 1);
+
+        let again = super::shared_status(&root, &["status"], || {
+            runs.fetch_add(1, Ordering::SeqCst);
+            Ok(String::new())
+        });
+        assert_eq!(
+            again,
+            Ok("M a\n".to_owned()),
+            "an answer just given is reused"
+        );
+        assert_eq!(runs.load(Ordering::SeqCst), 1);
+    }
+
+    /// A read that unwinds still answers the readers waiting on it, and
+    /// the next asker runs its own rather than inheriting the failure.
+    #[test]
+    fn a_status_read_that_panics_releases_whoever_waits_on_it() {
+        let root = super::PathBuf::from("/shared-status/panics");
+        let unwound = std::panic::catch_unwind(|| {
+            super::shared_status(&root, &["status"], || panic!("the read unwound"))
+        });
+        assert!(unwound.is_err());
+        let answer = super::shared_status(&root, &["status"], || Ok("fresh".to_owned()));
+        assert!(
+            answer == Ok("fresh".to_owned()) || answer.is_err(),
+            "answered, never waiting: {answer:?}"
+        );
+    }
+
+    /// Changing a file is changing what `status` says, so the shared
+    /// answer is dropped.
+    #[test]
+    fn a_write_through_the_host_forgets_the_shared_status() {
+        let root = super::PathBuf::from("/shared-status/forgotten");
+        let _ = super::shared_status(&root, &["status"], || Ok("before".to_owned()));
+        super::forget_statuses_around(&root.join("src/main.rs"));
+        let after = super::shared_status(&root, &["status"], || Ok("after".to_owned()));
+        assert_eq!(after, Ok("after".to_owned()));
+    }
 
     /// The two methods that change the machine, and the two things they
     /// refuse. Both refusals are the whole difference between "an

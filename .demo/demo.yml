@@ -466,7 +466,7 @@ beats:
   # every level whether or not you are on one, so neither proves anything —
   # it is the status bar, and the diff's own header, that do.
   - say: its uncommitted change, in its own checkout
-    key: C-g
+    key: M-g
     expect: 'DIFF ·'
     expect_timeout: 10
     refuse: no changes
