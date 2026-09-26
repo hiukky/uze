@@ -31,7 +31,7 @@ target/release/uze --version
 ## Releasing a binary
 
 UZE's official Linux distribution channel is GitHub Releases, consumed by
-`install.sh` (`curl -fsSL https://uze.hiukky.com/i | sh`).
+`install.sh` (`curl -fsSL https://uze.sh/i | sh`).
 A release enters `main` through the same door as every other change: a pull
 request. No local cargo-release, no manual push, and nothing that a branch
 ruleset has to make an exception for.

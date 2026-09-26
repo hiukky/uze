@@ -77,14 +77,14 @@ body = """
 ## Install
 
 ```sh
-curl -fsSL https://uze.hiukky.com/i | sh
+curl -fsSL https://uze.sh/i | sh
 ```
 
 {% if version %}
 Pin this release instead of the latest one:
 
 ```sh
-curl -fsSL https://uze.hiukky.com/i | UZE_VERSION={{ version | trim_start_matches(pat="v") }} sh
+curl -fsSL https://uze.sh/i | UZE_VERSION={{ version | trim_start_matches(pat="v") }} sh
 ```
 {% endif %}
 

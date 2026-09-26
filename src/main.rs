@@ -1205,7 +1205,7 @@ fn run_upgrade(home: &UzeHome) -> Result<()> {
             println!(
                 "{}",
                 progress::label(
-                    "update it the way it was installed, or install the release with: curl -fsSL https://uze.hiukky.com/i | sh"
+                    "update it the way it was installed, or install the release with: curl -fsSL https://uze.sh/i | sh"
                 )
             );
             return Err(uze_application::UzeError::Upgrade(format!(

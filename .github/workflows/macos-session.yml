@@ -39,7 +39,7 @@ jobs:
       # the README takes, and the one no suite covers today.
       - name: Install uze the way a user does
         run: |
-          curl -fsSL https://uze.hiukky.com/i | sh
+          curl -fsSL https://uze.sh/i | sh
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
       - name: What the machine says about it

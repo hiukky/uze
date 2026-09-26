@@ -128,7 +128,7 @@ export default function HomePage() {
 
         <div className="mx-auto mt-9 flex max-w-xl flex-col items-stretch gap-3 sm:flex-row">
           <div className="flex-1 text-left">
-            <InstallCommand command="curl -fsSL https://uze.hiukky.com/i | sh" />
+            <InstallCommand command="curl -fsSL https://uze.sh/i | sh" />
           </div>
           <Link
             href="/docs/getting-started"
