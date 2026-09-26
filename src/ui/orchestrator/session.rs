@@ -504,7 +504,9 @@ impl Attach<'_> {
     /// What a first step looks like once it has actually happened.
     fn step_landed(&self, action: Action) -> bool {
         match action {
-            Action::NewAgent => self.model.agent_picker.is_some(),
+            // One harness set up launches without a picker, so the step
+            // has landed once either the picker or the placement exists.
+            Action::NewAgent => self.model.agent_picker.is_some() || self.model.placement_pending,
             Action::NextAgent => self.asked_for_a_tab,
             Action::ToggleChanges | Action::ToggleFiles => self.model.code.is_some(),
             Action::TogglePreservedWork => self.model.preserved.is_some(),
@@ -600,22 +602,15 @@ impl Attach<'_> {
                 }
             }
             Action::NewAgent => {
-                self.model.agent_picker = Some(AgentPicker {
-                    options: agent_options(self.home),
-                    selected: 0,
-                    // Under the button that opens it by pointer, wherever it
-                    // was asked from: one menu, in one place.
-                    anchor: self
-                        .model
-                        .hits
-                        .iter()
-                        .find_map(|(rect, hit)| {
-                            (*hit == WorkspaceHit::NewAgentMenu).then_some(*rect)
-                        })
-                        .unwrap_or_default(),
-                    resume: None,
-                });
-                self.model.dirty = true;
+                // Under the button that opens it by pointer, wherever it
+                // was asked from: one menu, in one place.
+                let anchor = self
+                    .model
+                    .hits
+                    .iter()
+                    .find_map(|(rect, hit)| (*hit == WorkspaceHit::NewAgentMenu).then_some(*rect))
+                    .unwrap_or_default();
+                self.offer_agents(anchor, None);
             }
             Action::NewSpace => self.open_root_picker(),
             Action::RenameSelection => {
@@ -931,24 +926,11 @@ impl Attach<'_> {
                 self.open_manage_at(Route::Harnesses);
             }
             Action::Activate => {
-                if let Some(picker) = self.model.agent_picker.take()
-                    && let Some(option) = picker.options.get(picker.selected)
+                if let Some(mut picker) = self.model.agent_picker.take()
+                    && picker.selected < picker.options.len()
                 {
-                    let label = next_agent_label(&self.model);
-                    let command = option.command.clone();
-                    // Said before the tab opens, because it is a fact about
-                    // the agent being started rather than about the
-                    // placement it is being started into.
-                    if let Some(gap) = &option.continuity_gap {
-                        self.model
-                            .raise_toast(ToastKind::Warned, gap, label.clone(), None);
-                    }
-                    self.launch_agent(
-                        label,
-                        command,
-                        option.integration.clone(),
-                        picker.resume.clone(),
-                    );
+                    let option = picker.options.swap_remove(picker.selected);
+                    self.start_agent(option, picker.resume);
                 }
             }
             _ => self.model.agent_picker = None,
@@ -1004,12 +986,7 @@ impl Attach<'_> {
                         replacing: None,
                     };
                     self.model.preserved = None;
-                    self.model.agent_picker = Some(AgentPicker {
-                        options: agent_options(self.home),
-                        selected: 0,
-                        anchor: Rect::default(),
-                        resume: Some(resume),
-                    });
+                    self.offer_agents(Rect::default(), Some(resume));
                 }
             }
             // Discard is the one action that deletes work, so
@@ -1602,17 +1579,11 @@ impl Attach<'_> {
                 // picker closed having launched nothing.
                 match hit_at(&self.model, mouse.column, mouse.row) {
                     Some(WorkspaceHit::PickAgent(index)) => {
-                        if let Some(picker) = self.model.agent_picker.take()
-                            && let Some(option) = picker.options.get(index)
+                        if let Some(mut picker) = self.model.agent_picker.take()
+                            && index < picker.options.len()
                         {
-                            let label = next_agent_label(&self.model);
-                            let command = option.command.clone();
-                            self.launch_agent(
-                                label,
-                                command,
-                                option.integration.clone(),
-                                picker.resume.clone(),
-                            );
+                            let option = picker.options.swap_remove(index);
+                            self.start_agent(option, picker.resume);
                         }
                     }
                     Some(WorkspaceHit::SetUpAgent) => {
@@ -2558,21 +2529,7 @@ impl Attach<'_> {
                     },
                 );
             }
-            WorkspaceHit::NewAgentMenu => {
-                self.model.agent_picker = Some(AgentPicker {
-                    options: agent_options(self.home),
-                    selected: 0,
-                    anchor: hit_rect,
-                    resume: None,
-                });
-                // Unlike every other arm here, this is a purely
-                // local state change with no server round trip
-                // to eventually mark the model dirty via
-                // `apply()` — without this the popup exists in
-                // `model` but the screen never redraws to show
-                // it.
-                self.model.dirty = true;
-            }
+            WorkspaceHit::NewAgentMenu => self.offer_agents(hit_rect, None),
             WorkspaceHit::PickAgent(_) | WorkspaceHit::SetUpAgent => {
                 // Only reachable while the picker is open, which
                 // the guarded arm above already handles; a
@@ -2653,13 +2610,7 @@ impl Attach<'_> {
                     // row first makes both land in the same space,
                     // whichever space the operator was looking at.
                     let _ = send_request(&mut self.stream, &ClientRequest::SelectTab { tab });
-                    self.model.agent_picker = Some(AgentPicker {
-                        options: agent_options(self.home),
-                        selected: 0,
-                        anchor: hit_rect,
-                        resume: Some(resume),
-                    });
-                    self.model.dirty = true;
+                    self.offer_agents(hit_rect, Some(resume));
                 }
             }
             WorkspaceHit::OpenStatusCatalog(anchor) => {
@@ -2727,6 +2678,38 @@ impl Attach<'_> {
 }
 
 impl Attach<'_> {
+    /// Asks which harness runs the new agent — unless exactly one is set
+    /// up, where the picker would be a single row to confirm, and the agent
+    /// starts at once. None set up still opens it: its one row is the way
+    /// to setting one up.
+    fn offer_agents(&mut self, anchor: Rect, resume: Option<ResumeTarget>) {
+        let mut options = agent_options(self.home);
+        if options.len() == 1 {
+            self.start_agent(options.remove(0), resume);
+        } else {
+            self.model.agent_picker = Some(AgentPicker {
+                options,
+                selected: 0,
+                anchor,
+                resume,
+            });
+        }
+        // A purely local change on the picker's side, with no server round
+        // trip to mark the model dirty through `apply()`.
+        self.model.dirty = true;
+    }
+
+    fn start_agent(&mut self, option: AgentOption, resume: Option<ResumeTarget>) {
+        let label = next_agent_label(&self.model);
+        // Said before the tab opens, because it is a fact about the agent
+        // being started rather than about the placement it is started into.
+        if let Some(gap) = &option.continuity_gap {
+            self.model
+                .raise_toast(ToastKind::Warned, gap, label.clone(), None);
+        }
+        self.launch_agent(label, option.command, option.integration, resume);
+    }
+
     /// Opens a tab for a new agent, once placement has recorded it.
     ///
     /// Every agent is placed before its tab opens — a new one as the
