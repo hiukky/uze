@@ -1,6 +1,6 @@
 ---
 title: Harness support
-description: What each harness receives natively — capabilities, invocation, context, hooks
+description: What each harness receives natively, capability by capability
 ---
 
 {/* uze-matrix:start */}
@@ -28,7 +28,7 @@ Current matrix, derived from the integration implementations themselves.
 | Muse | ⚪ |
 | PI | ⚪ |
 
-⚪ roadmap — no integration yet; cells flip when it lands.
+⚪ roadmap: no integration yet; cells flip when it lands.
 
 ### Invoking a plugin
 
@@ -55,29 +55,29 @@ Current matrix, derived from the integration implementations themselves.
 | **Agents** | Is a portable agent profile delivered to a native agent surface? |
 | **Hooks** | Does a portable hook reach the harness's own hook configuration? |
 | **Session** | Can uze put a relaunched agent back into the conversation it was in? |
-| **Shim** | Runtime context projection through the PATH shim — experimental everywhere. |
+| **Shim** | Runtime context projection through the PATH shim, experimental everywhere. |
 
 ## Notes per harness
 
 Each name links to that harness's own site; what follows is how uze delivers to it.
 
-- **[Claude Code](https://code.claude.com)** — plugin delivery through a UZE-managed marketplace; a skills-directory
+- **[Claude Code](https://code.claude.com)**: plugin delivery through a UZE-managed marketplace; a skills-directory
   reference is the fallback. Project context arrives through the `CLAUDE.md` bridge
-  (`@AGENTS.md`) — the only bridge uze maintains. Hooks merge into its own user-scope hook
+  (`@AGENTS.md`), the only bridge uze maintains. Hooks merge into its own user-scope hook
   configuration.
-- **[Codex](https://chatgpt.com/codex)** — the same marketplace model; its skills root (`~/.agents/skills`) is shared with
+- **[Codex](https://chatgpt.com/codex)**: the same marketplace model; its skills root (`~/.agents/skills`) is shared with
   OpenCode, which uze accounts for when resolving names. User-only skills carry
   `agents/openai.yaml` with implicit invocation disabled. Hooks merge into Codex's own
   `hooks.json` command form.
-- **[OpenCode](https://opencode.ai)** — consumes no external plugin envelope: skills and agents are delivered natively,
+- **[OpenCode](https://opencode.ai)**: consumes no external plugin envelope: skills and agents are delivered natively,
   MCP through its global config, and hooks through an owned, regenerable plugin bridge, since no
   declarative hook surface exists. A Skill is invoked as a **mention** (`@flow:commit`), not a
-  slash command — `slash: false` withholds one from the `/` catalog but a mention still expands
+  slash command. `slash: false` withholds one from the `/` catalog but a mention still expands
   it, which is why a `user: false` policy is reported adapted rather than native. Its binary is
   detected as `opencode`, with the legacy `opencode2` alias still resolved.
-- **[Antigravity](https://antigravity.google)** — the Google-family v0 harness: the canonical `plugin.json` *is* a
+- **[Antigravity](https://antigravity.google)**: the Google-family v0 harness: the canonical `plugin.json` *is* a
   valid plugin manifest, so envelope-less packages install straight from the Store. Non-default
-  invocation policies are **adapted** — no explicit-only mechanism exists, so skills stay
+  invocation policies are **adapted**: no explicit-only mechanism exists, so skills stay
   model-discoverable and slash-invocable. It carries the widest hook effect set of the four.
 
 The runtime shim is in

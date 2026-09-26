@@ -42,13 +42,13 @@ iTerm2 and Windows Terminal). Where it does not, the Shortcuts screen says the
 chord cannot be sent rather than binding it and leaving it dead.
 
 **On WSL specifically:** a Linux uze under Windows Terminal reads VT bytes from
-a pty — the Win32 console key API is not in the path — so it sees exactly what
+a pty (the Win32 console key API is not in the path), so it sees exactly what
 any Linux terminal sees. Every universal chord works, `Alt` works, and
 `Ctrl`+digit does not unless the protocol is on.
 
 <Callout type="info">
   **The answer that is actually true for your machine** is the Shortcuts screen's
-  capture — it is a probe. Press the key you are wondering about; it says what
+  capture: it is a probe. Press the key you are wondering about; it says what
   arrived. No table can enumerate every emulator × multiplexer × ssh × layout,
   and this one does not have to.
 </Callout>
@@ -59,13 +59,13 @@ any Linux terminal sees. Every universal chord works, `Alt` works, and
   owns the whole keyboard, and the workspace, where every bare key belongs to
   the agent running in the pane. Within one of them, two actions may not share
   a mnemonic. Structural keys (Enter, Esc, Tab, the arrows) are contextual by
-  nature and exempt — "go on" reads from the surface, and nobody is confused
+  nature and exempt: "go on" reads from the surface, and nobody is confused
   by it.
 - **A conflict is refused before it is written**, and the screen says what the
   key already means.
 - **A file that cannot be used changes nothing.** The keyboard already in
   force stays in force, and the problem is printed with the entry that caused
-  it — an operator without a keyboard cannot fix the file that took it away.
+  it, since an operator without a keyboard cannot fix the file that took it away.
   An entry naming an action or a surface this build has never heard of is a
   *warning*: a keymap written for a newer uze still loads on an older one.
 

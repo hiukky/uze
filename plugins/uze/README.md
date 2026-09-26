@@ -1,20 +1,22 @@
-# UZE — the official UZE Skill
+# UZE, the official UZE plugin
 
 This is a normal Agent Plugins 1.0 package. It carries no special treatment in
-the Store, the router, or any integration — it is installed, discovered and
+the Store, the router, or any integration: it is installed, discovered and
 delivered exactly the way any other Skill-only package is.
 
-It ships three Skills:
+It ships four Skills:
 
-- `skills/init/SKILL.md` — an agentic orchestrator that calls UZE's own
+- `skills/init/SKILL.md`: an agentic orchestrator that calls UZE's own
   deterministic `uze agent context inspect|plan|reconcile` CLI to make a project's
   instructions context portable.
-- `skills/worktree/SKILL.md` — coordinates isolated worktrees for concurrent
+- `skills/worktree/SKILL.md`: coordinates isolated worktrees for concurrent
   agent work and safe integration, honouring the `worktrees:` policy the
   project declares in `agents.yaml`.
-- `skills/architect/SKILL.md` — writing the Mermaid diagrams a project keeps
+- `skills/architect/SKILL.md`: writing the Mermaid diagrams a project keeps
   under `artifacts:`: which view a change belongs in, how the architect
   surface lists it, and `uze agent artifacts check` as the proof it draws.
+- `skills/author/SKILL.md`: creating a plugin end to end, from choosing or
+  creating its marketplace to checking, installing and iterating on it.
 
 See [`docs/capabilities/context-manager.md`](../../docs/capabilities/context-manager.md)
 for the architecture these sit on top of, and

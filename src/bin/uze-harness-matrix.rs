@@ -359,7 +359,7 @@ fn matrix_block() -> String {
     for planned in PLANNED_HARNESSES {
         out.push_str(&format!("| {planned} | ⚪ |\n"));
     }
-    out.push_str("\n⚪ roadmap — no integration yet; cells flip when it lands.\n\n");
+    out.push_str("\n⚪ roadmap: no integration yet; cells flip when it lands.\n\n");
 
     // Invocation examples: canonical `flow:commit` (default policy) and
     // `workflow:review` (user-only explicit) as each harness exposes them.
