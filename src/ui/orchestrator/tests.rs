@@ -933,6 +933,49 @@ mod workspace_tests {
         );
     }
 
+    /// Each surface's chord leads to it from the other, without closing
+    /// first: the pane shows one surface, and the keys walk between them.
+    /// Only the chord of the half already showing closes it.
+    #[test]
+    fn the_surface_chords_walk_between_surfaces_without_closing_first() {
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        use uze_extensions::code::CodeView;
+        let home = UzeHome::at(uze_testkit::temp::scratch("orchestrator-surface-chords"));
+        let (mut model, first, _second) = two_agents_with_shells();
+        model.session.as_mut().expect("session").select_tab(first);
+        let mut driven = driven(model, &home);
+        let showing = |driven: &Driven<'_>| {
+            let model = &driven.attach.model;
+            match (
+                model.code.as_ref().map(CodeView::showing),
+                model.architect.is_some(),
+            ) {
+                (Some(mode), false) => format!("code {mode:?}"),
+                (None, true) => "architect".to_owned(),
+                (None, false) => "pane".to_owned(),
+                (Some(_), true) => panic!("two surfaces at once"),
+            }
+        };
+        for (key, expected) in [
+            ('e', "code Contents"),
+            ('g', "code Diff"),
+            ('e', "code Contents"),
+            ('a', "architect"),
+            ('g', "code Diff"),
+            ('a', "architect"),
+            ('e', "code Contents"),
+            ('e', "pane"),
+            ('g', "code Diff"),
+            ('g', "pane"),
+            ('a', "architect"),
+            ('a', "pane"),
+        ] {
+            driven.frame();
+            driven.press_key(KeyEvent::new(KeyCode::Char(key), KeyModifiers::ALT));
+            assert_eq!(showing(&driven), expected, "after alt+{key}");
+        }
+    }
+
     /// Choosing a tab is choosing to see it — the one already in front
     /// included, which is how the pane is had back from a surface.
     #[test]
@@ -10076,7 +10119,7 @@ mod prompt_buffer_tests {
     }
 }
 
-/// A door pressed twice closes. `ctrl+e` on a surface already showing
+/// A door pressed twice closes. `alt+e` on a surface already showing
 /// files used to re-show them, which is indistinguishable from a key that
 /// does nothing — and the action is called a toggle.
 #[test]

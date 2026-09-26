@@ -1414,7 +1414,7 @@ fn reopening_a_checkout_returns_to_where_the_viewer_was() {
 }
 
 /// The door still decides what the surface is showing. A place that
-/// carried the mode would make `Ctrl+G` mean "wherever I was last time",
+/// carried the mode would make `Alt+G` mean "wherever I was last time",
 /// which is the one thing a door must not mean.
 #[test]
 fn a_restored_place_does_not_outrank_the_door_it_came_through() {

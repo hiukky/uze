@@ -314,8 +314,8 @@ fn default_bindings() -> Vec<Binding> {
         // --- Workspace, the container -----------------------------------
         bind(Scope::Workspace, "ctrl+t", Action::NewShellTab),
         bind(Scope::Workspace, "ctrl+w", Action::CloseTab),
-        bind(Scope::Workspace, "ctrl+g", Action::ToggleChanges),
-        bind(Scope::Workspace, "ctrl+e", Action::ToggleFiles),
+        bind(Scope::Workspace, "alt+g", Action::ToggleChanges),
+        bind(Scope::Workspace, "alt+e", Action::ToggleFiles),
         bind(Scope::Workspace, "alt+a", Action::ToggleArchitect),
         bind(Scope::Workspace, "alt+n", Action::NewAgent),
         // The container of agents, beside the agent's own chord: `s` for
@@ -335,9 +335,10 @@ fn default_bindings() -> Vec<Binding> {
         bind(Scope::Workspace, "alt+p", Action::TogglePreservedWork),
         // --- Workspace, the surfaces that seal --------------------------
         bind(Scope::Code, "esc", Action::Dismiss),
-        // The same chord closes it: opening and closing one thing is one
-        // action to learn, not two.
-        bind(Scope::Code, "ctrl+g", Action::Dismiss),
+        // The doors stay doors: the one already showing closes, the other
+        // switches — so a surface is left for another by its own chord,
+        // never by closing it first.
+        bind(Scope::Code, "alt+g", Action::ToggleChanges),
         bind(Scope::Code, "tab", Action::FocusNext),
         bind(Scope::Code, "down", Action::SelectNext),
         bind(Scope::Code, "up", Action::SelectPrevious),
@@ -346,12 +347,12 @@ fn default_bindings() -> Vec<Binding> {
         bind(Scope::Code, "enter", Action::Activate),
         bind(Scope::Code, "pagedown", Action::ScrollPageDown),
         bind(Scope::Code, "pageup", Action::ScrollPageUp),
-        bind(Scope::Code, "ctrl+e", Action::ToggleFiles),
+        bind(Scope::Code, "alt+e", Action::ToggleFiles),
         bind(Scope::Code, "alt+a", Action::ToggleArchitect),
         bind(Scope::Architect, "esc", Action::Dismiss),
         bind(Scope::Architect, "alt+a", Action::ToggleArchitect),
-        bind(Scope::Architect, "ctrl+g", Action::ToggleChanges),
-        bind(Scope::Architect, "ctrl+e", Action::ToggleFiles),
+        bind(Scope::Architect, "alt+g", Action::ToggleChanges),
+        bind(Scope::Architect, "alt+e", Action::ToggleFiles),
         // The arrows move the board, all four ways: on a surface whose
         // whole point is a drawing larger than the screen, that is what
         // an arrow means, and the list of diagrams is a row of tabs.

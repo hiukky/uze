@@ -106,7 +106,7 @@ pub const CATALOG: crate::registry::BuiltinExtension = crate::registry::BuiltinE
     name: "Code",
     description: "Changes, contents, history and a map of the active checkout.",
     surface: "Workspace TUI",
-    usage: "The timeline sits in the sidebar; open the changes with Ctrl+G or the changes chip, and the files with Ctrl+E or the code chip. `m`, or the Map chip, shows the checkout as a map of where its lines are.",
+    usage: "The timeline sits in the sidebar; open the changes with Alt+G or the changes chip, and the files with Alt+E or the code chip. `m`, or the Map chip, shows the checkout as a map of where its lines are.",
 };
 
 const REFRESH_INTERVAL: Duration = Duration::from_millis(750);
@@ -254,7 +254,7 @@ pub struct CodeView {
 /// What it holds is navigation and nothing else — the file being read,
 /// the directories opened to reach it, the ones folded away, and how far
 /// down it. Deliberately not the content mode: the mode is the door that
-/// was used (`Ctrl+G` reviews, `Ctrl+E` navigates), and a door that
+/// was used (`Alt+G` reviews, `Alt+E` navigates), and a door that
 /// remembered where it last led would stop being one. Deliberately not a
 /// buffer either: an unsaved edit belongs to the surface that has it
 /// open, and reopening a closed one must not resurrect typing.
@@ -320,8 +320,8 @@ impl CodeView {
     /// instant it is asked for, saying it is reading, and fills in when
     /// the host's answers land.
     ///
-    /// `mode` is the door: the changes chip and `Ctrl+G` open on the
-    /// diff, the code chip and `Ctrl+E` on the tree.
+    /// `mode` is the door: the changes chip and `Alt+G` open on the
+    /// diff, the code chip and `Alt+E` on the tree.
     pub fn opening(cwd: PathBuf, display_root: String, mode: ContentMode) -> Self {
         let mut view = Self {
             root: cwd,

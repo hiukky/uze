@@ -300,7 +300,7 @@ beats:
     expect_timeout: 15
     pause: 2.6
   - say: and what has not landed yet — the changes, from the tab you stand in
-    key: C-g
+    key: M-g
     expect: 'DIFF ·'
     expect_timeout: 10
     refuse: no changes
