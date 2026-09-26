@@ -2244,11 +2244,13 @@ fn push_trailing_controls(
         if !drawn.is_empty() {
             drawn.push(Span::raw(" "));
         }
-        // The accent is held back until the pointer asks for it, so the
-        // row's one coloured word does not outshout the name beside it.
+        // The hue the caption of the agent receiving keystrokes wears
+        // (`caption_color`), because this is where the next one lands —
+        // held back until the pointer asks for it, so the row's one
+        // coloured word does not outshout the name beside it.
         let hue = match chip_state(model, Some(WorkspaceHit::NewAgentMenu)) {
-            ChipState::Hovered | ChipState::Pressed => Token::Accent,
-            ChipState::Resting | ChipState::Static => Token::AccentMuted,
+            ChipState::Hovered | ChipState::Pressed => Token::StateWarning,
+            ChipState::Resting | ChipState::Static => Token::StateWarningMuted,
         };
         drawn.push(Span::styled(label.clone(), theme::fg_bold(hue)));
     }

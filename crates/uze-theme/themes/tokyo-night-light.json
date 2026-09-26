@@ -17,6 +17,7 @@
     "accent": "#2959aa",
     "state.success": "#385f0d",
     "state.warning": "#8f5e15",
+    "state.warning-muted": "@state.warning/e0",
     "state.danger": "#8c4351",
     "state.info": "#006c86",
     "state.in-flight": "#007a75",

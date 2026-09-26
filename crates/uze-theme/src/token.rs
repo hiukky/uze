@@ -97,6 +97,10 @@ vocabulary! {
         StateSuccessMuted = "state.success-muted",
         /// Something needs attention but is not broken.
         StateWarning = "state.warning",
+        /// [`StateWarning`](Self::StateWarning) at rest, for a control that
+        /// wears the hue of the agent receiving keystrokes: pulled back
+        /// until the pointer asks, as [`AccentMuted`](Self::AccentMuted) is.
+        StateWarningMuted = "state.warning-muted",
         /// Something failed, or will destroy work.
         StateDanger = "state.danger",
         /// [`StateDanger`](Self::StateDanger) at rest, for the same reason

@@ -29,6 +29,7 @@
     "state.success": "@accent",
     "state.success-muted": "@state.success/c0",
     "state.warning": "#e0b567",
+    "state.warning-muted": "@state.warning/c0",
     "state.danger": "#e0765f",
     "state.danger-muted": "@state.danger/c0",
     "state.info": "#7d97c9",
