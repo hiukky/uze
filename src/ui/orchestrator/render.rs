@@ -1528,12 +1528,19 @@ fn render_timeline(
         == Some(WorkspaceHit::Extension(ExtensionHit::CodeTimeline(
             ViewHit::ToggleSection,
         )));
+    let hovered_row = match model.hovered {
+        Some(WorkspaceHit::Extension(ExtensionHit::CodeTimeline(ViewHit::SelectItem(index)))) => {
+            Some(index)
+        }
+        _ => None,
+    };
     let sliding = crate::ui::extension_view::render_section_with(
         frame,
         &section,
         &mut column,
         model.dragging_timeline,
         hovered.then_some(model.tick),
+        hovered_row,
         &mut section_hits,
     );
     hits.extend(section_hits.into_iter().map(|(rect, hit)| {
