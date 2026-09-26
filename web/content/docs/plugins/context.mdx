@@ -1,72 +1,47 @@
 ---
 title: Project context
-description: AGENTS.md as the portable baseline, and the bridges that reach the rest
+description: One AGENTS.md that every agent reads
 ---
 
-# Project context
+Write your project's instructions once, in `AGENTS.md` at the project root.
+Every agent reads it: Codex, OpenCode and Antigravity natively, and Claude Code
+through a one-line `CLAUDE.md` that uze keeps in place.
 
-`AGENTS.md` is the portable baseline for project instructions. Each harness
-consumes it through its own most native path, and uze reports the result instead
-of guessing:
+## Set it up
 
-| Harness | Delivery |
-| --- | --- |
-| [Claude Code](https://code.claude.com) | Bridge — `@AGENTS.md` import inside `CLAUDE.md` |
-| [Codex](https://chatgpt.com/codex) | Native — reads `AGENTS.md` directly |
-| [OpenCode](https://opencode.ai) | Native — reads `AGENTS.md` directly |
-| [Antigravity](https://antigravity.google) | Native — identical workspace context rules |
+Ask any agent, with the `uze:init` skill:
 
-## The commands
-
-```bash
-$ uze install    # resolve the environment, and leave the context reconciled
-$ uze status     # which file the context comes from, and who currently reads it
+```text
+/uze:init
 ```
 
-Reconciling is not a step you perform: `uze install` ends with it, so declaring
-an environment and projecting it are one command, and `uze status` is where you
-find out whether anything is still owed.
+It reads your project and whatever instructions already exist (`CLAUDE.md`,
+`GEMINI.md`, …), proposes one `AGENTS.md`, and changes nothing until you agree.
 
-The three operations underneath are on the
-[agent surface](/docs/reference/cli#agent-surface), because their answer is region by
-region and only a writer of `AGENTS.md` acts on it:
+## Check it
 
 ```bash
-$ uze agent context inspect      # what each harness currently sees — never writes
-$ uze agent context plan         # exactly what reconcile would change — never writes
-$ uze agent context reconcile    # apply it
+uze status
 ```
 
-`reconcile` maintains only the delimited regions it owns. Anything you wrote
-around them is preserved, and a file carrying content outside a well-formed
-managed region is recognized and reported (`VendorLocked`), never overwritten.
+Says which file your instructions come from and whether every agent reads it.
+If one does not, `uze install` fixes it.
 
-## What lives in a managed region
+## What uze writes into it
 
-`AGENTS.md` is yours; uze owns nothing but the marked blocks inside it.
+`AGENTS.md` is yours. uze only writes inside blocks it marks:
 
-- **`package:<name>:instructions`** — one region per installed package that ships
-  its own `AGENTS.md`, composed in by `reconcile`.
-- **`project:worktree-policy`** — the checkout an agent is already working in, and
-  what this project does with finished work. Its only audience is a writer uze did
-  not place itself: a subagent spawned inside a harness session, which would
-  otherwise isolate a second time on top of the checkout it is already in. See
-  [The agent workspace](/docs/workspace).
+```markdown
+<!-- uze:begin … -->
+…
+<!-- uze:end … -->
+```
 
-Each region is receipt-owned. Drift inside one is reported rather than
-overwritten, and a region whose owner is gone is removed rather than left behind.
-
-## Portability states
-
-- **Portable** — `AGENTS.md` exists and every detected harness that needs
-  something from it has it (natively or via a matched bridge).
-- **Partially portable** — at least one harness's bridge is missing or out of
-  date; the report names which.
-- **Vendor-locked** — no `AGENTS.md`, but vendor-specific files hold their own
-  content. uze makes the split visible instead of papering over it.
-- **No context** — no recognized instructions file at all.
+A plugin can ship instructions of its own, and they land in one of these blocks.
+Anything you write outside them is never touched, and a block you edit by hand
+is reported, not overwritten.
 
 <Cards>
-  <Card title="The agent workspace" href="/docs/workspace" />
-  <Card title="Harness compatibility" href="/docs/reference/harnesses" />
+  <Card title="uze Skills" href="/docs/plugins/skills" />
+  <Card title="Harness support" href="/docs/reference/harnesses" />
 </Cards>

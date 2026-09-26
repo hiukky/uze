@@ -3,8 +3,6 @@ title: Glossary
 description: The words uze uses, one line each
 ---
 
-# Glossary
-
 Each entry is the short version. The link goes to the page that explains it.
 
 ## Packages
@@ -23,7 +21,7 @@ binary.
 source of truth. No harness reads it directly.
 
 **Capability.** One kind of thing a plugin declares: a skill, an MCP server, an
-agent, a hook or instructions. See [Capabilities](/docs/concepts/delivery#capabilities).
+agent, a hook or instructions. See [Plugin format](/docs/reference/plugin-format).
 
 **Invocation policy.** Who may run a skill: the model, the user, or both. The
 `invoke: {model, user}` block in `SKILL.md`.
@@ -38,7 +36,7 @@ vendor-specific lives there.
 
 **Delivery route.** How a capability reaches a harness. uze takes the first that
 works, in this order: native, generated native, safe adaptation, unsupported.
-See [Concepts](/docs/concepts/delivery#delivery-precedence).
+See [Concepts](/docs/concepts/delivery#the-most-native-route-wins).
 
 **Envelope.** A harness's own plugin format. uze uses the one a plugin ships, or
 generates one when it is missing.
@@ -48,7 +46,7 @@ directory, a config entry, a bridge. A projection can always be deleted and
 rebuilt.
 
 **Receipt.** uze's record of an artifact it placed. uze only changes or removes
-what a receipt says it owns. See [Concepts](/docs/concepts/delivery#receipts-drive-lifecycle-safety).
+what a receipt says it owns. See [Concepts](/docs/concepts/delivery#nothing-is-touched-blindly).
 
 **Drift.** An owned artifact that no longer matches its receipt. uze reports it
 and stops, instead of overwriting.
@@ -56,16 +54,15 @@ and stops, instead of overwriting.
 **Shim.** A link in `~/.uze/shims` that starts the real harness binary. It
 brings an agent back to its conversation after a reboot, and can project
 `AGENTS.md` without writing into the project. Experimental. See
-[Harnesses](/docs/reference/harnesses#the-runtime-path-shim).
+[The terminal session](/docs/advanced/terminal#resuming-after-a-reboot).
 
 ## Projects
 
-**Machine scope.** Commands that change `~/.uze`: `uze setup`, `uze plugin`,
-`uze market`, `uze doctor`. They never write into a project.
+**Machine scope.** What lives in `~/.uze`: the store, your agents' setup,
+marketplaces and configuration. `-m` makes a command act on it alone.
 
-**Project scope.** Commands that change the directory you are in: `uze install`,
-`uze remove`, `uze status`, `uze <plugin>@<market>`. They never change what
-other projects see.
+**Project scope.** What lives in a project: `agents.yaml`, `agents.lock` and
+`AGENTS.md`. A command run inside a project maintains them.
 
 **`agents.yaml`.** What the project declares: marketplaces, plugins, the
 worktree policy. You write it. See [Project files](/docs/reference/project-files).
@@ -79,9 +76,6 @@ that file natively. See [Project context](/docs/plugins/context).
 **Managed region.** A block inside a file you own, between
 `<!-- uze:begin … -->` and `<!-- uze:end … -->` markers. uze writes only there.
 
-**Profile.** Autonomy, sandbox and model preferences, translated into each
-harness's own settings.
-
 ## Workspace
 
 **Workspace.** The terminal UI that opens when you run `uze` with no arguments.
@@ -94,7 +88,7 @@ running after you close the UI.
 `.worktrees/<id>` on branch `agent/<id>`.
 
 **Slot.** An isolated checkout uze reuses for the next agent instead of creating
-a new one. See [Running agents](/docs/workspace/agents#the-checkout-is-a-slot).
+a new one. See [Running agents](/docs/workspace/agents#where-an-agent-works).
 
 **Delivery (of work).** Rebasing an agent's branch onto the target, running the
 project's checks, then merging or opening a pull request.

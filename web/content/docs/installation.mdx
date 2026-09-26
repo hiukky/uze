@@ -1,177 +1,74 @@
 ---
 title: Installation
-description: Install uze, provision your harnesses, keep it current — and take it off again
+description: Install uze, set up your agents, and keep it current
 ---
 
-# Installation
-
-## Install
-
-<Tabs items={['Linux', 'macOS', 'Windows', 'Source']} defaultIndex={0}>
+<Tabs items={['Linux', 'macOS', 'Source']} defaultIndex={0}>
   <Tab value="Linux">
     ```bash
     curl -fsSL https://uze.sh/i | sh
     ```
 
-    Prebuilt binary for `x86_64`/`aarch64`, glibc or musl auto-detected. It
-    verifies a SHA-256 checksum before installing into `~/.local/bin` (or
-    `$XDG_BIN_HOME`) and refuses on mismatch. `UZE_VERSION` pins a
-    release, `UZE_BIN_DIR` changes where it lands.
+    `x86_64` or `aarch64`, glibc or musl. The installer verifies the release
+    checksum and installs into `~/.local/bin`.
   </Tab>
   <Tab value="macOS">
-    <Callout type="warn">
-      **Experimental.** Built and tested on Apple Silicon CI. Not verified: a
-      real install on a Mac, the `x86_64` build on an Intel machine, a
-      terminal other than `tmux`.
-    </Callout>
-
     ```bash
     curl -fsSL https://uze.sh/i | sh
     ```
 
-    The same command: the installer reads `uname` and picks the macOS asset for
-    Apple Silicon or Intel, verifying its SHA-256 the same way.
-
-    Not notarized: `curl | sh` installs and runs. A tarball fetched through a
-    **browser** is quarantined by Gatekeeper — clear it with
-    `xattr -d com.apple.quarantine uze`.
-  </Tab>
-  <Tab value="Windows">
-    Planned, not yet supported — see the **Source** tab.
+    Apple Silicon or Intel. **Experimental:** built and tested in CI, not yet
+    on a real Mac.
   </Tab>
   <Tab value="Source">
     ```bash
-    git clone https://github.com/uze-sh/uze.git
-    cd uze
-    cargo install --path . --bin uze --locked
+    cargo install --git https://github.com/uze-sh/uze uze --locked
     ```
 
-    Rust stable, MSRV 1.97. Works on anything the toolchain targets.
+    Rust 1.97 or newer.
   </Tab>
 </Tabs>
 
-Every release until v1 is an alpha. Each one ships six tarballs (four Linux,
-two macOS), a CycloneDX SBOM, `SHASUMS256.txt` and signed provenance you can
-check with `gh attestation verify <file> --repo uze-sh/uze`.
+Windows is not supported yet.
 
-A `uze` the install script placed keeps itself current: the workspace checks
-for a new release when it opens and every hour after, installs it, and says so
-in the sidebar — restart uze to run it, and click the notice to read what
-changed. `uze upgrade` does the same on demand, and says why when it cannot
-replace the binary it is running from.
-
-## Provision your harnesses
-
-`uze setup` detects every harness uze supports and provisions any that are
-missing through each vendor's own official installer — never a mirror, never a
-repackaged binary.
+## Set up your agents
 
 ```bash
-$ uze setup
-▸ Provisioning 4 harness(es) through official routes…
-✓ [1/4] claude-code: ready (update; version 2.1.260)
-  ↳ shim: ~/.uze/shims/claude
-✓ [2/4] codex: ready (update; version 0.152.1)
-  ↳ shim: ~/.uze/shims/codex
-✓ [3/4] opencode: ready (update; version v0.0.0-beta-18999)
-  ↳ shim: ~/.uze/shims/opencode
-✓ [4/4] antigravity: ready (install; version 1.1.26)
-  ↳ shim: ~/.uze/shims/agy
-
-✓ Setup completed — all 4 harness(es) ready.
+uze setup
 ```
 
-The word in parentheses is what setup did: `install` where the binary was
-absent, `update` where it was already there. Installer output is buffered per
-harness (`$UZE_HOME/state/logs/setup-<harness>.log`; `--verbose` streams it).
-Each `↳ shim` line is the [runtime PATH shim](/docs/reference/harnesses#the-runtime-path-shim)
-for that harness — the thing that also brings an agent back to its conversation
-after a reboot.
-
-A harness that could not be provisioned is a failure, not a warning: setup exits
-non-zero and names it, so an image build never reads "all ready" over a missing
-binary. It is idempotent, and reading state changes nothing:
+uze finds the coding agents on your machine and offers to install the missing
+ones through each vendor's official installer. Pick the ones you use. Running
+`uze` for the first time asks the same question.
 
 ```bash
-$ uze setup list                 # detected harnesses and their setup state
-$ uze setup inspect claude       # one harness, in full
+uze setup list    # what is installed and ready
 ```
 
-Names accept the stable id (`claude-code`), an alias (`claude`, `agy`), or the
-label (`Claude Code`).
+## Staying current
 
-The first time you run `uze` on a machine it asks the same question before
-anything else, with the harnesses it found already checked, then opens the
-workspace once setup is done. Calling it off still opens the workspace; the
-new-agent menu offers only harnesses that are set up, and sends you to
-**Integrations** when there are none.
-
+uze updates itself. The workspace checks for a new release when it opens and
+every hour after, and tells you when one is installed; restart to use it.
+`uze upgrade` does the same on demand.
 
 ## Removing uze
 
+1. Take every plugin off your agents, while uze is still here:
 
-There is no `uze uninstall` yet. Removing it is a few steps, in this order,
-because the first one needs uze still installed.
+   ```bash
+   uze status -m          # the plugins on this machine
+   uze remove <plugin> -m # once per plugin
+   ```
 
-### 1. Detach every plugin from your harnesses
+2. Stop the workspace in each project where you opened it: `uze terminal stop`.
+3. In each project, delete `agents.yaml`, `agents.lock` and `.worktrees/` if you
+   no longer want them, and the `uze:begin … uze:end` blocks in `AGENTS.md`.
+4. Delete the `# >>> uze shims path >>>` block from your shell's rc file.
+5. Delete the binary and uze's home:
 
-```bash
-$ uze plugin list
-$ uze plugin remove <plugin>    # once per plugin
-```
+   ```bash
+   rm ~/.local/bin/uze
+   rm -rf ~/.uze
+   ```
 
-`uze plugin remove` takes out everything uze placed in each harness for that
-plugin: plugin directories, config entries, hook wrappers. It removes only what
-its [receipts](/docs/reference/glossary#delivery) say it owns, and checks each one first.
-If something drifted, it stops and says what, instead of deleting it.
-
-Skip this step and the harnesses keep what uze delivered, with nothing left to
-manage it.
-
-### 2. Stop the workspace
-
-```bash
-$ uze terminal stop    # in each project whose workspace you opened
-```
-
-This stops the terminal server and every agent still running in it.
-
-### 3. Clean each project
-
-uze writes these into a project. Decide per file, since some are committed:
-
-| What | What to do |
-| --- | --- |
-| `agents.yaml`, `agents.lock` | Delete them, or keep them for someone else who uses uze. |
-| Blocks between `<!-- uze:begin … -->` and `<!-- uze:end … -->` in `AGENTS.md` or a harness file | Delete the block. Everything outside it is yours and was never touched. |
-| `.worktrees/` | Remove each checkout with `git worktree remove .worktrees/<id>`, then its branch `agent/<id>` if you don't need it. |
-| `/.worktrees/` line in `.git/info/exclude` | Delete it. It is local to your clone, never committed. |
-
-### 4. Remove the shell `PATH` block
-
-`uze setup` may have added this block to your `.bashrc`, `.zshrc` or fish
-config:
-
-```sh
-…
-```
-
-Delete the lines between the markers, markers included.
-
-### 5. Delete the binary and `~/.uze`
-
-```bash
-$ cat ~/.uze/state/install.json   # where the installer put the binary
-$ rm ~/.local/bin/uze             # or the path it printed
-$ rm -rf ~/.uze                   # or $UZE_HOME, if you set it
-```
-
-A `uze` built with `cargo install` goes with `cargo uninstall uze`.
-
-### What stays
-
-- **The harnesses.** `uze setup` installs them through each vendor's own
-  installer, so they are ordinary installs. Remove them the way their vendor
-  says.
-- **Your own files.** `AGENTS.md`, `CLAUDE.md` and any config you wrote keep
-  everything outside uze's marked blocks.
+The agents themselves stay installed; remove them the way their vendor says.

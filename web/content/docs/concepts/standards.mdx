@@ -1,116 +1,43 @@
 ---
-title: Standards, not another format
-description: Why uze adopts AGENTS.md, Agent Skills, MCP, and Agent Plugins instead of inventing a competing one — and where its own canonical formats come from
+title: Standards
+description: Why uze adopts AGENTS.md, Agent Skills, MCP and Agent Plugins instead of inventing a format
 ---
 
-# Standards, not another format
+The easy mistake for a tool like uze is becoming one more format: moving the
+duplication into its own directory instead of removing it. So uze consumes the
+open standards that exist and models only what they leave out.
 
-The obvious failure mode for a project like uze is becoming just another proprietary format —
-relocating the duplication problem into `.uze/` instead of solving it. uze's founding decision
-(ADR-001) is to not do that: consume the open, multi-vendor standards that already exist, and
-model only what they genuinely leave uncovered.
+## What uze adopts
 
-## What's already standard
+| For | The standard |
+| --- | --- |
+| Project instructions | [AGENTS.md](https://agents.md) |
+| Skills | [Agent Skills](https://agentskills.io) (`SKILL.md`) |
+| Tools and resources | [MCP](https://modelcontextprotocol.io) |
+| Bundling them | [Agent Plugins](https://agent-plugins.org) 1.0 |
 
-Four primitives already have real, multi-vendor open standards behind them:
+Each is stored exactly as written and never converted. Where an agent does not
+read a standard natively, uze bridges it through that agent's own format, as it
+does for Claude Code and `AGENTS.md`.
 
-| Primitive | Standard | Status |
-| --- | --- | --- |
-| Project instructions | **AGENTS.md** | Stewarded by OpenAI, now under the Linux Foundation's Agentic AI Foundation |
-| Skills | **Agent Skills** (`SKILL.md`) | Open spec at agentskills.io, ~45 listed adopters including all four harnesses uze targets |
-| Tools / resources / prompts | **MCP** | Current spec `2026-07-28`, moving toward a stateless core with an extensions framework |
-| Skill + MCP bundling | **Agent Plugins v1.0** | Ratified 2026-08-06 — multi-vendor, but authorship is disputed between sources (see caveat below) |
+A standard is not the same as zero setup. MCP is one protocol, but Claude Code
+and OpenCode read servers from JSON while Codex reads TOML; skills live in a
+different directory per agent. That gap is what uze fills.
 
-uze consumes each of these directly and stores the canonical payload byte-for-byte — it never
-re-serializes a `SKILL.md` or an MCP server entry into an internal schema. Where a harness doesn't
-yet read a standard natively, uze bridges through the harness's own native format instead of
-asking the standard to change: Claude Code is the clearest example — it's listed as a supported
-AGENTS.md client on the standard's own site, but its actual product doesn't read the file, so uze
-projects a managed `@AGENTS.md` import into `CLAUDE.md` rather than treating that gap as uze's own
-format decision.
+## What uze adds
 
-<Callout type="warn">
-  "Standard" doesn't mean "zero-config" even where it's fully settled. MCP is one wire protocol,
-  but the file that points at it isn't portable: Claude, Cursor, and OpenCode read a JSON
-  `mcpServers` object, Codex reads TOML `[mcp_servers.*]`. Skill locations differ too —
-  `.agents/skills/` is an emerging shared convention, but Claude Code only reads `.claude/skills/`
-  and `~/.claude/skills/`. This is exactly why a thin, honest projection layer still earns its
-  place even for primitives that are nominally standard.
-</Callout>
+The standards themselves name what they leave out: hooks, subagents and
+permissions. uze models a capability only when no standard covers it, and two
+qualify today:
 
-## What isn't, and why uze fills exactly that
+- **Agents** (`agents/<name>.md`): a Markdown agent definition, delivered to each
+  agent's native agent format.
+- **Hooks** (`hooks.json`): one hook file and a plain command contract, instead
+  of adopting one vendor's hook format.
 
-Two independent sources — the MCP "Skills over MCP" working group's own charter and the Agent
-Plugins v1.0 spec itself — name the same exclusion list: **hooks, subagents, commands/actions, and
-permissions are explicitly out of scope for v1**, deferred as "too client-specific." Neither
-standard addresses memory at all, and native memory support is wildly inconsistent across
-harnesses.
+And three files of its own, each for something no standard addresses:
 
-That confirmed, twice-independently-sourced gap — not a wishlist — is where uze's own capability
-model lives. The rule (ADR-001) is a bar, not a fixed list: a capability kind earns a place only
-when it is genuinely uncovered by AGENTS.md, Agent Skills, MCP, or Agent Plugins as they exist
-today. Everything else (Skills, MCP, project instructions) is represented by reference to its
-standard form, never remodeled — and the model has already shrunk under that bar, retiring
-`Command` once invocation policy turned out to be the portable semantic (ADR-030).
-
-Two capabilities in that gap are canonical enough to ship today:
-
-- **Portable Agents** (`agents/<name>.md`, ADR-031) — a Markdown agent profile, delivered natively
-  to Claude Code, OpenCode, and Antigravity, and projected into Codex's documented TOML
-  custom-agent format. Only the verified portable frontmatter subset is claimed; vendor-only
-  model, permission, and orchestration fields are never silently dropped — a route that can't
-  preserve them is reported as adapted or degraded, not native.
-- **Portable Hooks** (`hooks.json`, ADR-033) — a command-only hook ABI (the hook context as
-  `HOOK_*` environment, one exit code as the decision) instead of picking one vendor's hook contract as the
-  de-facto format. Claude, Codex, and Antigravity get native hook configuration; OpenCode — which
-  only exposes hooks as TypeScript plugin callbacks — gets an owned, regenerable bridge, so authors
-  never need a TypeScript toolchain to ship a hook.
-
-Both follow the same rule: model the gap narrowly, borrow the surrounding standards' own patterns
-(capability-level `ExposurePlan`, receipts, inspect-before-detach) rather than inventing new
-machinery, and never claim a route is native without a passing real-harness scenario.
-
-## The project's own formats — and why they're not exceptions
-
-Three uze-defined files exist, and each earns its place the same way: something no standard covers.
-
-- **`agents.yaml` + `agents.lock`** (ADR-016) — no standard addresses reproducible
-  agent-dependency resolution. The pair splits the two roles every other ecosystem's lock keeps
-  apart: `agents.yaml` holds what a person decided, `agents.lock` holds only what resolving it
-  produced — a commit and a digest — so it is generated, verifiable, reproducible offline and
-  safe to delete. `git clone && uze install` reconstructs the environment from the two.
-  See [the reference](/docs/reference/project-files).
-- **`marketplace.json`** (ADR-032) — the uze marketplace registry manifest, distinct from
-  vendor-owned catalogues like `.claude-plugin/marketplace.json` that integrations still generate
-  untouched. It was briefly renamed `agents.json` and reverted: `marketplace.json` is what the
-  active marketplace specification and the harnesses uze targets already call this file.
-- **The canonical package envelope** — uze is **Plugin First, Capability Aware** (ADR-013): a
-  preserved external package is the distribution unit, a capability is the compatibility unit.
-  The Store never invents a UZE plugin format — it preserves whatever vendor envelope a package
-  ships (`.claude-plugin/plugin.json`, `.codex-plugin/plugin.json`) verbatim, and decomposes into
-  individual capability delivery only when no native envelope exists. The envelope shape itself —
-  `plugin.json` + `skills/` + `agents/` + `hooks.json` + `mcp.json` — mirrors Agent Plugins v1.0's
-  own `plugin.json` + `skills/` + `mcp.json` scope, extended only by the confirmed gap above.
-
-<Callout type="info">
-  Agent Plugins' authorship is unresolved in primary sources. uze doesn't take a side — it targets
-  the published v1.0 scope and reports what each harness actually does with it.
-</Callout>
-
-## Delivery still prefers native over generated over adapted
-
-None of this changes how a capability reaches a harness once it's modeled. Every route — standard
-or uze-defined — goes through the same precedence:
-
-**Native > Generated Native > Safe Adaptation > Unsupported**
-
-A harness's own mechanism wins when one exists; a deterministically generated envelope delivered
-through that native mechanism is next; an adaptation that degrades a property always says so.
-uze never presents a matching event or field name as proof of equivalence — see
-[Capabilities](/docs/concepts/delivery#capabilities) for how that plays out per resource kind.
-
-<Cards>
-  <Card title="Capabilities" href="/docs/concepts/delivery#capabilities" />
-  <Card title="Project context" href="/docs/plugins/context" />
-  <Card title="Harness compatibility" href="/docs/reference/harnesses" />
-</Cards>
+- **`agents.yaml` and `agents.lock`**: what a project declares, and exactly what
+  that resolved to, so `git clone && uze install` rebuilds the same environment.
+- **`marketplace.json`**: the list of plugins in a marketplace, under the name
+  the marketplace specification and the agents already use.

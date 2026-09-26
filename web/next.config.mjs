@@ -39,7 +39,7 @@ const config = {
       '/docs/uninstall': '/docs/installation#removing-uze',
       '/docs/creating-a-plugin': '/docs/plugins/creating',
       '/docs/concepts/context': '/docs/plugins/context',
-      '/docs/concepts/capabilities': '/docs/concepts/delivery#capabilities',
+      '/docs/concepts/capabilities': '/docs/reference/plugin-format',
       '/docs/cli': '/docs/reference/cli',
       '/docs/project-files': '/docs/reference/project-files',
       '/docs/agents-lock': '/docs/reference/project-files',

@@ -1,108 +1,57 @@
 ---
 title: Quickstart
-description: Five minutes from an installed uze to agents side by side and a plugin in your project
+description: From an installed uze to two agents side by side, in five minutes
 ---
 
-# Quickstart
+You have uze [installed](/docs/installation) and at least one agent set up.
+Open a terminal in any Git repository.
 
-## Add a plugin
-
-A plugin always comes from a marketplace — a Git repository holding a
-`marketplace.json`, whether you spell it as a URL or as a clone on this machine.
-`uze-official` is embedded in the binary and needs no registration.
+## 1. Open the workspace
 
 ```bash
-$ uze market add you/marketplace                      # github; or gitlab:you/marketplace, a URL, ./a-local-clone
-$ uze market list
-$ uze flow@my-marketplace                             # add it to this project
+uze
 ```
 
-The `<plugin>@<market>` shorthand is **project scope**: it declares the plugin in
-`agents.yaml` and records what it resolved to in `agents.lock`. To install into
-the machine Store without touching any project, use
-`uze plugin install flow@my-marketplace`. Neither implies the other.
+Your project opens as a **space**. Everything on screen is clickable; `F1` lists
+the keys that act right now.
+
+## 2. Start two agents
+
+Press `Alt+N` and pick an agent. Do it again and pick another. Give each one a
+task, the way you normally would.
+
+Each agent is a tab in the sidebar. The tab shows the name of the work once
+the agent picks one, and a check when it finishes.
+
+## 3. See what one changed
+
+Select an agent and press `Alt+G`. You get its changed files and the diff. Press
+`Alt+G` again to go back to the agent.
+
+## 4. Give them a plugin
+
+Plugins come from marketplaces: Git repositories that list them. Add one, then
+add a plugin from it to this project:
 
 ```bash
-$ uze plugin inspect flow    # capabilities, and how each harness will receive them
+uze market add owner/repo      # a marketplace on GitHub
+uze <plugin>@<marketplace>     # add one of its plugins
 ```
 
-<Callout type="warn">
-  MCP server commands and hook handlers are **executable capabilities**. uze lists
-  every process a package can cause to run and asks before installing it. A
-  non-interactive shell refuses with `TRUST_REQUIRED` rather than assuming yes —
-  `--trust` answers the question up front, for CI.
-</Callout>
+Every agent you start from now on has its skills.
 
-## Share one project context
+uze itself ships one plugin, `uze`, already installed. Try it from any agent:
 
-`AGENTS.md` at the project root is the portable baseline, and you never run a
-command to maintain it: `uze install` leaves it composed and every harness
-bridge in step, and `uze status` says which file the context comes from and
-whether each detected harness reads it.
-
-```bash
-$ uze install    # resolve, install, and leave the context reconciled
-$ uze status     # which file, which harnesses, and anything still owed
+```text
+/uze:init
 ```
 
-Only the delimited regions uze owns are ever written. Anything you wrote around
-them is preserved, and a vendor file holding its own content is reported rather
-than overwritten. The region-by-region detail is on the
-[agent surface](/docs/reference/cli#agent-surface) — `uze agent context inspect | plan |
-reconcile` — written for an agent maintaining the file, not for you. See
-[Project context](/docs/plugins/context).
+It sets up `AGENTS.md` as the one instructions file every agent reads. In Codex
+the prefix is `$`, in OpenCode `@`: see [uze Skills](/docs/plugins/skills).
 
-## Check the health
-
-```bash
-$ uze doctor     # store, harness detection, attachment health, receipt ledger
-$ uze status     # how this project's environment and context reach each harness
-```
-
-`doctor` is a report, not a chore list: it repairs the deterministic, uze-owned
-artifacts it can prove are safe to rebuild, and escalates only what genuinely
-needs your decision.
-
-When something needs explaining rather than repairing, the workspace and the
-terminal server keep a journal without being asked — `~/.uze/cache/logs/`,
-rolled daily and pruned to a week. Nothing to turn on after the fact.
-
-## Run agents side by side
-
-Running `uze` with no arguments opens the **workspace** — a persistent terminal
-that hosts your agent sessions:
-
-```bash
-$ uze
-```
-
-Agents start where the project says — beside you in the space's own root, or
-each in an isolated checkout of its own, so two of them never touch each other's
-files or yours. `Alt+G` shows what one changed, `Alt+A` the project's own
-diagrams, and `Ctrl+O` switches to management — Overview, Plugins, Extensions,
-Integrations, Profiles — and back.
+## Next
 
 <Cards>
-  <Card title="The agent workspace" href="/docs/workspace" />
-  <Card title="Running agents" href="/docs/workspace/agents" />
-  <Card title="Extensions" href="/docs/workspace/extensions" />
+  <Card title="Running agents" href="/docs/workspace/agents" description="Checkouts of their own, and delivering finished work" />
+  <Card title="Installing plugins" href="/docs/plugins" description="Marketplaces, and how a project records its plugins" />
 </Cards>
-
-## A fresh clone
-
-`agents.yaml` and `agents.lock` are committed with the project, so a new machine
-reconstructs the same environment from the pair alone — at the same commits, with
-each package's bytes verified against the recorded digest before anything is
-installed:
-
-```bash
-$ git clone …
-$ uze install
-```
-
-## What happens next
-
-- [Concepts](/docs/concepts) — the model behind the loop.
-- [Creating a plugin](/docs/plugins/creating) — the canonical layout, and how to publish one.
-- [Harnesses](/docs/reference/harnesses) — what each harness gets, natively.
-- [CLI reference](/docs/reference/cli) — every command.

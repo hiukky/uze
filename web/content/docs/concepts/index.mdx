@@ -1,23 +1,32 @@
 ---
 title: Why uze
-description: Agents come and go; your work stays — the idea behind uze
+description: Agents come and go; your work stays
 ---
 
-# Why uze
+Every coding agent has its own plugin format, its own skills directory and its
+own instructions file. Keep the same skill or the same project rules for four
+of them and you maintain four copies, each drifting on its own.
 
-Coding agents each have their own plugin format, their own skills directory,
-their own way of reading project instructions. Maintaining the same skill or the
-same project context four times over is how agent setups rot.
+Run more than one at a time and they collide: two agents editing one checkout,
+with your own uncommitted work in the middle.
 
-And once you run more than one at a time, they collide: two agents editing one
-checkout, with your own uncommitted work in the middle.
+uze starts from one idea: **agents come and go; your work stays.** Whatever you
+use today will not be what you use in a year, so nothing you invest in should be
+tied to one of them.
 
-uze answers both with one idea: **agents come and go; your work stays.** What a
-project declares — its plugins, its instructions — is written once and delivered
-to whichever agent you run. Where an agent works is a checkout of its own, and
-what it did is read from Git, not from what it says.
+## What follows from it
 
-<Cards>
-  <Card title="Standards, not another format" href="/docs/concepts/standards" />
-  <Card title="How delivery works" href="/docs/concepts/delivery" />
-</Cards>
+**Standards, not another format.** A plugin is an Agent Plugin, a skill is an
+Agent Skill, instructions are `AGENTS.md`. uze adopts the open standards and
+invents only what none of them covers. [Standards →](/docs/concepts/standards)
+
+**Each agent's own way in.** A plugin reaches an agent through the most native
+mechanism that agent has. When one cannot carry something, uze says so instead
+of faking it. [How delivery works →](/docs/concepts/delivery)
+
+**Git is the source of truth.** Where an agent's work stands is read from its
+branch, never from what the agent claims. An agent works in a checkout of its
+own, and its work comes home through a rebase and your checks.
+
+**Yours stays yours.** uze writes only what it can prove it owns, inside
+blocks it marks. Anything else it finds changed, it reports and leaves alone.

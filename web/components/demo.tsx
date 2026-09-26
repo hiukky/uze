@@ -13,10 +13,10 @@ export function Demo({
   alt: string;
   caption?: string;
 }) {
-  // Wider than the prose column wherever the page has room: a terminal
-  // recording is only legible at something near its own size.
+  // The prose column's own width: bleeding past it ran under the sidebar,
+  // whose edge the content padding does not clear.
   return (
-    <figure className="my-8 lg:-mx-8 xl:-mx-12">
+    <figure className="my-8">
       <div className="overflow-hidden rounded-md" style={{ background: '#0a0c0d' }}>
         {/* The margin is zeroed on the `picture`, which is what carries it:
             the docs typography gives media in the content a 2em block margin,

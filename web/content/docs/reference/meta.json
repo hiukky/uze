@@ -1,5 +1,12 @@
 {
   "title": "Reference",
   "icon": "BookOpen",
-  "pages": ["cli", "project-files", "harnesses", "glossary", "faq"]
+  "pages": [
+    "cli",
+    "project-files",
+    "plugin-format",
+    "harnesses",
+    "glossary",
+    "faq"
+  ]
 }

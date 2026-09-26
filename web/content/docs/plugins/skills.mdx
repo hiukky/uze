@@ -1,0 +1,58 @@
+---
+title: uze Skills
+description: The skills uze ships with, and how to call them from any agent
+---
+
+uze comes with one plugin already installed, `uze`. Its skills let you ask any
+agent for the things uze does, in plain words.
+
+| Skill | Ask it to… |
+| --- | --- |
+| `uze:init` | Set up one `AGENTS.md` for every agent, from the instructions you already have |
+| `uze:architect` | Draw or update your project's diagrams: C4, sequences, flowcharts |
+| `uze:author` | Create a plugin, or a marketplace for your plugins |
+| `uze:worktree` | Coordinate several agents writing at once, each in its own checkout |
+
+## Calling a skill
+
+Type the skill's name, then what you want:
+
+```text
+/uze:architect draw a C4 context diagram of this project
+```
+
+The prefix depends on the agent:
+
+| Agent | Call it with |
+| --- | --- |
+| Claude Code | `/uze:init` |
+| Codex | `$uze:init` |
+| OpenCode | `@uze:init` |
+| Antigravity | `/uze:init` |
+
+You rarely need to. Agents also pick a skill on their own when your request
+matches it: *"draw our architecture"* is enough.
+
+## Examples
+
+```text
+/uze:init
+```
+
+```text
+/uze:architect add a sequence diagram of how a payment is processed
+```
+
+```text
+/uze:author create a plugin with a skill that reviews SQL migrations
+```
+
+```text
+/uze:author create a marketplace for my team
+```
+
+<Cards>
+  <Card title="Project context" href="/docs/plugins/context" />
+  <Card title="Extensions" href="/docs/workspace/extensions#architect" />
+  <Card title="Creating a plugin" href="/docs/plugins/creating" />
+</Cards>

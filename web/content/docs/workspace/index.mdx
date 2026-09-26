@@ -1,116 +1,53 @@
 ---
 title: Overview
-description: A persistent terminal that hosts your agent sessions — spaces, tabs and panes that outlive the client
+description: The terminal workspace where your agents run — spaces, tabs and panes that survive closing it
 ---
 
-# Overview
-
-Running `uze` with no arguments opens the **workspace**: a persistent terminal
-that hosts your agent sessions, side by side.
+Run `uze` with no arguments and you get the **workspace**: one terminal that
+holds all your agents.
 
 ```bash
-$ uze                    # attach the workspace (starts its server when needed)
-$ uze terminal attach    # the same thing, explicitly
-$ uze terminal stop      # stop this workspace's session and its processes
+uze
 ```
 
 <Callout type="info">
-  The workspace is **experimental**. The runtime, its protocol, and the
-  shortcuts below may still change.
+  The workspace is **experimental**. Its layout and shortcuts may still change.
 </Callout>
 
 ## Spaces, tabs, panes
 
-Three levels, and no more:
-
-| Level | What it is |
+| | What it is |
 | --- | --- |
-| **Space** | One directory you work in. The sidebar lists them; `Alt+S` adds one |
-| **Tab** | One session inside a space — a plain shell, or an agent |
-| **Pane** | The live terminal a tab draws, owned by the runtime server |
+| **Space** | A directory you work in, usually a project. `Alt+S` adds one |
+| **Tab** | A session inside it: an agent (`Alt+N`) or a shell (`Ctrl+T`) |
+| **Pane** | The live terminal of the selected tab |
 
-A shell opened while an agent is in front of you belongs to that agent: it
-starts in the agent's own checkout, is shown with it, and **closes with it**.
-A space keeps its own shells — the one it opened with, and any opened with no
-agent selected — and closing an agent never touches those.
+A shell you open while an agent is selected belongs to that agent: it starts in
+the agent's checkout and closes with it.
 
-Running `uze` *inside* one of the workspace's own panes doesn't nest a second
-client: it opens a space for that directory in the uze already running, and
-exits.
+## Nothing is lost when you close it
 
-## Nothing you leave is lost
-
-The panes belong to a local server, not to the window you are looking at.
-Closing the client — switching to management, detaching, quitting the terminal
-emulator — leaves every process running, and the next attach finds them exactly
-where they were.
-
-The server outlives its client, but not the machine. After a reboot, the next
-`uze` brings the spaces, tabs and agents back, each relaunched in the checkout
-it was working in and each **resuming the session it was in** rather than
-starting a stranger in a directory full of half-done work.
-
-That resume is done by the shim `uze setup <harness>` installs: its presence is
-what turns this on, and removing it turns it off. A conversation is remembered
-per task and per harness in uze's own state, never inside a checkout — so
-resetting a checkout cannot take it, and a recycled slot starts fresh.
-
-What ties a process to its task is the launch, not the directory. A harness you
-start by hand carries no identity and starts exactly as it would without uze; so
-does one an agent starts from inside its own session. Where the resume cannot be
-done, the agent still starts and the tab says why — the
-[harness matrix](/docs/reference/harnesses) has the per-harness column.
-
-## The strip's right end
-
-Three zones, divided by hairlines, each answering a different question about the
-agent the strip belongs to:
-
-| Zone | Answers |
-| --- | --- |
-| **Delivery** | What the work is *doing* — its state, and the request it became (`PR`/`MR` before it has a number, `#41` after) |
-| **Changes** | What it has *changed* — the count, and the way into the diff |
-| **Actions** | What can be *done* to it — the extension chips |
-
-The header carries one line, only ever about work in flight, and it goes when
-the work ends. Outcomes are toasts, stacked top-right over the pane: they carry
-the seconds they have left, and the one that needs an answer stays until it gets
-one.
+Your agents keep running when you quit the workspace, and are exactly where you
+left them the next time you run `uze`. After a reboot, uze starts each agent
+again in the checkout it was working in, back in the conversation it was having.
 
 ## When an agent finishes
 
-An agent that finishes out of sight leaves a check on its tab in the sidebar
-until you look at it. It can also ring the terminal's bell — **Manage → Settings →
-Notifications**:
+An agent that finishes while you are looking elsewhere leaves a check on its
+tab. To hear it too:
 
-| Choice | Rings for |
-| --- | --- |
-| `silent` | nothing — the default |
-| `out_of_sight` | a turn that ended in a tab you were not on |
-| `always` | every finished turn, the tab on screen included |
-
-The sound is your terminal's own bell, so the terminal decides what it is: a
-tone, a flash, or nothing if its bell is off. A turn rings only after staying
-finished for about ten seconds, so a pause the agent resumes from never rings,
-and agents finishing together ring once. The choice lives in `~/.uze/config.toml`:
-
-```toml
-[notifications]
-agent_finished = "out_of_sight"
+```bash
+uze config notification on      # ring the terminal bell when an agent finishes
+uze config notification silent  # never
 ```
 
-## Prompt history
+## Management
 
-What you send to an agent tab is recorded per workspace, and the management view
-lists it — click an entry to jump back to the tab it was typed in.
-
-It is a convenience log, not a transcript: uze forwards keystrokes to a
-pseudoterminal whose contents it never interprets, so entries can be missing and
-nothing treats the history as complete. The file is owner-only, and a
-workspace's history can be cleared outright.
+`Ctrl+O` switches to management and back: your plugins, marketplaces, agents'
+setup, appearance and shortcuts, all with the mouse.
 
 <Cards>
   <Card title="Running agents" href="/docs/workspace/agents" />
   <Card title="Extensions" href="/docs/workspace/extensions" />
-  <Card title="agents.yaml & agents.lock" href="/docs/reference/project-files" />
+  <Card title="Keys" href="/docs/configuration/keys" />
 </Cards>

@@ -1,0 +1,75 @@
+---
+title: Writing a theme
+description: A theme file, what it may leave out, and the ways to write a colour
+---
+
+A theme is a JSON file in `~/.uze/themes/`; its file name is its id. Anything it
+leaves out comes from the built-in default, so a whole light theme is a few
+lines:
+
+```json title="~/.uze/themes/dawn.json"
+{
+  "name": "dawn",
+  "colors": {
+    "surface.background": "#faf7f2",
+    "text.primary": "#2b2a28",
+    "text.muted": "#7b736a",
+    "accent": "#2f7d4f"
+  }
+}
+```
+
+Every surface, border and diff tint is derived from the background you declare.
+
+```bash
+uze config theme set dawn
+uze config theme show        # what resolved, from which layer, and any warnings
+```
+
+Point your editor at
+[`theme.schema.json`](https://github.com/uze-sh/uze/blob/main/crates/uze-theme/themes/theme.schema.json)
+for completion over every token and symbol.
+
+## A variation of another theme
+
+```json
+{
+  "extends": "dracula",
+  "name": "Dracula Soft",
+  "colors": { "surface.background": "#343746" }
+}
+```
+
+What the parent derived from its background is recomputed against yours. A file
+named after a built-in theme, like `dracula.json`, replaces it.
+
+## Writing a colour
+
+| Form | Means |
+| --- | --- |
+| `#rrggbb` | Exactly this colour |
+| `#rrggbbaa` | This colour at that alpha, over the background |
+| `~aa` | Set apart from the background by that much, in whichever direction is visible |
+| `@token` | Whatever that token is |
+| `@token/aa` | That token at that alpha, over the background |
+
+`~aa` is what makes one theme work light or dark: a raised surface is a little
+lighter on a dark background and a little darker on a light one.
+`surface.background` itself must be an opaque `#rrggbb`.
+
+## Symbols
+
+Every mark uze draws is a named symbol a theme can replace, with a string, a
+list of animation frames, or an object with an explicit `width`. To change a
+single glyph without writing a theme, use `~/.uze/theme-overrides.json`: same
+format, applied last, over whatever theme and icon set you use.
+
+## What a theme reaches
+
+The workspace, management and the CLI's own output, and also what a program in
+a pane is told the terminal's colours are, so an agent picks the light or dark
+UI you are actually looking at. It never changes layout.
+
+A colour with poor contrast against the background is reported by
+`uze config theme show`, never corrected. A theme that fails to load says why on
+every run, and uze draws with the default until it is fixed.

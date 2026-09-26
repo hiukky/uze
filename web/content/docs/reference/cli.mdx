@@ -1,198 +1,79 @@
 ---
 title: CLI
-description: Every command, grouped by project scope and machine scope
+description: Every command
 ---
 
-# CLI
-
-Two scopes, and they never touch each other's state. Project commands
-read and write the current directory's `agents.yaml`, `agents.lock` and context
-files; machine commands read and write `~/.uze`.
-
 ```bash
-uze                          # the agent workspace (TUI) — Ctrl+O switches to management
-uze help | --help | -h       # help, at the root or on any command
-uze --version                # version
+uze                       # open the workspace
+uze --help                # help, on the root or any command
+uze --version
 ```
 
-## Project scope
+A command run inside a project acts on that project and on the machine. `-m`
+makes it act on the machine alone.
+
+## Plugins
 
 ```bash
-uze <plugin>@<market>        # shorthand — add a plugin to this project
-uze install [path]           # resolve agents.yaml into agents.lock, then install it (alias: uze i)
-uze update [plugin] [path]   # move the pins to where agents.yaml's refs point now
-uze remove <plugin>          # remove a plugin from this project (never the machine Store)
-uze status [path]            # this project's environment readiness
+uze <plugin>@<market>         # add a plugin to this project
+uze install                   # install what agents.yaml and agents.lock declare (alias: i)
+uze install <plugin>@<market> # the same as the shorthand
+uze update [plugin]           # move plugins to where agents.yaml points now
+uze remove <plugin>           # take it out of this project
+uze remove <plugin> -m        # take it off this machine
+uze inspect <plugin>          # what it carries, and how each agent receives it
+uze status                    # this project: plugins, context, what is still owed
+uze status -m                 # this machine: every installed plugin
 ```
 
-`uze install` **reproduces** the pin the lock records; `uze update` **moves** it,
-by re-resolving the ref `agents.yaml` declares and rewriting `agents.lock`. One
-is what a fresh clone runs, the other is a decision you make.
-
-`uze <plugin>@<market>` is the only form that adds a plugin to a project. A bare
-path or Git URL is never accepted — a plugin is always resolved through a
-marketplace, even a one-plugin local one. The `@` is what makes the shorthand
-unambiguous: no built-in command name contains one.
-
-`uze install` runs two passes — **resolution** writes what `agents.yaml` declares
-into `agents.lock`, then **reproduction** installs what the lock records and the
-Store lacks. It also creates `agents.yaml` when the project has none, with every
-key commented out beside its default. Nothing that merely *reads* a project
-creates that file.
-
-| Flag | Where | Meaning |
+| Flag | On | Does |
 | --- | --- | --- |
-| `--trust` | `install`, `update`, `<plugin>@<market>` | Authorize executable capabilities (hook and MCP commands) |
-| `--format json` | every command above | Machine-readable output, keyed on stable ids |
+| `-m` | `install`, `update`, `remove`, `status` | Act on the machine only |
+| `--trust` | `install`, `update`, `<plugin>@<market>` | Approve the commands a plugin runs, for CI |
+| `--alias <name>` | `install` | Install under another name when another marketplace's plugin has it |
+| `--replace` | `install` | Replace the other marketplace's plugin of the same name |
 
-`uze status` is where a person asks whether the project is ready: which file
-the context comes from, whether every detected harness reads it, what
-`agents.yaml` declares that nothing has caught up to yet, and the one command
-to run about it. `uze install` is the repair — it converges the manifest and
-leaves the context reconciled, so declaring an environment and projecting it
-are one command.
-
-## Agent surface
-
-Project-scoped, like everything above, but written for an agent UZE launched
-rather than for a person — so it is hidden from `uze --help` and documented in
-the instructions UZE projects into `AGENTS.md`. Nothing here is off-limits to a
-person; it simply answers at a detail only a writer of `AGENTS.md` acts on.
+## Marketplaces
 
 ```bash
-uze agent task name <type>/<subject>  # name the work, judged against agents.yaml's vocabulary
-uze agent artifacts check [path]      # draw every declared diagram and say what that found
-uze agent context inspect [path]      # what each harness currently sees of AGENTS.md — read-only
-uze agent context plan [path]         # exactly what reconcile would change — read-only
-uze agent context reconcile [path]    # compose AGENTS.md and reconcile the harness bridges
+uze market add <source>            # owner/repo, host:owner/repo, a Git URL or ./a-directory
+uze market list
+uze market inspect <name>
+uze market remove <name>           # the marketplace and everything it delivered
+uze market link <name> <checkout>  # read it from a checkout you are developing
+uze market unlink <name>
+uze market host [alias] [url]      # the hosts owner/repo resolves against
 ```
 
-`--format json` on all five. `uze agent task name` works only inside an agent
-UZE launched — a person's own shell has no task to name.
-`uze agent artifacts check` exits non-zero on a diagram that does not draw, or
-whose edges found no path, so it belongs in a project's gate — see
-[Architect](/docs/workspace/extensions#proving-a-diagram-still-draws).
-
-## Machine scope
+## Setup and health
 
 ```bash
-uze setup                          # provision every registered harness
-uze setup <harness>...             # provision only these
-uze setup list                     # detected harnesses and their setup state
-uze setup inspect <harness>        # one harness's detection/setup/provisioning detail
-
-uze market add <source>            # register a marketplace: owner/repo, alias:owner/repo, a Git URL, or ./a-local-clone
-uze market list                    # registered marketplaces
-uze market inspect <name>          # one marketplace's source and plugin count
-uze market remove <name>           # blocked while plugins from it are installed
-uze market link <name> <checkout>  # read a marketplace from a checkout you develop
-uze market unlink <name>           # stop reading it from that checkout
-uze market host                    # the hosts owner/repo and alias:owner/repo resolve against
-uze market host <alias>            # make it the default host
-uze market host <alias> <https-url>  # define an alias (a self-hosted forge, an organisation)
-uze market host <alias> --remove   # remove an alias you defined
-
-uze plugin install <plugin>@<market>  # install into the machine Store
-uze plugin list                       # installed packages
-uze plugin inspect <plugin>           # capabilities + per-harness delivery
-uze plugin update <plugin>            # re-resolve its source and re-attach
-uze plugin remove <plugin>            # remove from the Store (inspects before detaching)
-
-uze doctor                         # diagnostics: store, harnesses, attachments, ledger
+uze setup                   # choose the agents to set up
+uze setup <agent>...        # set up these (claude, codex, opencode, agy)
+uze setup list              # every agent and whether it is ready
+uze setup inspect <agent>
+uze doctor                  # diagnose, and repair what is safe to repair
+uze upgrade                 # install the latest uze
 ```
 
-`uze plugin list` says how fresh each installed package is against its
-marketplace's mirror — a bare `--filter=blob:limit=1m` clone uze keeps per
-marketplace, fetched rather than re-cloned:
+## Configuration
 
-| Says | Means |
-| --- | --- |
-| `up to date` | The installed commit is the marketplace's newest for that plugin |
-| `N behind` | That many commits have touched it since |
-| `linked` | It is read from a checkout on this machine (`market link`), so there is no pin to compare |
-| `unpinned` | Nothing recorded what it was installed from |
-| `not checked` | The mirror has not been read yet — never a claim that it is current |
+```bash
+uze config theme list | set <id> | show [id]
+uze config icons [default | nerd | ascii]
+uze config notification [on | off | silent | test]
+```
 
-A marketplace is a Git repository either way: a local path is where *this
-machine* reads that repository, and installing always clones it at a commit. See
-[`agents.yaml` & `agents.lock`](/docs/reference/project-files#marketplaces). How a source is
-named and reached is in [Marketplaces](/docs/plugins/marketplaces).
+## Workspace
 
-| Flag | Where | Meaning |
-| --- | --- | --- |
-| `--trust` | `plugin install`, `plugin update` | Authorize executable capabilities |
-| `--alias <name>` | `plugin install` | Install under `<name>` when the bare name is already active from another marketplace, so both stay active |
-| `--replace` | `plugin install` | Remove the other marketplace's plugin first (once safe to) and claim the name |
-| `--format json` | every `plugin` verb, `market list`, `market inspect`, `doctor` | Machine-readable output |
-
-`uze plugin install` never writes to a project's files, and `uze remove` never
-touches the Store. Each verb says which side it is on.
-
-### Naming a harness
-
-`setup` and `setup inspect` accept the stable id, an alias, or the display label:
-
-| Harness | id | aliases |
-| --- | --- | --- |
-| [Claude Code](https://code.claude.com) | `claude-code` | `claude` |
-| [Codex](https://chatgpt.com/codex) | `codex` | — |
-| [OpenCode](https://opencode.ai) | `opencode` | — |
-| [Antigravity](https://antigravity.google) | `antigravity` | `agy`, `antigravity-cli` |
-
-The label (`Claude Code`) is display-only — `--format json` always emits the id.
+```bash
+uze terminal attach         # the same as `uze`
+uze terminal stop           # stop the workspace and every process in it
+```
 
 ## Everywhere
 
-```bash
---verbose        # also print each failed attempt (HTTPS before SSH) and why; stream installer output; full attachment detail
-```
+`--verbose` prints what happened in detail. `--format json` gives
+machine-readable output on every command that reports something.
 
-`--verbose` is global. `--format json` is per command — every verb that reports
-something structured accepts it; `market add`, `market remove` and `setup` report
-progress rather than a document, and don't.
-
-## Appearance
-
-```bash
-uze theme list          # what this machine can draw with, marking the active one
-uze theme set <id>      # draw in it from now on, in both the CLI and the TUI
-uze theme show [id]     # a theme's resolved colours and glyphs, and its warnings
-
-uze theme glyphs        # the glyph sets, each drawn in its own glyphs
-uze theme glyphs <set>  # draw with that set from now on — `default`, `ascii` or `nerd`
-```
-
-The palette and the glyph set are separate choices, and neither changes the
-other. Machine-level, and `--format json` on `list`, `show` and `glyphs`. See
-[Appearance](/docs/configuration/appearance).
-
-## Terminal session
-
-The workspace's panes belong to a local runtime server, so they outlive the
-client. These manage that session directly — running `uze` with no
-arguments already attaches it.
-
-```bash
-uze terminal attach   # attach the workspace client, starting its server when needed
-uze terminal stop     # stop this workspace's session and every process in it
-```
-
-<Callout type="info">
-  The terminal runtime is experimental; running `uze` with no arguments already
-  attaches it, and a theme is normally chosen from the TUI.
-</Callout>
-
-## Performance contract
-
-Every leaf command is classified in the source as `Budgeted` (low-millisecond,
-served from the harness-detection cache) or `JustifiedSlow` with a
-stated reason. An unclassified command fails `cargo test` by name, so the
-contract can't quietly rot. `uze doctor` inspects attachments through an on-disk
-cache and re-inspects only the anomalies live.
-
-<Cards>
-  <Card title="agents.yaml & agents.lock" href="/docs/reference/project-files" />
-  <Card title="The agent workspace" href="/docs/workspace" />
-  <Card title="Extensions" href="/docs/workspace/extensions" />
-  <Card title="Harness compatibility" href="/docs/reference/harnesses" />
-</Cards>
+The commands agents call are in [The agent CLI](/docs/advanced/agent-cli).

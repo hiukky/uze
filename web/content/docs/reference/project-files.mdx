@@ -3,8 +3,6 @@ title: agents.yaml & agents.lock
 description: The file a project writes, the file uze derives from it, and what each one is allowed to say
 ---
 
-# `agents.yaml` & `agents.lock`
-
 Two files at the project root, both committed, with one rule between them:
 
 | File | Written by | Holds |
@@ -253,9 +251,9 @@ no longer declares is not staleness — it is a removal.
 ## What these files are not
 
 They are **project scope**. Neither records what is installed on your machine —
-that lives in the Store under `~/.uze`, and `uze plugin install` never writes
+that lives in the Store under `~/.uze`, and `uze install -m` never writes
 here. The two are independent by design; see
-[Machine scope vs project scope](/docs/concepts/delivery#machine-scope-vs-project-scope).
+[Machine and project](/docs/concepts/delivery#machine-and-project).
 
 <Cards>
   <Card title="The agent workspace" href="/docs/workspace" />

@@ -1,235 +1,52 @@
 ---
 title: How delivery works
-description: The model behind uze — store, engine, router, receipts — and how each capability reaches a harness
+description: How one plugin reaches four agents, and what keeps that safe
 ---
 
-# How delivery works
+## One copy, many deliveries
 
-## Standards first
+An installed plugin's files live in one place, the **store** in `~/.uze`. uze
+never lets an agent write into it. Everything an agent reads is *delivered* from
+there: a link, a generated folder, an entry in the agent's config. A delivery can
+always be deleted and rebuilt from the store.
 
-uze doesn't invent a competing format for what already has one. It adopts
-AGENTS.md, Agent Skills, MCP, and Agent Plugins directly, and models only the
-confirmed gap standards leave uncovered — see
-[Standards, not another format](/docs/concepts/standards) for the full reasoning
-and where `agents.yaml`/`agents.lock`, `marketplace.json`, and the canonical
-package envelope fit in.
+## The most native route wins
 
-## Store, Engine, Router
+For every capability and every agent, uze picks the first route that keeps the
+capability's meaning intact:
 
-- **Store** — owns installed package bytes. It is the single source of truth: it
-  never writes anything a harness reads, and integrations never mutate it.
-- **Engine** — composes an environment from the Store: which resources
-  (instructions, skills, MCP servers, agents, hooks) a package contributes.
-- **Router** — decides per capability and per harness which route is possible,
-  given what the harness can genuinely preserve.
+1. **Native**: the agent's own supported mechanism.
+2. **Generated native**: a folder uze generates, delivered through that
+   mechanism.
+3. **Adapted**: it works with a known difference, and uze says which.
+4. **Unsupported**: stated, with the reason.
 
-## Delivery precedence
+What each agent gets today is the [Harness support](/docs/reference/harnesses)
+table, generated from the code.
 
-Every capability is delivered per harness through the first route that preserves
-its canonical semantics:
+## Nothing is touched blindly
 
-**Native > Generated Native > Safe Adaptation > Unsupported**
+Every file or entry uze delivers is recorded with a **receipt**. Before it
+changes or removes anything, uze checks the current state against the receipt.
+If something drifted, because you edited it by hand, uze stops and reports it
+instead of overwriting.
 
-- *Native* is an officially supported mechanism preserving canonical semantics —
-  not necessarily the same physical primitive across vendors.
-- *Generated Native* is a deterministically synthesized envelope (e.g. a
-  UZE-built plugin directory) delivered through the native mechanism.
-- *Safe Adaptation* degrades a property and says so — an honest report, never a
-  silent loss.
-- *Unsupported* is stated as unsupported, with the reason.
+This is also what lets `uze doctor` repair a broken delivery without asking: it
+only rebuilds what it owns and can prove is safe to rebuild.
 
-## Identifiers are not labels
+## Running code is your decision
 
-Every integration carries two names with distinct jobs:
+A plugin's MCP servers and hooks run commands on your machine. Before installing,
+uze lists every command a plugin can run and asks; an update that adds one asks
+again. Where there is nobody to ask, it refuses unless you pass `--trust`.
 
-| Name | Example | Used for |
-| --- | --- | --- |
-| **id** | `claude-code`, `antigravity` | Receipts, state records, setup targets, matching — anything the machine needs keyed on |
-| **label** | `Claude Code`, `Antigravity` | Every human-facing surface: the TUI, the README, CLI text output |
+Plugins are fetched as untrusted input: without your Git config or credentials
+leaking into the clone, never running a repository's own hooks, and never
+following a path outside the plugin.
 
-The label is display-only: lookups never depend on it (the CLI also accepts
-aliases like `claude` and `agy`). Machine output (`--format json`) keeps the
-stable id.
+## Machine and project
 
-## Receipts drive lifecycle safety
-
-Every managed artifact — a symlink, a generated directory, a config entry, a
-bridge region — is tracked by a typed **receipt**. Drift or an unreadable ledger
-blocks destructive mutation rather than authorizing one, and removal always
-inspects current state before detaching (inspect-before-detach).
-
-Derived artifacts (a generated envelope, a projected bridge file) are
-non-authoritative: safe to delete and rebuild from the Store + Engine alone.
-That is what lets `uze doctor` repair them without asking — a repair that
-cannot replace user-owned state, acquire bytes, or expand trust is not a
-decision, it is maintenance. Everything else is escalated to you.
-
-## Trust and containment
-
-Installing a package is not copying files — it is authorizing code a harness will
-later execute. uze is what performs that introduction, so it is where the
-question is asked.
-
-- **One question, asked once.** MCP server commands and hook handlers are
-  *executable capabilities*. Before anything is installed, uze lists every process
-  the package can cause to run, with its command and arguments. It is not a
-  permission system: no policy language, no stored grants, no per-capability
-  rules — one boundary, made visible.
-- **Consent is not inherited.** An update that introduces execution the installed
-  version did not have asks again.
-- **A refusal beats a guess.** Where uze cannot ask — a pipeline, a non-interactive
-  shell — it fails with `TRUST_REQUIRED` rather than assuming yes. `--trust`
-  answers up front for CI.
-
-Fetching a package is treated as hostile input on its own:
-
-- Remote clones run with the environment cleared — no inherited Git config, no
-  proxy or credential helper from your shell, system and global config pointed at
-  `/dev/null`. A repository's own hooks are never run, and a private repository
-  fails immediately instead of blocking on a credential prompt.
-- A materialized repository is capped at 512 MB.
-- A package root may not escape its checkout — checked lexically *and* after
-  resolving symlinks, so a path that only escapes once followed is refused too.
-
-## Machine scope vs project scope
-
-Two scopes, and neither touches the other's state.
-
-| `~/.uze` (machine) | the project directory |
-| --- | --- |
-| `uze setup`, `uze doctor`, `uze theme` | `uze status` |
-| `uze market …`, `uze plugin …` | `uze <plugin>@<market>`, `uze install`, `uze remove` |
-| the Store and its receipt ledger | `agents.yaml`, `agents.lock`, `AGENTS.md` and its bridges |
-
-`uze plugin install` never writes to a project's files; `uze remove` never removes
-anything from the Store. The split runs through a marketplace too: where *this
-machine* reads one is machine state, while what the *project* depends on is the
-repository and the commit its lock records.
-
-`AGENTS.md` is the portable baseline for project context, and a generated bridge
-(e.g. `CLAUDE.md` with an `@AGENTS.md` import) is the only projection uze
-maintains — never outside its own managed regions.
-
-## Preferences travel too
-
-Alongside packages, uze models user *intent* about how a harness behaves —
-**autonomy** (how much it may do without asking), **sandbox** (how far its writes
-and execution reach), and **model** (a capability tier, never a vendor model id).
-Each integration translates a resolved profile into its own native settings and
-reports the fidelity on the same Native/Adapted/Unsupported scale the capability
-router uses. See [Profiles](/docs/reference/harnesses#profiles).
-
-<Cards>
-  <Card title="Standards, not another format" href="/docs/concepts/standards" />
-  <Card title="Capabilities" href="/docs/concepts/delivery#capabilities" />
-  <Card title="Project context" href="/docs/plugins/context" />
-</Cards>
-
-## Capabilities
-
-
-uze routes five resource kinds out of a package. For each one, the question is
-the same: *can this harness preserve the canonical semantics through its own
-native mechanism?*
-
-### Agent Skills — one capability, invocation policy as semantics
-
-A Skill is the canonical capability. Its portable semantics are **who may invoke
-it**:
-
-```md
----
-invoke:
-  model: true   # the model may invoke it on its own (background knowledge)
-  user: true    # the user may invoke it explicitly
----
-```
-
-The invocation policy is never a separate capability kind and never a second
-surface: it is the `invoke: {model, user}` block in `SKILL.md`.
-Integrations translate that policy into their own encoding — Claude's
-frontmatter, Codex's `agents/openai.yaml`, OpenCode's `metadata.opencode` — or
-report the degradation honestly when it cannot be expressed.
-
-Every UZE-projected skill gets a stable, plugin-qualified invocation label
-(`flow:review`), so installation order and other plugins can never
-change how it is invoked.
-
-### Instructions
-
-A package may ship its own `AGENTS.md`. Its content becomes one delimited region
-inside the project's `AGENTS.md` when you run `uze install` — one
-region per contributing package, each owned by a receipt, none of them able to
-touch what you wrote around them. This is how a plugin contributes standing
-project instructions without a second instruction file per harness.
-
-### MCP servers
-
-Delivered natively where the harness has a native mechanism (`claude mcp add`,
-`codex mcp add`, `agy mcp add`, OpenCode's global config) or inside the
-native/generated plugin when the package already ships the envelope. A package
-declaring several servers produces one resource per server, while the original
-`mcp.json` bytes are preserved once in the Store.
-
-### Agents
-
-Markdown agent definitions projected to each harness's native agent surface —
-Claude's agents directory, OpenCode's config agents, Antigravity's global agents,
-and Codex's documented standalone TOML file, which uze generates because Codex
-has no on-disk Markdown agent format. Only the verified portable
-frontmatter subset is claimed; vendor-only model, permission and orchestration
-fields are never silently dropped — a route that cannot preserve them is reported
-as adapted, not native.
-
-### Hooks (portable)
-
-One authored `hooks.json` plus a shell-command ABI — the hook context in as
-`HOOK_*` environment, the decision out as an exit code, with a bounded reason,
-a bounded timeout and first-deny-wins — is the canonical hook surface.
-Each harness gets its own projection:
-
-- **[Claude Code](https://code.claude.com) / [Codex](https://chatgpt.com/codex)** — merged
-  entries in their own hook configuration
-- **[Antigravity](https://antigravity.google)** — named entries in its shared `hooks.json`
-- **[OpenCode](https://opencode.ai)** — an owned, regenerable plugin bridge, because no
-  declarative hook surface exists there
-
-Projections are receipt-owned and content-identity inspected; foreign hooks,
-plugins, and ordering are never touched. The delivered artifact is a generated
-wrapper, so handlers run against the portable `HOOK_*` contract with **no uze
-binary on the execution path**.
-
-### What each harness can actually carry
-
-The canonical vocabulary is wider than any one harness. uze assesses each group
-against what the harness genuinely supports, and reports the difference rather
-than pretending:
-
-| Harness | Events | Effects |
-| --- | --- | --- |
-| [Claude Code](https://code.claude.com) | `PreToolUse`, `PostToolUse`, `Stop` | `observe`, `allow`, `deny` |
-| [Codex](https://chatgpt.com/codex) | `PreToolUse`, `PostToolUse`, `Stop` | `observe`, `allow`, `deny` |
-| [Antigravity](https://antigravity.google) | `PreToolUse`, `PostToolUse`, `Stop` | `observe`, `allow`, `ask`, `deny` |
-| [OpenCode](https://opencode.ai) | `PreToolUse`, `PostToolUse` | `observe`, `allow` |
-
-`transform` is in the canonical vocabulary and no harness carries it today.
-OpenCode's tool hooks receive the tool input but no block signal, and its one
-decision point carries the action's resources rather than its input — so a
-`deny` or `ask` group is diagnosed as unsupported *before* it is attached, never
-fabricated into something that would silently let the tool run.
-
-<Callout type="warn">
-  A hook whose route cannot preserve its declared semantics is reported as a
-  finding — a degraded hook is actionable, never hidden behind a healthy row.
-</Callout>
-
-This page is the summary. The full contracts, for plugin authors and
-contributors, are in the repository:
-[portable hooks](https://github.com/hiukky/uze/blob/main/docs/capabilities/portable-hooks.md),
-[skill invocation policy](https://github.com/hiukky/uze/blob/main/docs/capabilities/skill-invocation-policy.md)
-and the [context manager](https://github.com/hiukky/uze/blob/main/docs/capabilities/context-manager.md).
-
-<Cards>
-  <Card title="Creating a plugin" href="/docs/plugins/creating" />
-  <Card title="Harness compatibility" href="/docs/reference/harnesses" />
-</Cards>
+The store and your agents' setup belong to the **machine** (`~/.uze`). What a
+project declares belongs to the **project** (`agents.yaml`, `agents.lock`,
+`AGENTS.md`). A command acts on the project it runs in; `-m` acts on the machine
+alone.

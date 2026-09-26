@@ -90,7 +90,7 @@ const pillars = [
   {
     title: 'Semantics survive the trip',
     body: 'A skill’s invocation policy, a hook’s effect, an agent’s frontmatter — each is translated into the vendor’s own encoding, or reported as adapted. uze never claims a route is native without a passing real-harness scenario.',
-    href: '/docs/concepts/delivery#capabilities',
+    href: '/docs/reference/plugin-format',
     link: 'What travels, and how',
   },
   {
