@@ -27,8 +27,27 @@ const config = {
   // A published URL is a promise to whoever linked it. `theming` became
   // `appearance` when appearance stopped being one choice — the palette and
   // the glyph set are chosen apart now, and only one of them is a theme.
+  // The docs were regrouped by what a reader is doing — installing, running
+  // agents, managing plugins, configuring, understanding, looking up — so every
+  // page that moved keeps its old address.
   async redirects() {
-    return [{ source: '/docs/theming', destination: '/docs/appearance', permanent: true }];
+    const moved = {
+      '/docs/theming': '/docs/configuration/appearance',
+      '/docs/appearance': '/docs/configuration/appearance',
+      '/docs/keys': '/docs/configuration/keys',
+      '/docs/getting-started': '/docs/installation',
+      '/docs/uninstall': '/docs/installation#removing-uze',
+      '/docs/creating-a-plugin': '/docs/plugins/creating',
+      '/docs/concepts/context': '/docs/plugins/context',
+      '/docs/concepts/capabilities': '/docs/concepts/delivery#capabilities',
+      '/docs/cli': '/docs/reference/cli',
+      '/docs/project-files': '/docs/reference/project-files',
+      '/docs/agents-lock': '/docs/reference/project-files',
+      '/docs/harnesses': '/docs/reference/harnesses',
+      '/docs/glossary': '/docs/reference/glossary',
+      '/docs/faq': '/docs/reference/faq',
+    };
+    return Object.entries(moved).map(([source, destination]) => ({ source, destination, permanent: true }));
   },
 };
 

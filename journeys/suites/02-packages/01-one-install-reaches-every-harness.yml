@@ -1,6 +1,6 @@
 journey: a plugin installed once, delivered to every harness, from one copy of its bytes
 tags: [gate, cli, packages]
-proves: web/content/docs/getting-started.mdx
+proves: web/content/docs/plugins/index.mdx
 about: |
   The claim the product is named for: you install a plugin once, UZE keeps
   its bytes in one place, and each harness reads it through the mechanism

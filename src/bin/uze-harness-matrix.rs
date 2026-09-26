@@ -3,7 +3,7 @@
 //! Reads the real `IntegrationPort` implementations (capabilities, exposure
 //! plans, package plans, runtime support, exposure names) and renders the
 //! matrix + invocation examples into the marker block of the docs site's
-//! `web/content/docs/harnesses.mdx`:
+//! `web/content/docs/reference/harnesses.mdx`:
 //!
 //! ```text
 //! <!-- uze-matrix:start -->
@@ -42,7 +42,7 @@ const PLANNED_HARNESSES: [&str; 3] = ["Cursor CLI", "Muse", "PI"];
 // invisibly.
 const MARKER_START: &str = "{/* uze-matrix:start */}";
 const MARKER_END: &str = "{/* uze-matrix:end */}";
-const HARNESS_DOCS: &str = "web/content/docs/harnesses.mdx";
+const HARNESS_DOCS: &str = "web/content/docs/reference/harnesses.mdx";
 /// The same routes, for the landing page's capability table. One generator,
 /// two consumers: the landing page used to restate delivery in hand-written
 /// prose, which is a second place for the same claim to go stale.

@@ -1,6 +1,6 @@
 journey: a region somebody edited by hand is reported, never rewritten
 tags: [gate, cli, context]
-proves: web/content/docs/concepts/context.mdx
+proves: web/content/docs/plugins/context.mdx
 about: |
   UZE owns a marked region inside a page the team owns. The marks are what
   make that ownership takeable back — and they are also an invitation, since

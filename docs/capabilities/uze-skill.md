@@ -40,7 +40,7 @@ harness-owned fact and uze does not pretend otherwise — OpenCode V2 moved from
 `/name` to `@name`, and the Lab types what each harness's own user types
 (`conformance/harnesses/<vendor>/bindings.py::invoke`) rather than reading a
 catalog, which is what caught it — the generated
-[compatibility matrix](../../web/content/docs/harnesses.mdx) is derived from
+[compatibility matrix](../../web/content/docs/reference/harnesses.mdx) is derived from
 each integration's own `invocation_prefix()`, so it cannot drift from the code.
 
 Every harness runs its shell tool with cwd set to the session's working

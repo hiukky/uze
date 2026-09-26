@@ -10,10 +10,10 @@ Each entry is the short version. The link goes to the page that explains it.
 ## Packages
 
 **Harness.** A coding agent uze delivers to: Claude Code, Codex, OpenCode or
-Antigravity. See [Harnesses](/docs/harnesses).
+Antigravity. See [Harnesses](/docs/reference/harnesses).
 
 **Plugin (package).** What you install once. A directory holding skills, MCP
-servers, agents, hooks and instructions. See [Creating a plugin](/docs/creating-a-plugin).
+servers, agents, hooks and instructions. See [Creating a plugin](/docs/plugins/creating).
 
 **Marketplace.** A Git repository with a `marketplace.json`, remote or cloned
 locally. Every plugin is resolved through one. `uze-official` ships inside the
@@ -23,7 +23,7 @@ binary.
 source of truth. No harness reads it directly.
 
 **Capability.** One kind of thing a plugin declares: a skill, an MCP server, an
-agent, a hook or instructions. See [Capabilities](/docs/concepts/capabilities).
+agent, a hook or instructions. See [Capabilities](/docs/concepts/delivery#capabilities).
 
 **Invocation policy.** Who may run a skill: the model, the user, or both. The
 `invoke: {model, user}` block in `SKILL.md`.
@@ -38,7 +38,7 @@ vendor-specific lives there.
 
 **Delivery route.** How a capability reaches a harness. uze takes the first that
 works, in this order: native, generated native, safe adaptation, unsupported.
-See [Concepts](/docs/concepts#delivery-precedence).
+See [Concepts](/docs/concepts/delivery#delivery-precedence).
 
 **Envelope.** A harness's own plugin format. uze uses the one a plugin ships, or
 generates one when it is missing.
@@ -48,7 +48,7 @@ directory, a config entry, a bridge. A projection can always be deleted and
 rebuilt.
 
 **Receipt.** uze's record of an artifact it placed. uze only changes or removes
-what a receipt says it owns. See [Concepts](/docs/concepts#receipts-drive-lifecycle-safety).
+what a receipt says it owns. See [Concepts](/docs/concepts/delivery#receipts-drive-lifecycle-safety).
 
 **Drift.** An owned artifact that no longer matches its receipt. uze reports it
 and stops, instead of overwriting.
@@ -56,7 +56,7 @@ and stops, instead of overwriting.
 **Shim.** A link in `~/.uze/shims` that starts the real harness binary. It
 brings an agent back to its conversation after a reboot, and can project
 `AGENTS.md` without writing into the project. Experimental. See
-[Harnesses](/docs/harnesses#the-runtime-path-shim).
+[Harnesses](/docs/reference/harnesses#the-runtime-path-shim).
 
 ## Projects
 
@@ -68,13 +68,13 @@ brings an agent back to its conversation after a reboot, and can project
 other projects see.
 
 **`agents.yaml`.** What the project declares: marketplaces, plugins, the
-worktree policy. You write it. See [Project files](/docs/project-files).
+worktree policy. You write it. See [Project files](/docs/reference/project-files).
 
 **`agents.lock`.** What resolving `agents.yaml` produced: a commit per
 marketplace and a digest per plugin. uze writes it. Deleting it loses nothing.
 
 **Bridge.** The line a harness reads to find `AGENTS.md`, when it does not read
-that file natively. See [Project context](/docs/concepts/context).
+that file natively. See [Project context](/docs/plugins/context).
 
 **Managed region.** A block inside a file you own, between
 `<!-- uze:begin … -->` and `<!-- uze:end … -->` markers. uze writes only there.

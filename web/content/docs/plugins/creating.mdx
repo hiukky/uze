@@ -77,7 +77,7 @@ capability kind:
 No `invoke:` block means the default (`model: true, user: true`) — an existing `SKILL.md` with no
 frontmatter block behaves exactly as before. Every harness translates this policy into its own
 encoding (Claude's frontmatter, Codex's `agents/openai.yaml`, OpenCode's `metadata.opencode`) —
-see [Capabilities](/docs/concepts/capabilities) for the per-harness route.
+see [Capabilities](/docs/concepts/delivery#capabilities) for the per-harness route.
 
 <Callout type="warn">
   `commands/` is not a canonical directory. A vendor-administered `commands/` folder inside an
@@ -146,7 +146,7 @@ One authored `hooks.json` plus plain scripts — a narrow command ABI, not a plu
   `native:<tool>` escape hatch. Omitted, it matches every tool.
 - **Effect**: `observe` (default), `allow`, `ask`, `deny`, or `transform` (`PreToolUse`
   only). Not every harness carries every effect — see
-  [what each harness can actually carry](/docs/concepts/capabilities#what-each-harness-can-actually-carry).
+  [what each harness can actually carry](/docs/concepts/delivery#capabilities#what-each-harness-can-actually-carry).
 - Your handler reads one normalized JSON object on stdin and may write one bounded JSON decision
   (`{"decision": "allow|ask|deny", "reason": "..."}`) on stdout. Exit `3` is the canonical hard
   deny; any other failure is fail-open for `observe`/`allow` and fail-closed for
@@ -229,7 +229,7 @@ $ uze my-plugin@my-marketplace
 under its current filename.
 
 <Cards>
-  <Card title="Capabilities" href="/docs/concepts/capabilities" />
-  <Card title="Harness compatibility" href="/docs/harnesses" />
-  <Card title="agents.yaml & agents.lock" href="/docs/project-files" />
+  <Card title="Capabilities" href="/docs/concepts/delivery#capabilities" />
+  <Card title="Harness compatibility" href="/docs/reference/harnesses" />
+  <Card title="agents.yaml & agents.lock" href="/docs/reference/project-files" />
 </Cards>

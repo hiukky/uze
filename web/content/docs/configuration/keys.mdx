@@ -1,9 +1,9 @@
 ---
-title: Shortcuts
-description: Rebind anything, and know before you try whether your terminal can send it
+title: Keys
+description: The default shortcuts, and how to rebind any of them
 ---
 
-# Shortcuts
+# Keys
 
 uze is meant to be used without learning anything: everything on screen is
 clickable, every action is offered where the thing it acts on is, and one
@@ -37,6 +37,31 @@ freezing your keyboard at the version you first opened the screen on.
 
 An empty list unbinds. Put everything back and the file is deleted rather than
 left holding a copy of the default — the default is not a thing to write down.
+
+## Defaults
+
+| Keys | Action |
+| --- | --- |
+| `Alt+N` | New agent — pick which harness starts |
+| `Ctrl+T` | New shell tab |
+| `Alt+S` | New space |
+| `Ctrl+W` | Close the selected tab |
+| `F2` | Rename what is selected |
+| `Alt+↑` / `Alt+↓` | Previous / next agent |
+| `Ctrl+↑` / `Ctrl+↓` | Previous / next space |
+| `Alt+G` | The checkout's changes — [Code](/docs/workspace/extensions#code) |
+| `Alt+E` | The checkout's files — [Code](/docs/workspace/extensions#code) |
+| `Alt+A` | The project's diagrams — [Architect](/docs/workspace/extensions#architect) |
+| `Alt+I` | [Deliver](/docs/workspace/agents#delivery) the selected task |
+| `Alt+Shift+I` | Deliver every ready task in the space |
+| `Alt+P` | [Preserved work](/docs/workspace/agents#work-that-outlives-its-agent) |
+| `Ctrl+O` | Switch to management (and back) |
+| `F1` | What is reachable right now |
+| `Ctrl+Q` | Quit |
+
+Everything else typed goes to the pane. Every one of these is rebindable — see
+[Shortcuts](/docs/configuration/keys). Tabs and spaces can be renamed inline and reordered by
+dragging; right-click gives the same actions as a menu.
 
 ## The three parts
 
@@ -138,6 +163,6 @@ any Linux terminal sees. Every universal chord works, `Alt` works, and
 </Callout>
 
 <Cards>
-  <Card title="Appearance" href="/docs/appearance" />
+  <Card title="Appearance" href="/docs/configuration/appearance" />
   <Card title="The agent workspace" href="/docs/workspace" />
 </Cards>

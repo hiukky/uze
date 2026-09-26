@@ -1,6 +1,6 @@
 journey: a keyboard the operator wrote is the one in force
 tags: [gate, tui, keys]
-proves: web/content/docs/getting-started.mdx
+proves: web/content/docs/configuration/keys.mdx
 about: |
   Keys are configurable, and the configuration is a file the machine keeps
   — so the claim is not that a screen accepted a rebinding, it is that the

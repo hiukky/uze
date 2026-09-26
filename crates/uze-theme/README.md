@@ -16,4 +16,4 @@ library, so every consumer adapts `uze_theme::Rgb` to what it draws with.
 cargo test -p uze-theme
 ```
 
-See [Appearance](../../web/content/docs/appearance.mdx) for the two axes.
+See [Appearance](../../web/content/docs/configuration/appearance.mdx) for the two axes.

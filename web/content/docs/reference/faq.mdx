@@ -14,7 +14,7 @@ written differently in each harness. Hooks run through a different mechanism in
 each one.
 
 A script can do the translation once. What it can't do is take it back safely.
-uze keeps a [receipt](/docs/glossary#delivery) for everything it places. That is
+uze keeps a [receipt](/docs/reference/glossary#delivery) for everything it places. That is
 how it updates or removes a plugin without touching what you or another tool put
 next to it.
 
@@ -23,7 +23,7 @@ next to it.
 No. In a file you own, uze writes only between its own
 `<!-- uze:begin … -->` and `<!-- uze:end … -->` markers. If a file already holds
 content uze doesn't own where it would write, uze reports it and leaves the file
-alone. See [Project context](/docs/concepts/context).
+alone. See [Project context](/docs/plugins/context).
 
 ## Does uze send anything over the network?
 
@@ -35,7 +35,7 @@ Release builds contain no telemetry.
 
 uze says so. Each capability is reported as native, adapted, or unsupported for
 each harness, with the reason. It never drops a capability silently. See
-[Harnesses](/docs/harnesses).
+[Harnesses](/docs/reference/harnesses).
 
 ## Can I delete `~/.uze/runtime` or `~/.uze/cache`?
 
@@ -47,8 +47,8 @@ plugins you installed, which come back only by installing them again.
 
 Not yet. Linux is supported, macOS is experimental, and Windows is planned. You
 can build from source on anything Rust targets. See
-[Getting started](/docs/getting-started).
+[Getting started](/docs/quickstart).
 
 ## How do I take it off?
 
-See [Removing uze](/docs/uninstall).
+See [Removing uze](/docs/installation#removing-uze).

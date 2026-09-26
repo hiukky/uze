@@ -1,6 +1,6 @@
 journey: removing a plugin takes back everything it put there, and nothing else
 tags: [gate, cli, packages]
-proves: web/content/docs/cli.mdx
+proves: web/content/docs/reference/cli.mdx
 about: |
   The other half of installing once. A managed artifact is tracked by a
   receipt, so removal is supposed to be exact: every byte four harnesses were

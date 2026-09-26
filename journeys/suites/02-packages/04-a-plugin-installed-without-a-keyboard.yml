@@ -1,6 +1,6 @@
 journey: a plugin found and installed with nothing but the pointer
 tags: [gate, tui, packages]
-proves: web/content/docs/getting-started.mdx
+proves: web/content/docs/plugins/index.mdx
 about: |
   uze's thesis is that the keyboard is an accelerator, never the way in.
   That is a claim about a whole flow rather than about any one control, so

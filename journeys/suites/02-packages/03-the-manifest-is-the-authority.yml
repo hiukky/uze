@@ -1,6 +1,6 @@
 journey: taking a plugin out of agents.yaml takes it out of the project, and out of nothing else
 tags: [gate, cli, packages]
-proves: web/content/docs/project-files.mdx
+proves: web/content/docs/reference/project-files.mdx
 about: |
   `agents.yaml` is what the project declared. Until now it was declarative
   in one direction only — adding a plugin was heard, removing one was not,

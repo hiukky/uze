@@ -1,0 +1,57 @@
+---
+title: Marketplaces
+description: Where plugins come from — adding a marketplace, public or private, and developing one locally
+---
+
+# Marketplaces
+
+A plugin always comes from a marketplace: a Git repository holding a
+`marketplace.json`, whether you spell it as a URL or as a clone on this machine.
+`uze-official` is built in and needs no registration.
+
+```bash
+uze market add you/marketplace       # register one
+uze market list                      # what is registered
+uze market link <name> <checkout>    # read it from a checkout you are developing
+uze market remove <name>             # blocked while plugins from it are installed
+```
+
+## Naming a marketplace
+
+`market add` reads what you type by its shape:
+
+| You type | It is |
+| --- | --- |
+| `./ai`, `../ai`, `/srv/ai`, `~/ai`, `.` | a directory on this machine — a path always looks like one |
+| `hiukky/ai` | a repository on your default host (github unless you choose another) |
+| `gitlab:group/sub/repo`, `work:team/plugins` | a repository on the host that alias names |
+| `https://…`, `git@host:owner/repo.git`, `ssh://…` | that URL |
+
+A bare word (`ai`) is refused — write `./ai` for the directory. A short
+`owner/repo` is resolved against **one** host and never tried on another: a
+forge answers "not found" for a private repository you cannot see, so a
+fallback would pick up whoever owns that name elsewhere. When it is not found,
+uze suggests the prefixed forms instead, and on success it prints the full URL
+it chose.
+
+What lands in `agents.yaml` and `agents.lock` is always the full URL, in one
+spelling — `git@github.com:hiukky/ai.git` and `hiukky/ai` both record
+`https://github.com/hiukky/ai` — so a project never depends on your aliases, and
+never says how to authenticate. An SSH URL with a port or another user is kept
+as you wrote it.
+
+## Public and private repositories
+
+Each fetch tries, on the repository's own host and nowhere else:
+
+1. **HTTPS, anonymously** — every public repository, on any machine, with no key and no account.
+2. **HTTPS with your Git credential helper** — `gh auth setup-git`, `glab`, Git Credential Manager, `store`.
+3. **SSH** at `git@<host>:<path>.git`, with your agent and keys — port, user and hostname come from your `~/.ssh/config`.
+
+The one that answered is remembered, so a private repository goes straight to
+it next time. SSH never prompts and never offers a key to a host you have not
+accepted: if it says the host key is unknown, connect once with
+`ssh -T git@<host>`. Your proxy and certificate authority — the environment's
+`https_proxy`, `SSL_CERT_FILE`, and Git's `http.proxy`/`http.sslCAInfo` — apply
+to every attempt; nothing else in your Git configuration does. A token is
+never written into a URL, a project file or a log.

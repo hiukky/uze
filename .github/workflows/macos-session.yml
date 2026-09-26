@@ -5,7 +5,7 @@
 # framework — and leaves it open long enough for a person to install uze
 # the way a user does, and to look at the TUI in a real terminal emulator.
 #
-# It exists because three claims in `web/content/docs/getting-started.mdx`
+# It exists because three claims in `web/content/docs/installation.mdx`
 # are marked "not verified", and the only way to strike them is for
 # somebody to be at the machine. The automated half of that belongs in
 # `ci.yml`; this file is the half a screen has to answer.

@@ -1,6 +1,6 @@
 journey: a public marketplace installs on a machine with no key, whatever spelling the project used
 tags: [gate, cli, packages]
-proves: web/content/docs/project-files.mdx
+proves: web/content/docs/reference/project-files.mdx
 about: |
   A contributor clones a project and runs `uze install` on a machine with no
   SSH key, no agent and no credential helper. The marketplace is public, so

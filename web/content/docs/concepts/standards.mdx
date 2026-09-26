@@ -79,7 +79,7 @@ Three uze-defined files exist, and each earns its place the same way: something 
   apart: `agents.yaml` holds what a person decided, `agents.lock` holds only what resolving it
   produced — a commit and a digest — so it is generated, verifiable, reproducible offline and
   safe to delete. `git clone && uze install` reconstructs the environment from the two.
-  See [the reference](/docs/project-files).
+  See [the reference](/docs/reference/project-files).
 - **`marketplace.json`** (ADR-032) — the uze marketplace registry manifest, distinct from
   vendor-owned catalogues like `.claude-plugin/marketplace.json` that integrations still generate
   untouched. It was briefly renamed `agents.json` and reverted: `marketplace.json` is what the
@@ -107,10 +107,10 @@ or uze-defined — goes through the same precedence:
 A harness's own mechanism wins when one exists; a deterministically generated envelope delivered
 through that native mechanism is next; an adaptation that degrades a property always says so.
 uze never presents a matching event or field name as proof of equivalence — see
-[Capabilities](/docs/concepts/capabilities) for how that plays out per resource kind.
+[Capabilities](/docs/concepts/delivery#capabilities) for how that plays out per resource kind.
 
 <Cards>
-  <Card title="Capabilities" href="/docs/concepts/capabilities" />
-  <Card title="Project context" href="/docs/concepts/context" />
-  <Card title="Harness compatibility" href="/docs/harnesses" />
+  <Card title="Capabilities" href="/docs/concepts/delivery#capabilities" />
+  <Card title="Project context" href="/docs/plugins/context" />
+  <Card title="Harness compatibility" href="/docs/reference/harnesses" />
 </Cards>

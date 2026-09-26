@@ -1,6 +1,6 @@
 journey: changing the worktree policy changes what agents read, in the same command
 tags: [gate, cli, context]
-proves: web/content/docs/project-files.mdx
+proves: web/content/docs/reference/project-files.mdx
 about: |
   UZE reads `worktrees:` live wherever it acts on the policy itself. The
   agents that must honour it read something else: the region UZE projects

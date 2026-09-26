@@ -2,7 +2,7 @@
 
 The full contract, for plugin authors and contributors. The user-facing
 summary is the site's
-[Project context](../../web/content/docs/concepts/context.mdx) page; change
+[Project context](../../web/content/docs/plugins/context.mdx) page; change
 both together.
 
 The boundary that owns a *project's* instructions context, distinct from the

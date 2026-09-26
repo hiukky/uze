@@ -2,7 +2,7 @@
 
 The full contract, for plugin authors and contributors. The user-facing
 summary is the site's
-[Capabilities](../../web/content/docs/concepts/capabilities.mdx) page; change
+[Capabilities](../../web/content/docs/concepts/delivery.mdx) page; change
 both together.
 
 One authored declaration, one handler contract, four harnesses (ADR-033,

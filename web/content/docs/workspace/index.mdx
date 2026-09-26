@@ -1,9 +1,9 @@
 ---
-title: The agent workspace
+title: Overview
 description: A persistent terminal that hosts your agent sessions — spaces, tabs and panes that outlive the client
 ---
 
-# The agent workspace
+# Overview
 
 Running `uze` with no arguments opens the **workspace**: a persistent terminal
 that hosts your agent sessions, side by side.
@@ -59,32 +59,7 @@ What ties a process to its task is the launch, not the directory. A harness you
 start by hand carries no identity and starts exactly as it would without uze; so
 does one an agent starts from inside its own session. Where the resume cannot be
 done, the agent still starts and the tab says why — the
-[harness matrix](/docs/harnesses) has the per-harness column.
-
-## Shortcuts
-
-| Keys | Action |
-| --- | --- |
-| `Alt+N` | New agent — pick which harness starts |
-| `Ctrl+T` | New shell tab |
-| `Alt+S` | New space |
-| `Ctrl+W` | Close the selected tab |
-| `F2` | Rename what is selected |
-| `Alt+↑` / `Alt+↓` | Previous / next agent |
-| `Ctrl+↑` / `Ctrl+↓` | Previous / next space |
-| `Alt+G` | The checkout's changes — [Code](/docs/workspace/extensions#code) |
-| `Alt+E` | The checkout's files — [Code](/docs/workspace/extensions#code) |
-| `Alt+A` | The project's diagrams — [Architect](/docs/workspace/extensions#architect) |
-| `Alt+I` | [Deliver](/docs/workspace/agents#delivery) the selected task |
-| `Alt+Shift+I` | Deliver every ready task in the space |
-| `Alt+P` | [Preserved work](/docs/workspace/agents#work-that-outlives-its-agent) |
-| `Ctrl+O` | Switch to management (and back) |
-| `F1` | What is reachable right now |
-| `Ctrl+Q` | Quit |
-
-Everything else typed goes to the pane. Every one of these is rebindable — see
-[Shortcuts](/docs/keys). Tabs and spaces can be renamed inline and reordered by
-dragging; right-click gives the same actions as a menu.
+[harness matrix](/docs/reference/harnesses) has the per-harness column.
 
 ## The strip's right end
 
@@ -137,5 +112,5 @@ workspace's history can be cleared outright.
 <Cards>
   <Card title="Running agents" href="/docs/workspace/agents" />
   <Card title="Extensions" href="/docs/workspace/extensions" />
-  <Card title="agents.yaml & agents.lock" href="/docs/project-files" />
+  <Card title="agents.yaml & agents.lock" href="/docs/reference/project-files" />
 </Cards>

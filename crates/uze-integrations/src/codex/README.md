@@ -169,7 +169,7 @@ MCP inspection is fully structured (`--json`), unlike Claude's raw-file read
   `tests/shared_agent_skill_root_naming.rs`'s original (now-faked-for-CI)
   real-binary run.
 - Sources: ADR-005, ADR-006, ADR-007, ADR-009, ADR-013, and
-  `web/content/docs/concepts/capabilities.mdx` for the capability map.
+  `web/content/docs/concepts/delivery.mdx` for the capability map.
 
 ## Next
 

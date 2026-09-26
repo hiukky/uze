@@ -1,0 +1,49 @@
+---
+title: Installing plugins
+description: Add a plugin to a project, keep it current, take it back — and reproduce it all on another machine
+---
+
+# Installing plugins
+
+A plugin reaches every harness you have from one command. The project records
+it in `agents.yaml`, and what it resolved to in `agents.lock`.
+
+```bash
+uze flow@my-marketplace    # add a plugin to this project
+uze plugin inspect flow    # what it carries, and how each harness receives it
+uze remove flow            # take it out of this project
+```
+
+<Callout type="warn">
+  MCP server commands and hook handlers are **executable capabilities**. uze lists
+  every process a package can cause to run and asks before installing it. A
+  non-interactive shell refuses with `TRUST_REQUIRED` rather than assuming yes —
+  `--trust` answers the question up front, for CI.
+</Callout>
+
+## Keeping it current
+
+```bash
+uze install    # reproduce what agents.lock records
+uze update     # move the pins to where agents.yaml's refs point now
+```
+
+`install` reproduces; `update` moves. One is what a fresh clone runs, the other
+is a decision you make.
+
+## Another machine
+
+Commit `agents.yaml` and `agents.lock`, and a new machine rebuilds the same
+environment from the pair alone — at the same commits, each package verified
+against its recorded digest before anything is installed:
+
+```bash
+git clone …
+uze install
+```
+
+## Machine or project
+
+`uze <plugin>@<market>` is project scope. To install into the machine Store
+without touching any project, use `uze plugin install <plugin>@<market>`; to take
+it off the machine, `uze plugin remove`. Neither side ever touches the other.
