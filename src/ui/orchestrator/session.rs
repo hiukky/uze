@@ -102,8 +102,15 @@ pub(super) enum CodeDoor {
 }
 
 pub(super) fn code_door(showing: Option<code::ContentMode>, wanted: code::ContentMode) -> CodeDoor {
+    // A document read as its preview is still the files half: the door to
+    // the files is the door already open, and it shuts rather than
+    // turning the preview back into source first.
+    let half = |mode| match mode {
+        code::ContentMode::Preview => code::ContentMode::Contents,
+        other => other,
+    };
     match showing {
-        Some(mode) if mode == wanted => CodeDoor::Close,
+        Some(mode) if half(mode) == half(wanted) => CodeDoor::Close,
         Some(_) => CodeDoor::Switch,
         None => CodeDoor::Nothing,
     }
@@ -1774,9 +1781,8 @@ impl Attach<'_> {
                 // "did it take my click".
                 self.model.pressed = Some((hit, now));
                 self.model.dirty = true;
-                if is_double_click {
+                if is_double_click && self.double_click(hit) {
                     self.model.last_click = None;
-                    self.double_click(hit);
                     return Flow::Continue;
                 }
                 return self.click(hit, hit_rect, mouse, viewport);
@@ -2366,11 +2372,15 @@ impl Attach<'_> {
         Flow::Continue
     }
 
-    /// What a second click inside [`DOUBLE_CLICK_WINDOW`] means. Only a
-    /// few hits have an answer; the rest fall through to nothing rather
-    /// than repeating the single-click one.
-    fn double_click(&mut self, hit: WorkspaceHit) {
+    /// What a second click inside [`DOUBLE_CLICK_WINDOW`] means, and
+    /// whether it meant anything of its own. Where it does not, it is a
+    /// click like the first: swallowing it made a switch pressed twice in
+    /// quick succession answer once, which reads as a lost click.
+    fn double_click(&mut self, hit: WorkspaceHit) -> bool {
         match hit {
+            // The two that make something: a double click out of habit
+            // is one new shell or one new space, not two.
+            WorkspaceHit::NewTab | WorkspaceHit::NewSpace => {}
             WorkspaceHit::SelectTab(tab) => {
                 begin_rename(&mut self.model, MenuTarget::Tab(tab));
                 self.model.dirty = true;
@@ -2387,8 +2397,9 @@ impl Attach<'_> {
             WorkspaceHit::Extension(ExtensionHit::CodeTimeline(ViewHit::ToggleSection)) => {
                 toggle_timeline(&mut self.model);
             }
-            _ => {}
+            _ => return false,
         }
+        true
     }
 
     /// What one click on a piece of workspace chrome does.
@@ -2606,9 +2617,16 @@ impl Attach<'_> {
                 // which the guarded arm above already handles —
                 // same as `PickAgent` for the agent picker.
             }
-            // The buttons are the keys' doors, so pressed on the surface
-            // they opened they put it away, and on the other one they
-            // switch — the pane is one place and shows one thing.
+            // A lit button is the surface standing in the pane, whichever
+            // of its halves is showing, so pressing it puts the surface
+            // away in one click. Unlit, it is the keys' door: it opens, or
+            // switches from the other surface.
+            WorkspaceHit::OpenFiles if self.model.code.is_some() => self.model.close_code(),
+            WorkspaceHit::OpenArchitect if self.model.architect.is_some() => {
+                self.model.close_architect();
+            }
+            // The counts are the changes' door, not the surface's, and
+            // keep the keys' toggle.
             WorkspaceHit::OpenChanges => return self.act(Action::ToggleChanges, viewport),
             WorkspaceHit::OpenFiles => return self.act(Action::ToggleFiles, viewport),
             WorkspaceHit::OpenArchitect => return self.act(Action::ToggleArchitect, viewport),

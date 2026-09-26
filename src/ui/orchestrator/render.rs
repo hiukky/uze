@@ -2934,6 +2934,7 @@ pub(super) fn render_tab_strip(
             hue: theme::color(Token::TextSecondary),
             strong: false,
             lit: open,
+            switch: true,
         });
         let width = group_width(&buttons);
         let rect = Rect::new(trailing_right.saturating_sub(width), inner.y, width, 1);
@@ -3190,6 +3191,7 @@ pub(super) fn render_tab_strip(
         hue: theme::color(Token::TextInactive),
         strong: true,
         lit: false,
+        switch: false,
     }];
     if x + group_width(&buttons) <= limit {
         let (actions, group_hits) =
@@ -3243,6 +3245,10 @@ struct GroupButton {
     strong: bool,
     /// Standing in the pane: the strip's one highlight, filled.
     lit: bool,
+    /// A switch rather than a push: pressing it lights it or puts it out,
+    /// and that change is its answer. The press flash on top of it drew a
+    /// third look between the two — lit, then the flash, then unlit.
+    switch: bool,
 }
 
 /// The columns one member of a group claims: its label, and the air each
@@ -3308,6 +3314,7 @@ fn button_group(
                 theme::color(Token::TextBright),
             ),
             ChipState::Resting => (button.hue, theme::color(resting)),
+            ChipState::Pressed if button.switch => ChipState::Hovered.skin(button.hue),
             other => other.skin(button.hue),
         };
         let mut label = Style::default().fg(hue).bg(ground);

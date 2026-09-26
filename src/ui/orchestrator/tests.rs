@@ -984,6 +984,79 @@ mod workspace_tests {
         }
     }
 
+    /// The lit button is the surface, whichever half of it is showing:
+    /// one click puts it away. It used to be the files door, so from the
+    /// changes it switched to the files and only a second click closed.
+    #[test]
+    fn a_lit_surface_button_closes_it_in_one_click() {
+        let home = UzeHome::at(uze_testkit::temp::scratch("orchestrator-lit-button"));
+        let (mut model, first, _second) = two_agents_with_shells();
+        model.session.as_mut().expect("session").select_tab(first);
+        open_code(&mut model, uze_extensions::code::ContentMode::Diff);
+        let mut driven = driven(model, &home);
+        driven.frame();
+
+        let button = driven
+            .attach
+            .model
+            .hits
+            .iter()
+            .find(|(_, hit)| *hit == WorkspaceHit::OpenFiles)
+            .map(|(rect, _)| *rect)
+            .expect("the code button");
+        driven.press(button.x, button.y);
+        assert!(driven.attach.model.code.is_none(), "closed in one click");
+    }
+
+    /// A surface's button is a switch: the press is answered by it
+    /// lighting or going out, and no press flash is drawn between the
+    /// two — that flash was a third look, between lit and unlit.
+    #[test]
+    fn a_surface_button_goes_out_without_a_press_flash() {
+        let (mut model, first, _second) = two_agents_with_shells();
+        model.session.as_mut().expect("session").select_tab(first);
+        open_code(&mut model, uze_extensions::code::ContentMode::Contents);
+        model.close_code();
+        model.pressed = Some((WorkspaceHit::OpenFiles, std::time::Instant::now()));
+        model.hovered = Some(WorkspaceHit::OpenFiles);
+
+        let button = hit_rect(&model, WorkspaceHit::OpenFiles);
+        assert_eq!(
+            chip_colors(&model, button),
+            (
+                crate::ui::theme::color(Token::TextSecondary),
+                crate::ui::theme::color(Token::SurfaceHover)
+            ),
+            "straight to what a pointer over it looks like"
+        );
+    }
+
+    /// Two quick clicks on a switch are two presses: it opens, then puts
+    /// the surface away. The second used to be read as a double click,
+    /// which a surface button has no meaning for, and was dropped.
+    #[test]
+    fn two_quick_clicks_on_a_surface_button_open_and_close_it() {
+        let home = UzeHome::at(uze_testkit::temp::scratch("orchestrator-quick-clicks"));
+        let (mut model, first, _second) = two_agents_with_shells();
+        model.session.as_mut().expect("session").select_tab(first);
+        let mut driven = driven(model, &home);
+        driven.frame();
+        let button = driven
+            .attach
+            .model
+            .hits
+            .iter()
+            .find(|(_, hit)| *hit == WorkspaceHit::OpenFiles)
+            .map(|(rect, _)| *rect)
+            .expect("the code button");
+
+        driven.press(button.x, button.y);
+        assert!(driven.attach.model.code.is_some(), "the first opens");
+        driven.frame();
+        driven.press(button.x, button.y);
+        assert!(driven.attach.model.code.is_none(), "the second closes");
+    }
+
     /// Choosing a tab is choosing to see it — the one already in front
     /// included, which is how the pane is had back from a surface.
     #[test]
@@ -10151,6 +10224,12 @@ fn a_code_door_pressed_on_the_surface_it_opened_closes_it() {
     assert_eq!(
         code_door(Some(ContentMode::Diff), ContentMode::Contents),
         CodeDoor::Switch
+    );
+    // A document in its preview is the files half all the same: the
+    // files door shuts it rather than turning it back into source.
+    assert_eq!(
+        code_door(Some(ContentMode::Preview), ContentMode::Contents),
+        CodeDoor::Close
     );
     // With nothing open, this scope is not live at all — the workspace's
     // own binding is what opens the surface.
