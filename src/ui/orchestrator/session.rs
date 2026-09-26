@@ -2203,8 +2203,12 @@ impl Attach<'_> {
             // at rather than only by being pressed. Redrawn only when the
             // hover actually moves to another control — waving the mouse
             // across the pane must not cost a frame a tick.
+            //
+            // Resolved the way a click here is, first rect first: a control
+            // registered ahead of the row it sits on wins the click, and
+            // read from the other end its hover went to the row instead.
             _ => {
-                let hovered = hit_at(&self.model, mouse.column, mouse.row);
+                let hovered = self.model.hit_at(mouse.column, mouse.row);
                 // An extension's own open list follows the pointer too,
                 // by the same rule — but resolved its way, not the
                 // chrome's, or the hover lands on the board beneath it.
