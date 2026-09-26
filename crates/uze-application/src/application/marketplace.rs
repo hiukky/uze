@@ -412,6 +412,15 @@ impl Marketplace<'_> {
         uze_core::state::marketplace_add(&self.0.home, &name, source.clone())
     }
 
+    /// [`Self::register`], for a caller that already holds a typed source.
+    ///
+    /// A local directory that is not a repository yet still registers —
+    /// its installs will say what it lacks — and names only itself.
+    #[tracing::instrument(name = "marketplace.register_source", skip_all, err)]
+    pub fn register_typed_source(&self, source: &PackageSource) -> Result<bool> {
+        self.register_source(source)
+    }
+
     /// The host aliases this machine resolves, built-ins first.
     #[tracing::instrument(name = "marketplace.hosts", skip_all, err)]
     pub fn hosts(&self) -> Result<Vec<uze_core::hosts::HostEntry>> {
@@ -468,13 +477,62 @@ impl Marketplace<'_> {
     }
 
     #[tracing::instrument(name = "marketplace.remove", skip_all, fields(name = %name), err)]
-    pub fn remove(&self, name: &str) -> Result<()> {
+    pub fn remove(&self, name: &str) -> Result<MarketplaceRemovalReport> {
         if name == BUILT_IN_MARKETPLACE {
             return Err(UzeError::ReservedMarketplace(name.to_owned()));
         }
-        uze_core::state::marketplace_remove(&self.0.home, name)?;
-        self.0.marketplace_catalogues.invalidate(name);
-        Ok(())
+        let _mutation = uze_core::persistence::MutationLock::acquire(&self.0.home)?;
+        // Removal changes vendor-visible state; cached inspection verdicts
+        // must not outlive it (ADR 018).
+        self.0.inspection_cache.invalidate();
+        // Taking a marketplace off the machine takes what it delivered with
+        // it: every package the Store holds from this marketplace goes
+        // through the same teardown a per-package removal runs —
+        // inspect-before-detach, receipt-owned, drift safety. The lock is
+        // held here, so the inner, lock-free teardown path is what runs;
+        // `Plugins::remove` would refuse the re-entrant acquisition.
+        let installed: Vec<String> = self
+            .0
+            .installed_packages()
+            .into_iter()
+            .filter(|package| package.id.marketplace() == name)
+            .map(|package| package.id.as_str().to_owned())
+            .collect();
+        let mut removed = Vec::new();
+        let mut blocked = Vec::new();
+        for id in &installed {
+            match self.0.plugins().detach_and_remove(id, false) {
+                Ok(RemovePluginReport::Removed { plugin, .. })
+                | Ok(RemovePluginReport::AlreadyAbsent { plugin }) => removed.push(plugin),
+                Ok(RemovePluginReport::Blocked { report, plan }) => {
+                    blocked.push(BlockedPackageRemoval {
+                        package: id.clone(),
+                        reason: format!(
+                            "{} was blocked ({plan:?}); its bytes were left in place",
+                            report.package_id
+                        ),
+                    });
+                }
+                Err(error) => blocked.push(BlockedPackageRemoval {
+                    package: id.clone(),
+                    reason: error.to_string(),
+                }),
+            }
+        }
+        // The registry entry goes last: a marketplace that could not be
+        // emptied stays registered, so the leftovers it still holds are
+        // reachable — `market remove` again after the block is cleared.
+        let record_removed = blocked.is_empty();
+        if record_removed {
+            uze_core::state::marketplace_remove(&self.0.home, name)?;
+            self.0.marketplace_catalogues.invalidate(name);
+        }
+        Ok(MarketplaceRemovalReport {
+            marketplace: name.to_owned(),
+            removed,
+            blocked,
+            record_removed,
+        })
     }
 
     #[tracing::instrument(name = "marketplace.list", skip_all, err)]
@@ -540,7 +598,7 @@ impl Marketplace<'_> {
 
     /// `Marketplace::install_plugin`, with an explicit answer for a bare-plugin-name
     /// collision with an already-active, differently-marketplaced package
-    /// (ADR-038) — see `Marketplace::install_plugin_resolving`.
+    /// (ADR-036) — see `Marketplace::install_plugin_resolving`.
     #[tracing::instrument(name = "marketplace.install_plugin_resolving", skip_all, fields(spec = %spec), err)]
     pub fn install_plugin_resolving(
         &self,
@@ -950,5 +1008,40 @@ mod mirror_tests {
         );
 
         fs::remove_dir_all(&home_root).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod removal_tests {
+    use crate::UzeApplication;
+    use uze_core::integration::{AttachmentInspection, AttachmentState};
+    use uze_core::{PackageSource, UzeHome};
+
+    #[test]
+    fn removing_a_marketplace_invalidates_the_inspection_cache() {
+        let base = uze_testkit::temp::scratch("market-remove-invalidates");
+        let home = UzeHome::at(base.join("home"));
+        let application = UzeApplication::new(home.clone(), Vec::new());
+        uze_core::state::marketplace_add(
+            &home,
+            "tools",
+            PackageSource::Local {
+                path: base.join("tools"),
+            },
+        )
+        .unwrap();
+        let matched = AttachmentInspection {
+            state: AttachmentState::Matched,
+            reason: String::new(),
+        };
+        application.inspection_cache.put("ledger", &matched, None);
+
+        application.marketplace().remove("tools").unwrap();
+
+        assert!(
+            application.inspection_cache.get("ledger", None).is_none(),
+            "a verdict cached before the removal must not outlive it"
+        );
+        std::fs::remove_dir_all(&base).ok();
     }
 }

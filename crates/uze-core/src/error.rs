@@ -215,15 +215,25 @@ pub enum UzeError {
     /// removal) — see ADR-019. Distinct from `PluginNotUsedByProject`: this
     /// is "there is no project here to remove anything from."
     #[error(
-        "no project environment found here; run `uze plugin remove {plugin}` to remove it from this machine"
+        "no project environment found here; run `uze remove {plugin} -m` to remove it from this machine"
     )]
     NoProjectEnvironment { plugin: String },
     /// A project exists (an `agents.lock` was found) but does not declare
     /// this plugin — distinct from `NoProjectEnvironment`.
     #[error(
-        "`{plugin}` is not used by this project; run `uze plugin remove {plugin}` to remove it from this machine"
+        "`{plugin}` is not used by this project; run `uze remove {plugin} -m` to remove it from this machine"
     )]
     PluginNotUsedByProject { plugin: String },
+    /// The directory is no project: no `agents.yaml`, no repository root,
+    /// no `AGENTS.md`. A machine that is not inside a project is not
+    /// broken, so this is a question of scope, not a fault — `hint` names
+    /// what to do instead.
+    #[error("not a project here (no agents.yaml, repository root or AGENTS.md); {hint}")]
+    NoProject { hint: String },
+    /// Scaffolding an authored artifact failed before anything the author
+    /// keeps was written. The text names which precondition failed.
+    #[error("{0}")]
+    MarketplaceScaffold(String),
     #[error("symbolic links are unavailable on this platform: {0}")]
     SymlinkUnsupported(PathBuf),
     #[error("the plugin store cannot preserve special filesystem entry `{0}`")]

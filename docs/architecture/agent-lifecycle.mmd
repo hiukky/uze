@@ -4,7 +4,7 @@ title: Agent lifecycle
 flowchart TD
   place([An agent is placed]) --> cut[git worktree add<br/>.worktrees/id on branch agent/id]
   cut --> setup[The project's setup command runs]
-  setup --> name[uze agent task name type/subject<br/>or, still unnamed at the first commit,<br/>named from that commit's subject]
+  setup --> name[uze agent work name type/subject<br/>or, still unnamed at the first commit,<br/>named from that commit's subject]
   name --> running[Running]
   running --> evaluate{What Git says, each pass}
   evaluate -->|a dirty tree| uncommitted[Uncommitted]

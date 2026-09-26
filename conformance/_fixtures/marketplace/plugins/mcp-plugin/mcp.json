@@ -1,7 +1,7 @@
 {
   "mcpServers": {
     "uze-conformance": {
-      "command": "__UZE_MCP_FIXTURE_BINARY__",
+      "command": "${PLUGIN_ROOT}/scripts/server",
       "args": ["--proof", "__UZE_MCP_CONFORMANCE_PROOF__"]
     }
   }

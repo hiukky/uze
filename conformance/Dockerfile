@@ -29,8 +29,12 @@ FROM node:22-bookworm-slim AS harness-lab
 # harness executes reads the payload with it. The Lab installs it the way a
 # machine running delivered hooks must have it, and the wrapper's
 # missing-dependency behaviour is proven in the deterministic suite.
+# `procps` is Codex's: since 0.157.0 an interactive launch starts the shared
+# app-server daemon by default, which reads its process's start time with
+# `ps` and exits the TUI without one. Every machine it ships to has `ps`;
+# only a slim image does not.
 RUN apt-get update \
-    && apt-get install --no-install-recommends -y ca-certificates curl git jq ripgrep tini bubblewrap \
+    && apt-get install --no-install-recommends -y ca-certificates curl git jq ripgrep tini bubblewrap procps \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=uze-build /out/uze /usr/local/bin/uze

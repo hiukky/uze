@@ -199,7 +199,7 @@ the real binaries) — the honest place for vendor-semantics verdicts.
 
 A12 update-lifecycle is *not* an acceptance scenario yet: update semantics
 are L1 (`tests/packages/acquisition.rs` re-resolution tests) and the CLI
-`plugin update` path is untested at L3 — that is the first gap to close
+`update -m` is untested at L3 — that is the first gap to close
 after this refactor.
 
 ## Isolation guarantees

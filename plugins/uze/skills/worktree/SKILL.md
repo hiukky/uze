@@ -51,7 +51,7 @@ is where it is written.
 Your first action in the checkout, before you read a file or plan anything:
 
 ```bash
-uze agent task name <type>/<subject>
+uze agent work name <type>/<subject>
 ```
 
 The branch UZE placed you on is a generated identifier, and a reviewer

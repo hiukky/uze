@@ -61,7 +61,7 @@ scenes:
       - shell: "{uze} setup"
         check: false
       - shell: "{uze} market add {world}/market"
-      - shell: "{uze} plugin install house-rules@demo"
+      - shell: "{uze} install -m house-rules@demo"
       - shell: "{uze} agent context reconcile"
         say: compose the plugin's instructions into the project's page
     then:

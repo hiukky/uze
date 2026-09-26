@@ -20,6 +20,9 @@ pub use uze_core::{
     Result,
     UzeError,
     UzeHome,
+    // The authoring surface's check report: vocabulary a read model is
+    // made of, so the CLI answers the same thing a `check` verb asks.
+    authoring::{ScaffoldCapabilities, ValidationReport},
     capability::CapabilityKind,
     client_layout::{
         ClientLayout, FirstStepsLayout, ManagementLayout, SidebarLayout, WorkspaceLayout,
@@ -34,7 +37,7 @@ pub use uze_core::{
         FixedResolution, NameCollisionAuthority, NameCollisionRequest, NameCollisionResolution,
         NoNameCollisionAuthority,
     },
-    notifications::Chime,
+    notifications::{Chime, WrittenChime},
     // The one writer for anything UZE owns. The binary writes its own
     // update ledger, and doing that with a second atomic-rename of its own
     // is how two conventions for one thing start.

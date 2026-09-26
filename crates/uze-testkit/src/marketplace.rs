@@ -1,6 +1,6 @@
 //! Test helper for the product's marketplace contract: a plugin is only
 //! ever installed through a marketplace that was added first
-//! (`uze market add <dir>` then `uze plugin install <name>@<market>`).
+//! (`uze market add <dir>` then `uze install <name>@<market> -m`).
 //! The product rejects direct path/Git installs, so tests must stage a
 //! single-plugin marketplace to exercise the real user flow.
 
@@ -55,8 +55,8 @@ pub fn marketplace_install_args(root: &Path, package: &Path) -> (Vec<String>, Ve
             market.to_string_lossy().into_owned(),
         ],
         vec![
-            "plugin".to_owned(),
             "install".to_owned(),
+            "-m".to_owned(),
             format!("{name}@test"),
         ],
     )
@@ -96,7 +96,7 @@ mod tests {
         assert_eq!(market[0], "market");
         assert_eq!(market[1], "add");
         assert!(market[2].ends_with("market"));
-        assert_eq!(install, vec!["plugin", "install", "demo@test"]);
+        assert_eq!(install, vec!["install", "-m", "demo@test"]);
         let marketplace: serde_json::Value = serde_json::from_str(
             &fs::read_to_string(root.join("market/marketplace.json")).unwrap(),
         )

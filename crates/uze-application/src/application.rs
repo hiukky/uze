@@ -35,6 +35,7 @@ use uze_integrations::registry::IntegrationRegistry;
 use crate::bootstrap;
 
 mod agent_context;
+mod authoring;
 mod context;
 mod doctor;
 mod inspection_cache;
@@ -64,6 +65,7 @@ pub use overview::{
 use project_environment::ProjectEnvironmentPlan;
 pub use project_environment::{
     InstallReport, ProjectLockStatus, RemoveProjectPluginReport, UpdateOutcome, UpdateReport,
+    UpdateScope,
 };
 pub use uze_core::workspace::WorkspaceKind;
 
@@ -514,7 +516,7 @@ impl UzeApplication {
     }
 
     pub(crate) fn package_by_name(&self, name: &str) -> Result<StoredPackage> {
-        // A plugin is addressable by its active local name (ADR-038) first —
+        // A plugin is addressable by its active local name (ADR-036) first —
         // its own bare plugin name unless an install-time alias resolved a
         // collision, in which case only one installed package ever answers
         // to a given name at all, so this can never be ambiguous. Falls

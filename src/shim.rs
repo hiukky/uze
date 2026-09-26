@@ -172,7 +172,7 @@ pub fn run(shim_name: &str) -> ! {
 /// and treats the identity as absent: an ordinary invocation, which never
 /// resumes the enclosing agent's conversation. The variable cannot simply
 /// be removed for descendants, because the harness's own children — `uze
-/// agent task name` among them — are the ones that need it.
+/// agent work name` among them — are the ones that need it.
 fn owned_identity() -> Option<String> {
     let id = env::var(launch::AGENT_IDENTITY_VARIABLE).ok()?;
     if id.is_empty() {

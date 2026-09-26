@@ -86,6 +86,31 @@ need a decision — machine-only, or refuse. Those five are where "where it
 runs decides" is actually implemented; they are five decisions, not one, and
 the task list names them individually.
 
+### The renames ride the same pass
+
+Two renames join this change because both are grammar work, and this is the
+grammar pass:
+
+- **`agent task` → `agent work`** — the word `name-an-agents-work` already
+  speaks ("an agent's work carries two names"); the checkout lives in a
+  worktree; the branch is `agent/<id>`. `task` is the word left without an
+  owner. Only the noun moves: `name` and its argument grammar are untouched,
+  so the rename is a spelling sweep (`AgentTaskAction`, the projected
+  `AGENTS.md` region, `docs/`, the naming journey) with the same behavior.
+  *Alternative considered*: renaming inside `name-an-agents-work` before its
+  archive — rejected; that change is implemented and its archive should
+  carry the name it was built with, so the rename lands as its own grammar
+  decision here.
+- **`theme` → `config`** — the verb's subject outgrew its name; it chooses
+  the machine's authored configuration, which is `config.toml`'s tier. The
+  sub-surfaces are typed (`theme`, `icons`, `notification`), never a generic
+  key/value store — authored files grow by additive keys with unknown
+  reading as default, and a generic `get/set` would promise more than the
+  tier rules keep. `notification` is the one new behavior: the chime's
+  first CLI surface, riding on the `agent-finished-chime` choice (this
+  change carries the grammar; that one carries the choice — its delta was
+  extended in step).
+
 ### Ordering against the freshness change
 
 `plugin-freshness-and-linked-marketplaces` also modifies the `plugin`

@@ -123,7 +123,7 @@ fn invocation_policy_projects_per_harness_classification() {
     // Inspect reports all three skills with their policy classification.
     let inspect = env.run_ok(
         uze_bin(),
-        &["plugin", "inspect", "policy-fixture", "--format", "json"],
+        &["inspect", "policy-fixture", "--format", "json"],
     );
     let report: serde_json::Value = serde_json::from_slice(&inspect.stdout).expect("json report");
     let names: Vec<&str> = report["capabilities"]

@@ -112,7 +112,7 @@ fn the_official_package_contributes_its_agent_skill_resources() {
         )
         .unwrap();
     let inspection = application.plugins().inspect("uze").unwrap();
-    assert_eq!(inspection.capabilities.len(), 3);
+    assert_eq!(inspection.capabilities.len(), 4);
     assert!(
         inspection
             .capabilities
@@ -124,7 +124,7 @@ fn the_official_package_contributes_its_agent_skill_resources() {
         .iter()
         .map(|capability| capability.name.as_str())
         .collect::<Vec<_>>();
-    assert_eq!(names, ["architect", "init", "worktree"]);
+    assert_eq!(names, ["architect", "author", "init", "worktree"]);
     fs::remove_dir_all(root).unwrap();
 }
 
@@ -177,7 +177,7 @@ fn status_context_inspect_and_context_plan_produce_valid_json() {
         )
         .unwrap();
     let project = root.join("project");
-    fs::create_dir_all(&project).unwrap();
+    fs::create_dir_all(project.join(".git")).unwrap();
 
     let status = application.health().status(&project).unwrap();
     let status_json = serde_json::to_value(&status).unwrap();
@@ -208,7 +208,7 @@ fn installing_the_skill_package_never_touches_managed_regions_of_other_packages(
         )
         .unwrap();
     let project = root.join("project");
-    fs::create_dir_all(&project).unwrap();
+    fs::create_dir_all(project.join(".git")).unwrap();
     application.context().reconcile(&project).unwrap();
     let before = fs::read_to_string(project.join("AGENTS.md")).unwrap();
 
@@ -254,7 +254,7 @@ fn drift_is_still_blocked_with_the_skill_package_also_installed() {
         )
         .unwrap();
     let project = root.join("project");
-    fs::create_dir_all(&project).unwrap();
+    fs::create_dir_all(project.join(".git")).unwrap();
     application.context().reconcile(&project).unwrap();
 
     let agents_md = project.join("AGENTS.md");

@@ -58,7 +58,7 @@ scenes:
       - shell: "{uze} setup"
         check: false
       - shell: "{uze} market add {world}/market"
-      - shell: "{uze} plugin install house-rules@demo"
+      - shell: "{uze} install -m house-rules@demo"
         say: install a plugin that contributes instructions
     then:
       - file: "{project}/AGENTS.md"
@@ -128,7 +128,7 @@ scenes:
 
   - scene: removing the plugin from the machine leaves the project alone
     when:
-      - shell: "{uze} plugin remove house-rules"
+      - shell: "{uze} remove -m house-rules"
         say: remove the plugin from this machine
     then:
       - file: "{project}/AGENTS.md"

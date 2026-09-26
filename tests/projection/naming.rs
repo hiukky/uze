@@ -315,6 +315,7 @@ fn package_uze_plus_skill_uze_naturally_gets_the_stable_label_no_special_case() 
         names,
         vec![
             "uze:architect".to_owned(),
+            "uze:author".to_owned(),
             "uze:init".to_owned(),
             "uze:worktree".to_owned(),
         ],

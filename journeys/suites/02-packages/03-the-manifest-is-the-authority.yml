@@ -12,7 +12,7 @@ about: |
   is the point, and it is a boundary rather than a feature — converging the
   lock is not the same as taking a package off the machine. The Store and
   every harness keep it, because other projects share both; removing it
-  from *this* machine is `uze plugin remove`, a different scope.
+  from *this* machine is `uze remove <plugin> -m`, a different scope.
 
 world:
   project: demo-app
@@ -97,4 +97,4 @@ scenes:
         about: |
           the machine keeps the package and every harness keeps reading it.
           Other projects share the Store, so taking it away here is
-          `uze plugin remove`'s to do, in machine scope
+          `uze remove <plugin> -m`'s to do, in machine scope

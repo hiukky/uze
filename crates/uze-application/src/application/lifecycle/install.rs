@@ -28,7 +28,7 @@ impl Plugins<'_> {
 
     /// Installs a package straight from a source, under the `local`
     /// marketplace. Refuses, without asking, a bare plugin name already
-    /// active under another marketplace (ADR-038).
+    /// active under another marketplace (ADR-036).
     #[tracing::instrument(name = "plugins.add", skip_all, err)]
     pub fn add(
         &self,
@@ -55,7 +55,7 @@ impl Plugins<'_> {
     /// `MutationLock` is not reentrant.
     ///
     /// `active_name` requests a local name other than the package's own bare
-    /// plugin name (ADR-038); an update uses it to keep an alias a past
+    /// plugin name (ADR-036); an update uses it to keep an alias a past
     /// collision resolution gave the package.
     pub(crate) fn install_materialized(
         &self,
@@ -204,6 +204,7 @@ impl Plugins<'_> {
             attachments,
             publications,
             blocked,
+            declared: false,
         })
     }
 
@@ -211,7 +212,7 @@ impl Plugins<'_> {
     /// plugin name, when `None` — every ordinary install), asking
     /// `name_authority` to resolve a collision with an already-active,
     /// differently-marketplaced package instead of failing outright
-    /// (ADR-038). `Alias` retries the ingest under the chosen local name.
+    /// (ADR-036). `Alias` retries the ingest under the chosen local name.
     /// `Replace` removes the existing active package first — only once that
     /// is proven `Safe`, exactly the rule `Plugins::remove` enforces, so a
     /// `Blocked` removal aborts the whole replace with the existing package

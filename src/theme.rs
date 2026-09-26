@@ -42,13 +42,13 @@ const MAX_ANCESTRY: usize = 8;
 /// Resolves a theme by id into the stack it is made of.
 ///
 /// The id may name a theme the operator wrote or one UZE carries; theirs
-/// wins, the same way `uze theme list` shows it.
+/// wins, the same way `uze config theme list` shows it.
 pub fn resolve(app: &UzeApplication, home: &UzeHome, id: &str) -> Result<Loaded> {
     resolve_with_layers(app, home, id).map(|(loaded, _)| loaded)
 }
 
-/// The same, and what it was assembled from, bottom-up — for `uze theme
-/// show`, where "which file said this" is the first thing an author asks.
+/// The same, and what it was assembled from, bottom-up — for `uze config
+/// theme show`, where "which file said this" is the first thing an author asks.
 pub fn resolve_with_layers(
     app: &UzeApplication,
     home: &UzeHome,
@@ -162,8 +162,8 @@ fn written(
         // set to something that is a theme.
         return Err(unusable(format!(
             "`{id}` is a glyph set now, not a theme — glyphs are chosen apart from \
-             the palette. Run `uze theme glyphs {id}` to keep those glyphs, and \
-             `uze theme set default` to put the palette back"
+             the palette. Run `uze config icons {id}` to keep those glyphs, and \
+             `uze config theme set default` to put the palette back"
         )));
     }
     Err(unusable(format!(
@@ -197,7 +197,7 @@ fn unusable(message: String) -> UzeError {
 /// from being applied.
 ///
 /// Deliberately not the loader's warnings. Those are worth hearing when you
-/// ask about a theme — `uze theme show` prints them, and `uze theme set`
+/// ask about a theme — `uze config theme show` prints them, and `uze config theme set`
 /// prints them as you choose it — but printing eight contrast notes above
 /// the output of every `uze status` for the rest of the theme's life is how
 /// a useful warning becomes noise the operator learns to scroll past.
@@ -437,7 +437,7 @@ mod tests {
         select(&home, "ascii");
         let problem = chosen(&home).expect_err("a set named as a theme");
         assert!(problem.contains("glyph set"), "{problem}");
-        assert!(problem.contains("uze theme glyphs ascii"), "{problem}");
+        assert!(problem.contains("uze config icons ascii"), "{problem}");
     }
 
     #[test]

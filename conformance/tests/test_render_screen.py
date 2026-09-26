@@ -52,6 +52,23 @@ class RenderScreenTest(unittest.TestCase):
     def test_an_empty_stream_renders_an_empty_screen(self):
         self.assertEqual(render_screen(""), "")
 
+    def test_primary_screen_output_does_not_land_on_the_alternate_frame(self):
+        """codex-cli 0.157 steps out of the alternate screen to announce its
+        daemon install and comes back; the frame it returns to is its own."""
+        raw = (
+            "\x1b[?1049h\x1b[3;1H› Ask Codex to do anything"
+            "\x1b[?1049lInstalling daemon...\r\n"
+            "\x1b[?1049h\x1b[1;1HTrust this folder?"
+        )
+        screen = render_screen(raw)
+        self.assertIn("Trust this folder?", screen)
+        self.assertNotIn("Installing daemon", screen)
+        self.assertNotIn("Ask Codex", screen)
+
+    def test_leaving_the_alternate_screen_restores_the_primary_one(self):
+        screen = render_screen("shell$\x1b[?1049hframe\x1b[?1049l")
+        self.assertEqual(screen, "shell$")
+
 
 if __name__ == "__main__":
     unittest.main()

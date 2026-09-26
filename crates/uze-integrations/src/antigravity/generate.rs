@@ -23,6 +23,8 @@ use uze_core::{
     store::{StoredPackage, is_valid_qualified_id},
 };
 
+use crate::shared::mcp::delivered_mcp_servers;
+
 /// Root of every package's generated plugin directory. Lives under
 /// `$UZE_HOME/runtime/attachments/antigravity/plugins/` — the same convention
 /// every other integration's generated envelopes use, never under the Store.
@@ -135,19 +137,11 @@ fn generated_plugin_document(package: &StoredPackage) -> serde_json::Value {
 /// `serverUrl` — the exact mapping Antigravity's own official
 /// legacy-migration path performs (official docs: "Legacy schema keys:
 /// `url` or `httpUrl`; Modern schema key: `serverUrl`"). Nothing is
-/// dropped; stdio `command`, `args`, `env`, `cwd` stay untouched.
+/// dropped; stdio `command`, `args`, `env`, `cwd` carry only the package
+/// root resolved.
 fn translated_mcp_config(package: &StoredPackage) -> serde_json::Value {
     let mut document = serde_json::json!({ "mcpServers": {} });
-    if let Some(servers) = fs::read(package.root.join("mcp.json"))
-        .ok()
-        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
-        .and_then(|value| {
-            value
-                .get("mcpServers")
-                .and_then(serde_json::Value::as_object)
-                .cloned()
-        })
-    {
+    if let Some(serde_json::Value::Object(servers)) = delivered_mcp_servers(package) {
         for (name, mut server) in servers {
             if let Some(value) = server.as_object_mut()
                 && let Some(url) = value.remove("url").or_else(|| value.remove("httpUrl"))
@@ -558,5 +552,27 @@ mod generated_native_tests {
             }
         }
         out
+    }
+
+    #[test]
+    fn the_generated_plugin_resolves_the_package_root_its_servers_name() {
+        let (root, pkg) = make_package_with_mcp("mcp-package-root");
+        fs::write(
+            pkg.root.join("mcp.json"),
+            r#"{"mcpServers":{"srv":{"command":"python3","args":["${PLUGIN_ROOT}/scripts/server.py"]}}}"#,
+        )
+        .unwrap();
+        let uze_home = UzeHome::at(root.join("uze"));
+        let dir = materialize_generated_plugin(&uze_home, &pkg).unwrap();
+        let delivered: serde_json::Value =
+            serde_json::from_slice(&fs::read(dir.join("mcp_config.json")).unwrap()).unwrap();
+        assert_eq!(
+            delivered["mcpServers"]["srv"]["args"][0],
+            pkg.root
+                .join("scripts/server.py")
+                .to_string_lossy()
+                .as_ref()
+        );
+        let _ = fs::remove_dir_all(root);
     }
 }

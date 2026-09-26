@@ -17,6 +17,7 @@ use std::{fs, path::Path};
 use uze_core::{Result, UzeError, store::StoredPackage};
 
 use crate::shared::marketplace::manifest_fields;
+use crate::shared::mcp::delivered_mcp_servers;
 use crate::shared::skill::write_file;
 
 /// Writes the generated `.codex-plugin/plugin.json` and the surfaces it
@@ -67,8 +68,12 @@ pub(super) fn materialize_envelope(package: &StoredPackage, dir: &Path) -> Resul
         source,
     })?;
     materialize_generated_skills(package, &package_root, dir)?;
-    if mcp_source.is_file() {
-        mirror_file(&mcp_source, &dir.join(".mcp.json"))?;
+    if let Some(servers) = delivered_mcp_servers(package) {
+        write_file(
+            &dir.join(".mcp.json"),
+            &serde_json::to_vec_pretty(&serde_json::json!({ "mcpServers": servers }))
+                .expect("generated MCP file is serializable"),
+        )?;
     }
     Ok(())
 }
@@ -458,14 +463,15 @@ mod generated_native_tests {
         assert!(dir.join(".codex-plugin/plugin.json").is_file());
         // Codex stages the envelope into its plugin cache without following
         // symlinks, so a default-policy Skill and the MCP file are real
-        // bytes — byte-identical to the Store's.
+        // bytes — the Skill byte-identical to the Store's.
         assert_eq!(
             fs::read(dir.join("skills/commit/SKILL.md")).unwrap(),
             fs::read(pkg.root.join("skills/commit/SKILL.md")).unwrap()
         );
         assert_eq!(
-            fs::read(dir.join(".mcp.json")).unwrap(),
-            fs::read(pkg.root.join("mcp.json")).unwrap()
+            serde_json::from_slice::<serde_json::Value>(&fs::read(dir.join(".mcp.json")).unwrap())
+                .unwrap(),
+            serde_json::json!({ "mcpServers": { "mcp-a": { "command": "a" } } })
         );
         assert!(
             symlinks_under(&dir).is_empty(),
@@ -824,5 +830,32 @@ mod generated_native_tests {
             }
         }
         out
+    }
+
+    #[test]
+    fn the_envelope_resolves_the_package_root_its_servers_name() {
+        let (_root, pkg) = make_plain_package("mcp-package-root", false);
+        fs::write(
+            pkg.root.join("mcp.json"),
+            r#"{"mcpServers":{"srv":{"command":"python3","args":["${PLUGIN_ROOT}/scripts/server.py"],"env":{"DATA":"${PLUGIN_ROOT}/data"}}}}"#,
+        )
+        .unwrap();
+        let dir = _root.join("envelope");
+        materialize_envelope(&pkg, &dir).unwrap();
+        let delivered: serde_json::Value =
+            serde_json::from_slice(&fs::read(dir.join(".mcp.json")).unwrap()).unwrap();
+        let server = &delivered["mcpServers"]["srv"];
+        assert_eq!(
+            server["args"][0],
+            pkg.root
+                .join("scripts/server.py")
+                .to_string_lossy()
+                .as_ref()
+        );
+        assert_eq!(
+            server["env"]["DATA"],
+            pkg.root.join("data").to_string_lossy().as_ref()
+        );
+        let _ = fs::remove_dir_all(_root);
     }
 }

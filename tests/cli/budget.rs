@@ -54,7 +54,7 @@ fn tree_state(root: &Path) -> Vec<(PathBuf, u64, SystemTime)> {
 #[test]
 fn a_warm_read_only_command_writes_nothing_under_uze_home() {
     let env = TestEnvironment::isolated();
-    for command in [&["status"][..], &["doctor"][..], &["plugin", "list"][..]] {
+    for command in [&["status"][..], &["doctor"][..], &["status", "-m"][..]] {
         env.run_ok(uze_bin(), command);
         let before = tree_state(&env.uze_home);
         env.run_ok(uze_bin(), command);

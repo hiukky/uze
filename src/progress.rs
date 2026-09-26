@@ -120,7 +120,7 @@ pub fn clap_styles() -> clap::builder::Styles {
 
 /// A borderless, ANSI-aware table: aligned columns without the box-drawing
 /// clutter, for the many places a command lists rows of related data
-/// (`plugin list`, `market list`, help's command table, …). One
+/// (`status -m`, `market list`, help's command table, …). One
 /// construction path means every list in the CLI lines up the same way,
 /// instead of each call site hand-computing its own column widths.
 fn table() -> comfy_table::Table {

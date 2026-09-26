@@ -1,11 +1,16 @@
 //! Where a project begins, seen from any directory inside it.
 //!
-//! The nearest directory declaring `agents.yaml` is the project. Without
-//! one, the nearest `AGENTS.md` is, and without that, the repository: the
-//! first `.git` met ends the walk, so a repository never inherits a manifest
-//! or `AGENTS.md` from a directory above it that happens to be a parent on
-//! this machine (a dotfiles repository in `$HOME`, a checkout under another
-//! checkout). Outside any repository, the directory itself is the project.
+//! A directory is a project only on evidence, and may be none. The nearest
+//! ancestor declaring `agents.yaml` is the project; without one, the
+//! nearest repository root is — the first `.git` met ends the walk, so a
+//! repository never inherits a manifest or `AGENTS.md` from a directory
+//! above it that happens to be a parent on this machine (a dotfiles
+//! repository in `$HOME`, a checkout under another checkout), and an
+//! `AGENTS.md` inside a repository can no longer shadow the repository
+//! root. Only when there is no manifest and no repository is the nearest
+//! `AGENTS.md` the project. Standing in a directory proves nothing:
+//! outside every marker the answer is absence, and the caller decides what
+//! runs machine-only and what refuses.
 
 use std::path::{Path, PathBuf};
 
@@ -14,25 +19,24 @@ use crate::{Result, UzeError, manifest::MANIFEST_FILE_NAME, project_context::AGE
 /// The file or directory marking a Git repository's root.
 const GIT_MARKER: &str = ".git";
 
-pub fn resolve_project_root(cwd: &Path) -> Result<PathBuf> {
+pub fn resolve_project_root(cwd: &Path) -> Result<Option<PathBuf>> {
     if !cwd.exists() {
         return Err(UzeError::MissingPath(cwd.to_path_buf()));
     }
     let mut nearest_agents_md = None;
-    let (start, root) = find_upward(cwd, |dir| {
+    let (_, root) = find_upward(cwd, |dir| {
         if dir.join(MANIFEST_FILE_NAME).is_file() {
             return Some(dir.to_path_buf());
         }
         if nearest_agents_md.is_none() && dir.join(AGENTS_MD_FILE_NAME).is_file() {
             nearest_agents_md = Some(dir.to_path_buf());
         }
-        is_repository_root(dir).then(|| {
-            nearest_agents_md
-                .clone()
-                .unwrap_or_else(|| dir.to_path_buf())
-        })
+        // A repository root outranks an `AGENTS.md` remembered below it:
+        // the walk stops here, so the remembered one is discarded rather
+        // than shadowing the repository.
+        is_repository_root(dir).then(|| dir.to_path_buf())
     })?;
-    Ok(root.or(nearest_agents_md).unwrap_or(start))
+    Ok(root.or(nearest_agents_md))
 }
 
 /// Walks from the directory `path` names — its parent when `path` is a file
@@ -74,16 +78,19 @@ mod tests {
         // cwd is sub, which declares nothing; the walk finds the parent's
         // manifest, and the parent is the project root
         let resolved = resolve_project_root(&sub).unwrap();
-        assert_eq!(resolved, root.canonicalize().unwrap());
+        assert_eq!(resolved, Some(root.canonicalize().unwrap()));
         fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
-    fn fallback_is_cwd_when_no_markers() {
-        let root = uze_testkit::temp::scratch("fallback");
+    fn no_markers_is_no_project() {
+        let root = uze_testkit::temp::scratch("no-project");
         fs::create_dir_all(&root).unwrap();
         let resolved = resolve_project_root(&root).unwrap();
-        assert_eq!(resolved, root.canonicalize().unwrap());
+        assert!(
+            resolved.is_none(),
+            "standing in a directory proves nothing: {resolved:?}"
+        );
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -100,12 +107,46 @@ mod tests {
         let sub = repo.join("src");
         fs::create_dir_all(&sub).unwrap();
         let resolved = resolve_project_root(&sub).unwrap();
-        assert_eq!(resolved, repo.canonicalize().unwrap());
+        assert_eq!(resolved, Some(repo.canonicalize().unwrap()));
         fs::remove_dir_all(outer).unwrap();
     }
 
     #[test]
+    fn agents_md_inside_a_repository_does_not_shadow_the_root() {
+        // The case nothing tested before: an `AGENTS.md` in a subdirectory
+        // of a repository loses to the repository root — `repo/docs` is not
+        // the project `repo` is.
+        let root = uze_testkit::temp::scratch("agents-in-repo");
+        let docs = root.join("docs");
+        fs::create_dir_all(&docs).unwrap();
+        fs::create_dir_all(root.join(".git")).unwrap();
+        fs::write(docs.join(AGENTS_MD_FILE_NAME), "# not this one\n").unwrap();
+        let resolved = resolve_project_root(&docs).unwrap();
+        assert_eq!(resolved, Some(root.canonicalize().unwrap()));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_worktree_counts_as_a_repository_root() {
+        // A worktree carries `.git` as a file, not a directory; the marker
+        // test is about existence, and it still outranks a nested
+        // `AGENTS.md`.
+        let root = uze_testkit::temp::scratch("worktree-marker");
+        let docs = root.join("docs");
+        fs::create_dir_all(&docs).unwrap();
+        fs::write(root.join(GIT_MARKER), "gitdir: elsewhere\n").unwrap();
+        fs::write(docs.join(AGENTS_MD_FILE_NAME), "# not this one\n").unwrap();
+        let resolved = resolve_project_root(&docs).unwrap();
+        assert_eq!(resolved, Some(root.canonicalize().unwrap()));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn prefers_agents_md_over_git() {
+        // Same repository root, no repo above it in play: the AGENTS.md
+        // directory *is* the repository root here — the precedence question
+        // is only about which marker wins when they sit on different
+        // directories, which the two tests above settle.
         let root = uze_testkit::temp::scratch("agents-vs-git");
         fs::create_dir_all(&root).unwrap();
         fs::create_dir_all(root.join(".git")).unwrap();
@@ -113,7 +154,7 @@ mod tests {
         let sub = root.join("sub");
         fs::create_dir_all(&sub).unwrap();
         let resolved = resolve_project_root(&sub).unwrap();
-        assert_eq!(resolved, root.canonicalize().unwrap());
+        assert_eq!(resolved, Some(root.canonicalize().unwrap()));
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -126,7 +167,7 @@ mod tests {
         let sub = repo.join("src");
         fs::create_dir_all(&sub).unwrap();
         let resolved = resolve_project_root(&sub).unwrap();
-        assert_eq!(resolved, repo.canonicalize().unwrap());
+        assert_eq!(resolved, Some(repo.canonicalize().unwrap()));
         fs::remove_dir_all(outer).unwrap();
     }
 }

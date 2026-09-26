@@ -59,7 +59,7 @@ impl Plugins<'_> {
         // in which case the request is not where the bytes are any more.
         // Asked here rather than by the caller because a link is a machine
         // fact, and this is the machine-level way to bring a package up to
-        // date — so `uze plugin update` and a project's own update follow
+        // date — so the machine update and a project's own update follow
         // it alike.
         let materialized = match self.linked_source(&installed) {
             Some(request) => request,
@@ -86,7 +86,7 @@ impl Plugins<'_> {
         authority: &dyn TrustAuthority,
     ) -> Result<UpdatePluginReport> {
         let installed = self.0.package_by_name(id)?;
-        // An update is a version change, never a re-namespacing (ADR-038):
+        // An update is a version change, never a re-namespacing (ADR-036):
         // whatever local name this package currently answers to — its own
         // bare name, or an `alias` a past collision resolution gave it —
         // must come back exactly the same after the reinstall below removes
@@ -170,7 +170,7 @@ impl Plugins<'_> {
                     Err(restore_failure) => format!(
                         "`{id}` could not be updated: {failure}\nPutting the installed revision \
                          back also failed: {restore_failure}\nIts bytes are kept at {superseded}. \
-                         Remove {plugin_dir} if it is still there, then `uze plugin install \
+                         Remove {plugin_dir} if it is still there, then `uze install \
                          {qualified}` to restore it.",
                         qualified = installed.id.as_str(),
                         superseded = superseded.display(),

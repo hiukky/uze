@@ -54,7 +54,7 @@ scenes:
 
   - scene: installing puts something in every one of those trees
     when:
-      - shell: "{uze} plugin install flow@demo"
+      - shell: "{uze} install -m flow@demo"
         say: install the plugin
     then:
       - file: "{home}/.agents/skills/flow:commit/SKILL.md"
@@ -67,7 +67,7 @@ scenes:
 
   - scene: removing it takes every one of them back
     when:
-      - shell: "{uze} plugin remove flow"
+      - shell: "{uze} remove -m flow"
         say: remove the plugin from the machine
     then:
       - dir: "{uze_home}/store/plugins/demo/flow"

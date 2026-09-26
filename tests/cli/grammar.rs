@@ -107,7 +107,7 @@ fn market_add_never_touches_the_project_lock() {
     let _ = std::fs::remove_dir_all(home);
 }
 
-/// `uze plugin install <path>` — a direct source without a marketplace is
+/// `uze install <path>` — a direct source without a marketplace is
 /// rejected by the product (the marketplace is the provenance contract,
 /// ADR-019), and the marketplace flow never touches the project lock.
 #[test]
@@ -115,7 +115,7 @@ fn plugin_install_requires_a_marketplace_and_never_touches_the_project_lock() {
     let home = temporary_home("plugin-install-path");
     std::fs::create_dir_all(&home).unwrap();
     let rejected = uze(&home)
-        .args(["plugin", "install", package_fixture().to_str().unwrap()])
+        .args(["install", package_fixture().to_str().unwrap()])
         .output()
         .unwrap();
     assert!(
@@ -129,7 +129,7 @@ fn plugin_install_requires_a_marketplace_and_never_touches_the_project_lock() {
     );
     assert!(
         !home.join("agents.lock").is_file(),
-        "`plugin install` must never create agents.lock"
+        "`install` must never create agents.lock"
     );
 
     // The marketplace flow is the supported path.
@@ -149,7 +149,7 @@ fn plugin_install_requires_a_marketplace_and_never_touches_the_project_lock() {
     );
     assert!(
         !home.join("agents.lock").is_file(),
-        "`plugin install` must never create agents.lock"
+        "`install -m` must never create agents.lock"
     );
     let _ = std::fs::remove_dir_all(home);
 }
@@ -174,7 +174,9 @@ fn status_is_the_builtin() {
     let output = uze(&home).args(["status"]).output().unwrap();
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("Project"));
+    // A temp home is no project, so `status` answers the machine read
+    // model — the absence of a project is an answer, not a fault.
+    assert!(stdout.contains("Machine status"), "{stdout}");
     let _ = std::fs::remove_dir_all(home);
 }
 
@@ -337,7 +339,7 @@ fn every_public_help_route_uses_the_uze_renderer_and_dash_help_is_rejected() {
     }
     for (command, title) in [
         ("market", "UZE market"),
-        ("plugin", "UZE plugin"),
+        ("config", "UZE config"),
         ("setup", "UZE setup"),
     ] {
         let output = uze(&home).args([command, "--help"]).output().unwrap();
@@ -471,5 +473,199 @@ fn a_trailing_help_positional_is_a_value_not_a_help_request() {
         );
         assert!(String::from_utf8_lossy(&output.stdout).contains("UZE"));
     }
+    let _ = std::fs::remove_dir_all(home);
+}
+
+/// Registers the staged test marketplace from `home` and returns the
+/// package spec it offers.
+fn staged_market(home: &PathBuf) -> String {
+    let (market_args, install_args) =
+        uze_testkit::marketplace::marketplace_install_args(home, &package_fixture());
+    let market_add = uze(home).args(&market_args).output().unwrap();
+    assert!(
+        market_add.status.success(),
+        "market add failed: {}",
+        String::from_utf8_lossy(&market_add.stderr)
+    );
+    install_args.last().unwrap().clone()
+}
+
+/// Outside a project a package install is the machine half alone, and
+/// both spellings of it — `install` and the shorthand — say so, in the
+/// scope line they end with rather than a title claiming a project.
+#[test]
+fn a_package_install_outside_a_project_reports_the_machine_scope() {
+    let home = temporary_home("install-scope-no-project");
+    std::fs::create_dir_all(&home).unwrap();
+    let spec = staged_market(&home);
+
+    for arguments in [
+        vec!["install", spec.as_str()],
+        vec![spec.as_str()],
+        vec!["install", "-m", spec.as_str()],
+    ] {
+        let output = uze(&home).args(&arguments).output().unwrap();
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let rendered = arguments.join(" ");
+        assert!(
+            output.status.success(),
+            "`uze {rendered}` failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            stdout.contains("Scope") && stdout.contains("this machine only"),
+            "`uze {rendered}` must end with the scope it touched: {stdout}"
+        );
+        assert!(
+            !stdout.contains("Added to project") && !stdout.contains("this project"),
+            "`uze {rendered}` declared nothing and must not claim a project: {stdout}"
+        );
+    }
+    assert!(!home.join("agents.yaml").exists());
+    let _ = std::fs::remove_dir_all(home);
+}
+
+/// `-m` promises no project file is touched; converging a project is
+/// nothing but touching them, so `install -m` with no package is refused.
+#[test]
+fn install_m_without_a_package_is_refused_and_touches_no_project_file() {
+    let home = temporary_home("install-m-no-package");
+    std::fs::create_dir_all(home.join(".git")).unwrap();
+
+    let output = uze(&home).args(["install", "-m"]).output().unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success(), "`install -m` converged: {stderr}");
+    assert!(
+        stderr.contains("-m") && stderr.contains("<name>@<marketplace>"),
+        "the refusal must say `-m` needs a package: {stderr}"
+    );
+    for file in ["agents.yaml", "agents.lock", "AGENTS.md"] {
+        assert!(!home.join(file).exists(), "`install -m` wrote {file}");
+    }
+    let _ = std::fs::remove_dir_all(home);
+}
+
+/// `uze install <path>` converged the project at `path` before the package
+/// form shared the positional, and still does when the path is a
+/// project's root.
+#[test]
+fn install_with_a_project_directory_converges_that_project() {
+    let home = temporary_home("install-project-path");
+    let project = home.join("project");
+    std::fs::create_dir_all(project.join(".git")).unwrap();
+
+    for (directory, argument) in [(&home, "project"), (&project, ".")] {
+        let output = uze(directory).args(["install", argument]).output().unwrap();
+        assert!(
+            output.status.success(),
+            "`uze install {argument}` failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            project.join("agents.yaml").is_file(),
+            "`uze install {argument}` did not converge the project"
+        );
+        std::fs::remove_file(project.join("agents.yaml")).unwrap();
+    }
+    let _ = std::fs::remove_dir_all(home);
+}
+
+/// A removed spelling is answered with its replacement whatever followed
+/// it — not clap's bare error, and not the shorthand's "did you mean".
+#[test]
+fn a_removed_spelling_names_its_replacement_on_any_argv_it_prefixes() {
+    let home = temporary_home("removed-spellings");
+    std::fs::create_dir_all(&home).unwrap();
+
+    for (arguments, replacement) in [
+        (vec!["agent", "task"], "uze agent work"),
+        (vec!["agent", "task", "name", "feat/x"], "uze agent work"),
+        (vec!["theme"], "uze config theme"),
+        (vec!["theme", "list"], "uze config theme"),
+        (vec!["plugin", "install", "x@y"], "root verbs"),
+    ] {
+        let output = uze(&home).args(&arguments).output().unwrap();
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(!output.status.success());
+        assert!(
+            stderr.contains(replacement) && !stderr.contains("did you mean"),
+            "`uze {}` must name `{replacement}`, got: {stderr}",
+            arguments.join(" ")
+        );
+    }
+    let _ = std::fs::remove_dir_all(home);
+}
+
+/// `status -m` inside a project states the machine because it was asked
+/// to, not because there is no project — and its help says what it shows.
+#[test]
+fn status_m_inside_a_project_does_not_claim_there_is_none() {
+    let home = temporary_home("status-m-in-project");
+    std::fs::create_dir_all(home.join(".git")).unwrap();
+
+    let output = uze(&home).args(["status", "-m"]).output().unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(output.status.success());
+    assert!(
+        stdout.contains("Machine status") && !stdout.contains("No project here"),
+        "got: {stdout}"
+    );
+
+    let help = uze(&home).args(["status", "--help"]).output().unwrap();
+    let help = String::from_utf8_lossy(&help.stdout);
+    assert!(
+        help.contains("Show this project's environment") && !help.contains("Remove from"),
+        "got: {help}"
+    );
+    let _ = std::fs::remove_dir_all(home);
+}
+
+#[test]
+fn a_marketplace_removed_whole_says_its_registry_entry_went() {
+    let home = temporary_home("market-removal-entry");
+    std::fs::create_dir_all(&home).unwrap();
+    let spec = staged_market(&home);
+    let market = spec.rsplit_once('@').unwrap().1;
+
+    let output = uze(&home)
+        .args(["market", "remove", market])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(stdout.contains("registry entry removed"), "got: {stdout}");
+    let _ = std::fs::remove_dir_all(home);
+}
+
+/// `config.toml` is the operator's text: a word this build does not know
+/// reads as silent, is reported by the verb that reads it, and is never
+/// written over.
+#[test]
+fn an_unknown_notification_choice_is_reported_and_left_alone() {
+    let home = temporary_home("notification-unknown");
+    std::fs::create_dir_all(&home).unwrap();
+    let written = "[notifications]\nagent_finished = \"loudly\"\n";
+    std::fs::write(home.join("config.toml"), written).unwrap();
+
+    let output = uze(&home)
+        .args(["config", "notification"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "{stderr}");
+    assert!(stdout.contains("silent"), "got: {stdout}");
+    assert!(
+        stderr.contains("`loudly`"),
+        "the word went unreported: {stderr}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(home.join("config.toml")).unwrap(),
+        written
+    );
     let _ = std::fs::remove_dir_all(home);
 }

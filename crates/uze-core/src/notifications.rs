@@ -48,10 +48,26 @@ impl Chime {
 /// The choice in force. A value this build does not know reads as
 /// [`Chime::Silent`]: an unrecognised word is not a reason to make noise.
 pub fn agent_finished(home: &UzeHome) -> Result<Chime> {
-    Ok(config::get(home, SECTION, AGENT_FINISHED)?
-        .as_deref()
-        .and_then(Chime::from_id)
-        .unwrap_or_default())
+    Ok(agent_finished_as_written(home)?.in_force)
+}
+
+/// The choice in force, and the word `config.toml` holds when this build
+/// does not recognise it — the file is the operator's text, so the verb
+/// that reads it says the word went unread rather than hiding it behind
+/// the default.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct WrittenChime {
+    pub in_force: Chime,
+    pub unrecognised: Option<String>,
+}
+
+pub fn agent_finished_as_written(home: &UzeHome) -> Result<WrittenChime> {
+    let written = config::get(home, SECTION, AGENT_FINISHED)?;
+    let recognised = written.as_deref().and_then(Chime::from_id);
+    Ok(WrittenChime {
+        in_force: recognised.unwrap_or_default(),
+        unrecognised: written.filter(|_| recognised.is_none()),
+    })
 }
 
 pub fn set_agent_finished(home: &UzeHome, chime: Chime) -> Result<()> {
@@ -77,6 +93,13 @@ mod tests {
         let home = home("chime-unknown");
         config::set(&home, SECTION, AGENT_FINISHED, "loudly").expect("written");
         assert_eq!(agent_finished(&home).expect("readable"), Chime::Silent);
+        assert_eq!(
+            agent_finished_as_written(&home)
+                .expect("readable")
+                .unrecognised
+                .as_deref(),
+            Some("loudly")
+        );
     }
 
     #[test]

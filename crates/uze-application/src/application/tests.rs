@@ -336,7 +336,7 @@ pub(crate) fn removal_uses_reconciliation_and_preserves_drift() {
     fs::remove_dir_all(root).unwrap();
 }
 
-/// ADR-038 `replace`: the existing active plugin is fully removed and
+/// ADR-036 `replace`: the existing active plugin is fully removed and
 /// the new install claims the bare name it freed — the happy path with
 /// no receipts to make removal unsafe.
 #[test]
@@ -395,7 +395,7 @@ pub(crate) fn replace_resolution_removes_the_existing_active_plugin_and_installs
     fs::remove_dir_all(root).unwrap();
 }
 
-/// ADR-038 `replace`, unsafe case: the existing active plugin has a
+/// ADR-036 `replace`, unsafe case: the existing active plugin has a
 /// drifted receipt, so removing it is not `Safe` — the whole replace
 /// aborts with the structured collision error, and the existing plugin
 /// is left exactly as it was (never partially detached, never removed).
@@ -493,7 +493,7 @@ pub(crate) fn replace_resolution_aborts_and_preserves_the_existing_plugin_when_r
     fs::remove_dir_all(root).unwrap();
 }
 
-/// ADR-038: `Plugins::update` re-resolves the source and reinstalls under
+/// ADR-036: `Plugins::update` re-resolves the source and reinstalls under
 /// the same marketplace-qualified id, but must never silently revert an
 /// aliased plugin back to its bare plugin name — the alias is a fact
 /// about *this* installation, not something an update should erase.

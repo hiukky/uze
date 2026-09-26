@@ -605,7 +605,7 @@ pub fn default_exposure_name_candidates(resource: &crate::capability::Resource) 
 /// `<plugin>:<capability>`. This is a **presentation** label — it never
 /// replaces the canonical resource identity, the package layout, or the
 /// capability body. `plugin` is the package's *active* local name
-/// (ADR-038) — its own bare name unless an install-time alias resolved a
+/// (ADR-036) — its own bare name unless an install-time alias resolved a
 /// collision — never the marketplace-qualified identity. Deterministic and
 /// independent of which other plugins are installed.
 pub fn qualified_capability_name(active_plugin_name: &str, logical_name: &str) -> String {
@@ -615,7 +615,7 @@ pub fn qualified_capability_name(active_plugin_name: &str, logical_name: &str) -
 /// Resolves the resource's package to the local invocation name it is
 /// currently active under (`UzeStore::active_name_for`) — its own bare
 /// plugin name unless an install-time alias resolved a collision with
-/// another marketplace's same-named plugin (ADR-038).
+/// another marketplace's same-named plugin (ADR-036).
 pub fn active_plugin_name(
     home: &crate::home::UzeHome,
     resource: &crate::capability::Resource,

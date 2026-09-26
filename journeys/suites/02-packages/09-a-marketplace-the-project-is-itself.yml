@@ -1,0 +1,63 @@
+journey: a project becomes its own marketplace, and its plugins ship with it
+tags: [gate, cli, packages]
+proves: openspec/changes/agent-plugin-authoring
+about: |
+  The local frontier: a project can be its own plugin marketplace —
+  marketplace.json at the root, plugins beside it, the layout this
+  repository itself is one in. The scaffold writes no Git state and makes
+  no commit: the project's own repository is the marketplace's
+  repository, and its own commit flow carries the bytes. A second
+  marketplace in the same project is refused with that fact.
+
+world:
+  project: demo-app
+  files:
+    # Nothing staged: the claim is about what the command writes.
+
+scenes:
+  - scene: the project becomes its own marketplace
+    when:
+      - shell: "{uze} agent market create tools --local --description \"Demo tools\""
+        say: the frontier is named — this project is it
+    then:
+      - file: "{project}/marketplace.json"
+        contains: "\"name\": \"tools\""
+        about: the manifest is at the project root, where the project's own commit flow carries it
+      - dir: "{project}/plugins"
+        exists: true
+      - cmd:
+          run: "sh -c 'test \"$(git -C {project} rev-list --count HEAD)\" = 3'"
+          exit: 0
+        about: the scaffold committed nothing — the project's history is untouched
+      - file: "{uze_home}/state/marketplaces.json"
+        contains: "\"tools\""
+        about: the machine registry carries the name
+
+  - scene: a plugin authored into it is installable from the working tree
+    when:
+      - shell: "{uze} agent plugin create greet --market tools"
+      - shell: "{uze} install -m greet@tools"
+        say: install from the project's working tree
+    then:
+      - file: "{project}/plugins/greet/skills/greet/SKILL.md"
+        exists: true
+      - cmd:
+          run: "{uze} agent plugin check {project}/plugins/greet"
+          exit: 0
+        about: the check is the licence to install, answered offline
+      - file: "{home}/.agents/skills/greet:greet/SKILL.md"
+        exists: true
+        about: delivered before anything was ever committed
+
+  - scene: a project that is already a marketplace is refused, not extended
+    when:
+      - shell: "{uze} agent market create other --local || true"
+        say: the same project asked to be a second marketplace
+    then:
+      - cmd:
+          run: "{uze} agent market create other --local"
+          exit: 1
+        about: one marketplace per repository
+      - file: "{project}/marketplace.json"
+        contains: "\"name\": \"tools\""
+        about: and the manifest is the first one's — the refusal rewrote nothing

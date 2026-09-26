@@ -219,12 +219,12 @@ stated) · **—** = not expressible.
   the exact managed content, removal refuses drift, and foreign hooks,
   plugins, files, entries and ordering are never changed.
 - All generated artifacts are derived: safe to delete and regenerate from
-  the Store (`uze plugin install` / `uze plugin update` rebuilds them). The
+  the Store (`uze install -m` / `uze update -m` rebuilds them). The
   shared wrapper is removed with the last entry that needs it.
 - Existing installs are re-projected on the next install/update: nothing is
   migrated in place, and a receipt-owned entry from a previous release is
   replaced, never duplicated.
-- `uze plugin inspect` lists hooks with their per-harness delivery;
+- `uze inspect <plugin>` lists hooks with their per-harness delivery;
   `uze doctor` reports attachment health, the route each hook took, and a
   delivered wrapper whose `jq` is missing; the TUI harness matrix shows the
   per-harness verdict.

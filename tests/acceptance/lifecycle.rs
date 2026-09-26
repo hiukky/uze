@@ -36,13 +36,7 @@ fn remove_lifecycle_cleans_artifacts_and_keeps_project_lock_untouched() {
 
     let inspect = env.run_ok(
         uze_bin(),
-        &[
-            "plugin",
-            "inspect",
-            "uze-agent-skill-conformance",
-            "--format",
-            "json",
-        ],
+        &["inspect", "uze-agent-skill-conformance", "--format", "json"],
     );
     let report: serde_json::Value = serde_json::from_slice(&inspect.stdout).expect("json report");
     assert_eq!(report["plugin"]["id"], "uze-agent-skill-conformance@test");
@@ -50,8 +44,8 @@ fn remove_lifecycle_cleans_artifacts_and_keeps_project_lock_untouched() {
     let remove = env.run_ok(
         uze_bin(),
         &[
-            "plugin",
             "remove",
+            "-m",
             "uze-agent-skill-conformance",
             "--format",
             "json",
@@ -60,9 +54,9 @@ fn remove_lifecycle_cleans_artifacts_and_keeps_project_lock_untouched() {
     let report: serde_json::Value = serde_json::from_slice(&remove.stdout).expect("json report");
     assert_eq!(report["outcome"], "REMOVED");
 
-    let list = env.run_ok(uze_bin(), &["plugin", "list", "--format", "json"]);
+    let list = env.run_ok(uze_bin(), &["status", "-m", "--format", "json"]);
     let json: serde_json::Value = serde_json::from_slice(&list.stdout).expect("json list");
-    let ids: Vec<&str> = json
+    let ids: Vec<&str> = json["packages"]
         .as_array()
         .unwrap()
         .iter()
@@ -134,10 +128,7 @@ fn drift_blocks_destructive_remove_and_preserves_the_artifact() {
         "doctor must report the drifted attachment, got: {stdout}"
     );
 
-    let remove = env.run(
-        uze_bin(),
-        &["plugin", "remove", "uze-agent-skill-conformance"],
-    );
+    let remove = env.run(uze_bin(), &["remove", "-m", "uze-agent-skill-conformance"]);
     let remove_out = String::from_utf8_lossy(&remove.stdout);
     assert!(
         remove_out.contains("Removal blocked") && remove_out.contains("Drift"),

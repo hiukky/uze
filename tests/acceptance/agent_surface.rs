@@ -96,7 +96,7 @@ fn an_agent_names_its_work_through_the_real_binary() {
         .command(uze_bin())
         .current_dir(&slot)
         .env_remove(uze_terminal::launch::AGENT_IDENTITY_VARIABLE)
-        .args(["agent", "task", "name", "fix/branch-naming"])
+        .args(["agent", "work", "name", "fix/branch-naming"])
         .output()
         .expect("uze must run");
     assert!(!refused.status.success());
@@ -110,7 +110,7 @@ fn an_agent_names_its_work_through_the_real_binary() {
         .command(uze_bin())
         .current_dir(&slot)
         .env(uze_terminal::launch::AGENT_IDENTITY_VARIABLE, &identity)
-        .args(["agent", "task", "name", "fix/branch-naming"])
+        .args(["agent", "work", "name", "fix/branch-naming"])
         .output()
         .expect("uze must run");
 
@@ -143,7 +143,7 @@ fn the_agent_surface_is_absent_from_the_help_a_person_reads() {
     );
 
     // And it still exists: an unknown subcommand would fail differently.
-    let output = env.run(uze_bin(), &["agent", "task", "name", "fix/nowhere"]);
+    let output = env.run(uze_bin(), &["agent", "work", "name", "fix/nowhere"]);
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
         !stderr.contains("unrecognized subcommand"),

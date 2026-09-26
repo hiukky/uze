@@ -54,7 +54,7 @@ scenes:
         say: |
           spelled as a URL, so the install goes through the mirror — which
           is the path a marketplace anyone else publishes actually takes
-      - shell: "{uze} plugin install flow@demo"
+      - shell: "{uze} install -m flow@demo"
         say: install the one plugin it offers
     then:
       - file: "{uze_home}/store/plugins/demo/flow/plugin.json"
@@ -78,15 +78,15 @@ scenes:
 
   - scene: a plugin the marketplace does not offer is refused, and writes nothing
     when:
-      - shell: "{uze} plugin install ghost@demo"
+      - shell: "{uze} install -m ghost@demo"
         check: false
         say: ask for a name that is not in the manifest
     then:
       - cmd:
-          run: "{uze} plugin install ghost@demo"
+          run: "{uze} install -m ghost@demo"
           exit: 1
         about: |
-          UZE says no with a status a script can read — `uze plugin install
+          UZE says no with a status a script can read — `uze install -m
           x && …` is not told the install happened
       - dir: "{uze_home}/store/plugins/demo/ghost"
         exists: false
@@ -107,7 +107,7 @@ scenes:
         say: the repository the marketplace was registered from disappears
     then:
       - cmd:
-          run: "{uze} plugin update flow"
+          run: "{uze} update -m flow"
           exit: 1
         about: |
           an update asks the repository where its ref is now, and one that is

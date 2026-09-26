@@ -62,7 +62,7 @@ impl Fixture {
             project_root: base.join("project"),
             marketplace_root: base.join("market"),
         };
-        fs::create_dir_all(&fixture.project_root).unwrap();
+        fs::create_dir_all(fixture.project_root.join(".git")).unwrap();
         write_marketplace(&fixture.marketplace_root, "test-market", "flow");
         fixture
     }
@@ -96,7 +96,13 @@ fn add_project_plugin_creates_a_deterministic_lock() {
     let app = fx.app();
 
     app.project()
-        .add("flow", "test-market", &fx.project_root, &AlwaysTrust)
+        .add(
+            "flow",
+            "test-market",
+            &fx.project_root,
+            &AlwaysTrust,
+            &uze_application::NoNameCollisionAuthority,
+        )
         .unwrap();
 
     let lock_path = project_lock::lock_path_for(&fx.project_root);
@@ -111,7 +117,13 @@ fn add_project_plugin_creates_a_deterministic_lock() {
     // (install_materialized's own same-origin idempotency) and produce a
     // byte-identical lock — determinism, not just "doesn't crash".
     app.project()
-        .add("flow", "test-market", &fx.project_root, &AlwaysTrust)
+        .add(
+            "flow",
+            "test-market",
+            &fx.project_root,
+            &AlwaysTrust,
+            &uze_application::NoNameCollisionAuthority,
+        )
         .unwrap();
     let second_bytes = fs::read(&lock_path).unwrap();
     assert_eq!(
@@ -128,7 +140,13 @@ fn a_marketplace_on_this_machine_pins_like_any_other() {
     fx.add_marketplace_to_global_registry();
     let app = fx.app();
     app.project()
-        .add("flow", "test-market", &fx.project_root, &AlwaysTrust)
+        .add(
+            "flow",
+            "test-market",
+            &fx.project_root,
+            &AlwaysTrust,
+            &uze_application::NoNameCollisionAuthority,
+        )
         .unwrap();
     let lock = project_lock::load_lock(&fx.project_root).unwrap().unwrap();
     assert!(
@@ -147,7 +165,13 @@ fn install_project_environment_reproduces_a_lock_on_a_fresh_machine() {
     // "Machine A": adds the plugin, produces agents.lock.
     fx.app()
         .project()
-        .add("flow", "test-market", &fx.project_root, &AlwaysTrust)
+        .add(
+            "flow",
+            "test-market",
+            &fx.project_root,
+            &AlwaysTrust,
+            &uze_application::NoNameCollisionAuthority,
+        )
         .unwrap();
 
     // "Machine B": same UZE_HOME layout path but a fresh Store directory,
@@ -227,7 +251,13 @@ fn install_project_environment_is_a_no_op_once_everything_is_installed() {
     fx.add_marketplace_to_global_registry();
     let app = fx.app();
     app.project()
-        .add("flow", "test-market", &fx.project_root, &AlwaysTrust)
+        .add(
+            "flow",
+            "test-market",
+            &fx.project_root,
+            &AlwaysTrust,
+            &uze_application::NoNameCollisionAuthority,
+        )
         .unwrap();
 
     // `add` declared the policy scaffold, so the first install still owes a
@@ -258,7 +288,13 @@ fn install_reports_a_projection_it_could_not_write_instead_of_no_changes() {
     fx.add_marketplace_to_global_registry();
     let app = fx.app();
     app.project()
-        .add("flow", "test-market", &fx.project_root, &AlwaysTrust)
+        .add(
+            "flow",
+            "test-market",
+            &fx.project_root,
+            &AlwaysTrust,
+            &uze_application::NoNameCollisionAuthority,
+        )
         .unwrap();
     app.project()
         .install(&fx.project_root, &AlwaysTrust)
@@ -384,7 +420,13 @@ fn install_re_resolves_a_plugin_the_manifest_moved_and_names_the_collision() {
     fx.add_marketplace_to_global_registry();
     let app = fx.app();
     app.project()
-        .add("flow", "test-market", &fx.project_root, &AlwaysTrust)
+        .add(
+            "flow",
+            "test-market",
+            &fx.project_root,
+            &AlwaysTrust,
+            &uze_application::NoNameCollisionAuthority,
+        )
         .unwrap();
 
     fs::write(
@@ -465,7 +507,7 @@ fn a_plugin_from_a_git_marketplace_is_pinned_to_a_commit_and_a_digest() {
 
     let base = uze_testkit::temp::scratch("git-market-pin-base");
     let (home, project) = (base.join("home"), base.join("project"));
-    fs::create_dir_all(&project).unwrap();
+    fs::create_dir_all(project.join(".git")).unwrap();
     uze_core::state::marketplace_add(
         &UzeHome::at(&home),
         "git-market",
@@ -475,7 +517,13 @@ fn a_plugin_from_a_git_marketplace_is_pinned_to_a_commit_and_a_digest() {
 
     UzeApplication::new(UzeHome::at(&home), Vec::new())
         .project()
-        .add("flow", "git-market", &project, &AlwaysTrust)
+        .add(
+            "flow",
+            "git-market",
+            &project,
+            &AlwaysTrust,
+            &uze_application::NoNameCollisionAuthority,
+        )
         .unwrap();
 
     let lock = project_lock::load_lock(&project).unwrap().unwrap();
@@ -499,7 +547,7 @@ fn reproduction_reads_the_locked_commit_after_the_marketplace_moved() {
 
     let base = uze_testkit::temp::scratch("git-market-moved-base");
     let (home, project) = (base.join("home"), base.join("project"));
-    fs::create_dir_all(&project).unwrap();
+    fs::create_dir_all(project.join(".git")).unwrap();
     uze_core::state::marketplace_add(
         &UzeHome::at(&home),
         "git-market",
@@ -508,7 +556,13 @@ fn reproduction_reads_the_locked_commit_after_the_marketplace_moved() {
     .unwrap();
     UzeApplication::new(UzeHome::at(&home), Vec::new())
         .project()
-        .add("flow", "git-market", &project, &AlwaysTrust)
+        .add(
+            "flow",
+            "git-market",
+            &project,
+            &AlwaysTrust,
+            &uze_application::NoNameCollisionAuthority,
+        )
         .unwrap();
 
     // The marketplace moves on, exactly as a shared repository does.
@@ -537,7 +591,7 @@ fn reproduction_refuses_bytes_that_are_not_the_bytes_the_lock_pinned() {
 
     let base = uze_testkit::temp::scratch("git-market-tampered-base");
     let (home, project) = (base.join("home"), base.join("project"));
-    fs::create_dir_all(&project).unwrap();
+    fs::create_dir_all(project.join(".git")).unwrap();
     uze_core::state::marketplace_add(
         &UzeHome::at(&home),
         "git-market",
@@ -546,7 +600,13 @@ fn reproduction_refuses_bytes_that_are_not_the_bytes_the_lock_pinned() {
     .unwrap();
     UzeApplication::new(UzeHome::at(&home), Vec::new())
         .project()
-        .add("flow", "git-market", &project, &AlwaysTrust)
+        .add(
+            "flow",
+            "git-market",
+            &project,
+            &AlwaysTrust,
+            &uze_application::NoNameCollisionAuthority,
+        )
         .unwrap();
 
     // A lock claiming a digest the marketplace's bytes do not have is the
@@ -580,10 +640,21 @@ fn adding_a_built_in_plugin_installs_it_without_writing_the_project_files() {
     let fx = Fixture::new("built-in-not-declared");
     let app = fx.app();
 
-    app.project()
-        .add("uze", "uze-official", &fx.project_root, &AlwaysTrust)
+    let report = app
+        .project()
+        .add(
+            "uze",
+            "uze-official",
+            &fx.project_root,
+            &AlwaysTrust,
+            &uze_application::NoNameCollisionAuthority,
+        )
         .unwrap();
 
+    assert!(
+        !report.declared,
+        "the report says the project declared nothing, so the verb can"
+    );
     assert!(
         app.plugins()
             .list()
@@ -608,7 +679,13 @@ fn remove_project_plugin_removes_from_lock_but_not_from_the_store() {
     fx.add_marketplace_to_global_registry();
     let app = fx.app();
     app.project()
-        .add("flow", "test-market", &fx.project_root, &AlwaysTrust)
+        .add(
+            "flow",
+            "test-market",
+            &fx.project_root,
+            &AlwaysTrust,
+            &uze_application::NoNameCollisionAuthority,
+        )
         .unwrap();
 
     let report = app.project().remove("flow", &fx.project_root).unwrap();
@@ -639,7 +716,13 @@ fn remove_project_plugin_reports_no_lock_and_not_in_lock_distinctly() {
 
     fx.add_marketplace_to_global_registry();
     app.project()
-        .add("flow", "test-market", &fx.project_root, &AlwaysTrust)
+        .add(
+            "flow",
+            "test-market",
+            &fx.project_root,
+            &AlwaysTrust,
+            &uze_application::NoNameCollisionAuthority,
+        )
         .unwrap();
     let not_in_lock = app
         .project()
@@ -654,7 +737,7 @@ fn remove_project_plugin_reports_no_lock_and_not_in_lock_distinctly() {
 #[test]
 fn same_named_plugins_from_two_marketplaces_coexist_and_require_qualified_lookup() {
     // ADR-036's Store layout (bytes/registrations coexist per marketplace)
-    // is unchanged; ADR-038 adds that only one of them may be *active*
+    // is unchanged; ADR-036 adds that only one of them may be *active*
     // under the bare name at a time. Plain `plugin_install` refuses the
     // second one; resolving with an explicit alias lets both coexist.
     let base = temp("same-name-marketplaces");
@@ -730,7 +813,7 @@ fn same_named_plugins_from_two_marketplaces_coexist_and_require_qualified_lookup
         .is_dir()
     );
     // Once resolved, at most one package ever answers to a bare name at all
-    // (ADR-038) — `flow` now unambiguously means "whichever is active under
+    // (ADR-036) — `flow` now unambiguously means "whichever is active under
     // it", never the old "installed from multiple marketplaces" refusal.
     // The aliased one is addressable the same way, by its own active name.
     assert!(matches!(
@@ -743,6 +826,53 @@ fn same_named_plugins_from_two_marketplaces_coexist_and_require_qualified_lookup
         Ok(uze_application::application::RemovePluginReport::Removed { .. })
     ));
     assert!(app.plugins().list().unwrap().is_empty());
+}
+
+/// `uze install flow@second --alias flow-second` inside a project, on a
+/// machine where `flow` is already active from another marketplace: the
+/// collision question ADR-036 asks is answered by the caller on the
+/// project path exactly as on the machine one, and the project declares
+/// the package it asked for.
+#[test]
+fn a_project_add_resolves_a_name_collision_the_way_it_was_asked() {
+    let fx = Fixture::new("project-add-alias");
+    fx.add_marketplace_to_global_registry();
+    let second = fx.uze_home.parent().unwrap().join("second-market");
+    write_marketplace(&second, "second", "flow");
+    uze_core::state::marketplace_add(
+        &UzeHome::at(&fx.uze_home),
+        "second",
+        uze_core::PackageSource::Local { path: second },
+    )
+    .unwrap();
+    let app = fx.app();
+    // Active under the bare name already — from another project, or `-m`.
+    app.marketplace()
+        .install_plugin("flow@test-market", &AlwaysTrust)
+        .unwrap();
+
+    let report = app
+        .project()
+        .add(
+            "flow",
+            "second",
+            &fx.project_root,
+            &AlwaysTrust,
+            &uze_application::FixedResolution(uze_application::NameCollisionResolution::Alias(
+                "flow-second".to_owned(),
+            )),
+        )
+        .unwrap();
+
+    assert!(report.declared);
+    let ids: Vec<_> = app
+        .plugins()
+        .list()
+        .unwrap()
+        .into_iter()
+        .map(|plugin| plugin.id)
+        .collect();
+    assert_eq!(ids, vec!["flow@second", "flow@test-market"]);
 }
 
 #[test]
@@ -804,13 +934,19 @@ fn project_root_resolution_is_deterministic_from_a_subdirectory() {
     fx.add_marketplace_to_global_registry();
     fx.app()
         .project()
-        .add("flow", "test-market", &fx.project_root, &AlwaysTrust)
+        .add(
+            "flow",
+            "test-market",
+            &fx.project_root,
+            &AlwaysTrust,
+            &uze_application::NoNameCollisionAuthority,
+        )
         .unwrap();
 
     let nested = fx.project_root.join("a/b/c");
     fs::create_dir_all(&nested).unwrap();
     let resolved = project_root::resolve_project_root(&nested).unwrap();
-    assert_eq!(resolved, fx.project_root.canonicalize().unwrap());
+    assert_eq!(resolved, Some(fx.project_root.canonicalize().unwrap()));
 }
 
 /// Drift along the chain a project's environment passes through, and what
@@ -878,7 +1014,7 @@ mod drift {
     ///
     /// What is *not* touched is the machine. The Store keeps the package
     /// and every harness keeps reading it, because other projects share
-    /// both — taking it off this machine is `uze plugin remove`, which is
+    /// both — taking it off this machine is `uze remove <plugin> -m`, which is
     /// a different scope by ADR-019.
     #[test]
     fn install_converges_the_lock_and_leaves_the_machine_alone() {

@@ -526,7 +526,7 @@ says the delivery, not the vendor, is what UZE controls here); writing the
 entries into `~/.gemini/antigravity-cli/hooks.json` (the vendor's own
 changelog records moving `/hooks` off that path to the shared one precisely
 because the backend does not read it); a project-scoped `.agents/hooks.json`
-(machine scope is what `uze plugin install` promises — a project file is a
+(machine scope is what `uze install -m` promises — a project file is a
 different capability's decision).
 
 ---

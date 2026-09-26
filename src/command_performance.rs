@@ -6,7 +6,7 @@
 //! failure mode that motivated this module: `ensure_default_plugins()`
 //! became a hidden, unmeasured bottleneck on nearly every command without
 //! anyone deciding that was acceptable, because nothing checked. A command
-//! added to `Command`/`ContextAction`/`MarketplaceAction`/`PluginAction`
+//! added to `Command`/`ContextAction`/`MarketplaceAction`/`ConfigAction`
 //! without a matching entry here fails the test suite by name (see
 //! `tests::every_cli_command_is_classified`), instead of silently shipping
 //! unmeasured.
@@ -41,14 +41,17 @@ pub enum PerformanceClass {
 /// exactly once — see `tests::every_cli_command_is_classified`, which
 /// fails by name (missing or stale) rather than silently passing.
 pub const CLASSIFICATION: &[(&str, PerformanceClass)] = &[
-    // Project scope (root-level).
+    // Project scope (root-level). `remove`, `status`, `install` and
+    // `update` each decide their own scope; `inspect` reads one package's
+    // delivery on this machine.
     ("remove", PerformanceClass::Budgeted),
     ("status", PerformanceClass::Budgeted),
+    ("inspect", PerformanceClass::Budgeted),
     // The agent's own surface. Budgeted for the same reason `status` is:
     // it reads two project files and the task store, validates in memory,
     // and performs one Git ref rename. An agent waiting on this is an
     // agent not working.
-    ("agent task name", PerformanceClass::Budgeted),
+    ("agent work name", PerformanceClass::Budgeted),
     // Not budgeted: it walks the declared directory, reads every file in
     // it and lays out and routes every diagram. The cost is the project's
     // own — what it declares and how large those diagrams are — and there
@@ -71,22 +74,52 @@ pub const CLASSIFICATION: &[(&str, PerformanceClass)] = &[
     (
         "install",
         PerformanceClass::JustifiedSlow(
-            "reconstructs the project's agent environment from agents.yaml, acquiring packages",
+            "converges the project's agent environment or installs a package via a marketplace, \
+             which reaches its remote",
         ),
     ),
     (
         "update",
         PerformanceClass::JustifiedSlow(
-            "re-resolves each declared marketplace ref, which reaches its remote, and reinstalls              what moved",
+            "re-resolves each declared marketplace ref or installed package's source, which \
+             reaches its remote, and reinstalls what moved",
         ),
     ),
-    // Machine scope: theme. Every one of these is a small JSON read plus a
-    // directory listing under `$UZE_HOME` — no harness is probed, and no
+    // Machine scope: config. `theme`/`icons` are each a small JSON read plus
+    // a directory listing under `$UZE_HOME` — no harness is probed, and no
     // theme is resolved that is not the one being asked about.
-    ("theme list", PerformanceClass::Budgeted),
-    ("theme set", PerformanceClass::Budgeted),
-    ("theme show", PerformanceClass::Budgeted),
-    ("theme glyphs", PerformanceClass::Budgeted),
+    // `notification` is one `config.toml` key read or written.
+    ("config theme list", PerformanceClass::Budgeted),
+    ("config theme set", PerformanceClass::Budgeted),
+    ("config theme show", PerformanceClass::Budgeted),
+    ("config icons", PerformanceClass::Budgeted),
+    ("config notification", PerformanceClass::Budgeted),
+    // The authoring surface: the marketplace scaffold is born with an
+    // initial commit, so its cost is the author's own Git identity. The
+    // checks read and parse every file the artifact carries — like
+    // `agent artifacts check`, the cost is the artifact's own, and there
+    // is nothing to cache because the answer is about the bytes right now.
+    (
+        "agent market create",
+        PerformanceClass::JustifiedSlow(
+            "initializes a marketplace as a Git repository and makes its first commit",
+        ),
+    ),
+    (
+        "agent market check",
+        PerformanceClass::JustifiedSlow(
+            "reads and parses the marketplace manifest and every plugin it names; the cost is \
+             the artifact's own",
+        ),
+    ),
+    ("agent plugin create", PerformanceClass::Budgeted),
+    (
+        "agent plugin check",
+        PerformanceClass::JustifiedSlow(
+            "reads and parses every capability file the plugin carries; the cost is the \
+             artifact's own",
+        ),
+    ),
     // Machine scope: market.
     ("market list", PerformanceClass::Budgeted),
     ("market remove", PerformanceClass::Budgeted),
@@ -101,23 +134,6 @@ pub const CLASSIFICATION: &[(&str, PerformanceClass)] = &[
         "market add",
         PerformanceClass::JustifiedSlow(
             "adds a marketplace discovery source, which may be a remote URL",
-        ),
-    ),
-    // Machine scope: plugin.
-    ("plugin list", PerformanceClass::Budgeted),
-    ("plugin inspect", PerformanceClass::Budgeted),
-    ("plugin remove", PerformanceClass::Budgeted),
-    (
-        "plugin install",
-        PerformanceClass::JustifiedSlow(
-            "installs a plugin via a marketplace, a network operation for a non-local source, or a \
-             direct source (local path/Git URL)",
-        ),
-    ),
-    (
-        "plugin update",
-        PerformanceClass::JustifiedSlow(
-            "re-resolves an installed plugin's source, a network operation for a non-local source",
         ),
     ),
     // Diagnostics.
@@ -167,12 +183,16 @@ pub const BUDGETED_COMMAND_TESTS: &[(&str, &str)] = &[
         "crates/uze-application/tests/performance.rs::removals_meet_the_budget",
     ),
     (
-        "agent task name",
+        "agent work name",
         "crates/uze-application/tests/performance.rs::the_agent_surface_meets_the_budget",
     ),
     (
         "status",
         "crates/uze-application/tests/performance.rs::status_meets_the_budget",
+    ),
+    (
+        "inspect",
+        "crates/uze-application/tests/performance.rs::plugin_list_and_inspect_meet_the_budget",
     ),
     (
         "doctor",
@@ -191,20 +211,28 @@ pub const BUDGETED_COMMAND_TESTS: &[(&str, &str)] = &[
         "crates/uze-application/tests/performance.rs::context_reads_and_reconcile_meet_the_budget",
     ),
     (
-        "theme list",
+        "config theme list",
         "uze_application::application::theme::tests::theme_selection_meets_the_performance_budget",
     ),
     (
-        "theme set",
+        "config theme set",
         "uze_application::application::theme::tests::theme_selection_meets_the_performance_budget",
     ),
     (
-        "theme show",
+        "config theme show",
         "uze_application::application::theme::tests::theme_selection_meets_the_performance_budget",
     ),
     (
-        "theme glyphs",
+        "config icons",
         "uze_application::application::theme::tests::theme_selection_meets_the_performance_budget",
+    ),
+    (
+        "config notification",
+        "crates/uze-application/tests/performance.rs::notification_choice_meets_the_budget",
+    ),
+    (
+        "agent plugin create",
+        "crates/uze-core/src/package/authoring/tests.rs::authoring_scaffold_meets_the_budget",
     ),
     (
         "market list",
@@ -229,18 +257,6 @@ pub const BUDGETED_COMMAND_TESTS: &[(&str, &str)] = &[
     (
         "market host",
         "crates/uze-application/tests/performance.rs::market_host_meets_the_budget",
-    ),
-    (
-        "plugin list",
-        "crates/uze-application/tests/performance.rs::plugin_list_and_inspect_meet_the_budget",
-    ),
-    (
-        "plugin inspect",
-        "crates/uze-application/tests/performance.rs::plugin_list_and_inspect_meet_the_budget",
-    ),
-    (
-        "plugin remove",
-        "crates/uze-application/tests/performance.rs::removals_meet_the_budget",
     ),
 ];
 

@@ -227,7 +227,13 @@ mod integrity {
         let (application, root) = with_marketplace("integrity-local", "# demo\n");
         application
             .project()
-            .add("flow", "ai", &root, &AlwaysTrust)
+            .add(
+                "flow",
+                "ai",
+                &root,
+                &AlwaysTrust,
+                &uze_application::NoNameCollisionAuthority,
+            )
             .unwrap();
 
         let lock = fs::read_to_string(root.join("agents.lock")).unwrap();
@@ -243,7 +249,13 @@ mod integrity {
         let (application, root) = with_marketplace("integrity-shape", "# demo\n");
         application
             .project()
-            .add("flow", "ai", &root, &AlwaysTrust)
+            .add(
+                "flow",
+                "ai",
+                &root,
+                &AlwaysTrust,
+                &uze_application::NoNameCollisionAuthority,
+            )
             .unwrap();
 
         let lock = fs::read_to_string(root.join("agents.lock")).unwrap();
@@ -274,7 +286,13 @@ mod integrity {
         let (application, root) = with_marketplace("integrity-mismatch", "# demo\n");
         application
             .project()
-            .add("flow", "ai", &root, &AlwaysTrust)
+            .add(
+                "flow",
+                "ai",
+                &root,
+                &AlwaysTrust,
+                &uze_application::NoNameCollisionAuthority,
+            )
             .unwrap();
 
         // A second machine: the same declaration, a lock pinning bytes that
@@ -459,7 +477,13 @@ fn install_reproduces_a_pin_the_ref_has_moved_past_and_update_moves_it() {
         .unwrap();
     application
         .project()
-        .add("flow", "mkt", &root, &AlwaysTrust)
+        .add(
+            "flow",
+            "mkt",
+            &root,
+            &AlwaysTrust,
+            &uze_application::NoNameCollisionAuthority,
+        )
         .unwrap();
 
     let locked_first = fs::read_to_string(root.join("agents.lock")).unwrap();
@@ -477,7 +501,7 @@ fn install_reproduces_a_pin_the_ref_has_moved_past_and_update_moves_it() {
     // Update: the pin moves, to exactly where Git says the ref points now.
     let report = application
         .project()
-        .update(&root, None, &AlwaysTrust)
+        .update(&root, None, false, &AlwaysTrust)
         .unwrap();
     assert!(report.moved(), "{report:?}");
     let locked_second = fs::read_to_string(root.join("agents.lock")).unwrap();
@@ -502,13 +526,19 @@ fn updating_a_plugin_this_project_does_not_declare_writes_nothing() {
         .unwrap();
     application
         .project()
-        .add("flow", "mkt", &root, &AlwaysTrust)
+        .add(
+            "flow",
+            "mkt",
+            &root,
+            &AlwaysTrust,
+            &uze_application::NoNameCollisionAuthority,
+        )
         .unwrap();
     let before = fs::read_to_string(root.join("agents.lock")).unwrap();
 
     let refused = application
         .project()
-        .update(&root, Some("not-declared"), &AlwaysTrust);
+        .update(&root, Some("not-declared"), false, &AlwaysTrust);
 
     assert!(refused.is_err(), "{refused:?}");
     assert_eq!(
@@ -533,7 +563,13 @@ fn a_linked_marketplace_follows_the_checkout_and_pins_nothing() {
         .unwrap();
     application
         .project()
-        .add("flow", "mkt", &root, &AlwaysTrust)
+        .add(
+            "flow",
+            "mkt",
+            &root,
+            &AlwaysTrust,
+            &uze_application::NoNameCollisionAuthority,
+        )
         .unwrap();
     let pinned = fs::read_to_string(root.join("agents.lock")).unwrap();
 
@@ -543,7 +579,7 @@ fn a_linked_marketplace_follows_the_checkout_and_pins_nothing() {
     write_skill(&market, "edited, never committed");
     let report = application
         .project()
-        .update(&root, None, &AlwaysTrust)
+        .update(&root, None, false, &AlwaysTrust)
         .unwrap();
 
     // The Store — what every harness reads — carries the edit.
@@ -621,7 +657,13 @@ fn an_unreachable_marketplace_is_skipped_and_named_and_the_rest_installs() {
         .unwrap();
     application
         .project()
-        .add("flow", "mkt", &root, &AlwaysTrust)
+        .add(
+            "flow",
+            "mkt",
+            &root,
+            &AlwaysTrust,
+            &uze_application::NoNameCollisionAuthority,
+        )
         .unwrap();
 
     // A second marketplace the author has and nobody else does.
@@ -686,7 +728,13 @@ fn update_resolves_what_the_manifest_declares_not_what_the_package_requested() {
         .unwrap();
     application
         .project()
-        .add("flow", "mkt", &root, &AlwaysTrust)
+        .add(
+            "flow",
+            "mkt",
+            &root,
+            &AlwaysTrust,
+            &uze_application::NoNameCollisionAuthority,
+        )
         .unwrap();
 
     // Reproduce it the way a fresh machine does: the package's own request
@@ -698,7 +746,7 @@ fn update_resolves_what_the_manifest_declares_not_what_the_package_requested() {
 
     let report = application
         .project()
-        .update(&root, None, &AlwaysTrust)
+        .update(&root, None, false, &AlwaysTrust)
         .unwrap();
 
     assert!(

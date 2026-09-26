@@ -286,15 +286,6 @@ pub(crate) fn canonical_mcp_servers(
         .and_then(|value| value.get("mcpServers")?.as_object().cloned())
 }
 
-/// The `mcpServers` value of the package's canonical `mcp.json`, whatever
-/// its shape, for a manifest that carries it inline verbatim.
-pub(crate) fn canonical_mcp_manifest_value(package: &StoredPackage) -> Option<serde_json::Value> {
-    fs::read(package.root.join("mcp.json"))
-        .ok()
-        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
-        .and_then(|value| value.get("mcpServers").cloned())
-}
-
 /// `description` and `version` from a manifest, each defaulted when absent
 /// or unreadable — never invented beyond that.
 pub(crate) fn manifest_fields(manifest: &Path, default_description: &str) -> (String, String) {

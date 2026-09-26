@@ -79,7 +79,7 @@ impl Plugins<'_> {
 #[derive(Clone, Debug, Serialize)]
 pub struct PluginSummary {
     pub id: String,
-    /// The local name this plugin currently invokes under (ADR-038) — its
+    /// The local name this plugin currently invokes under (ADR-036) — its
     /// own bare plugin name unless an install-time `alias` resolution gave
     /// it a different one to coexist with another marketplace's same-named
     /// plugin. Always present, never itself marketplace-qualified; `id`
@@ -178,6 +178,26 @@ pub struct MarketplaceRegistration {
     /// A local checkout with no `origin`: a project declaring it resolves
     /// on this machine and nowhere else.
     pub resolves_here_only: bool,
+}
+
+/// A marketplace teardown's answer: what came off, what was blocked, and
+/// whether the registry entry went with them. The record is removed last —
+/// a blocked package keeps the marketplace registered, so the leftovers it
+/// still holds stay reachable (`market remove` again once the block is
+/// cleared).
+#[derive(Clone, Debug, Serialize)]
+pub struct MarketplaceRemovalReport {
+    pub marketplace: String,
+    pub removed: Vec<String>,
+    pub blocked: Vec<BlockedPackageRemoval>,
+    pub record_removed: bool,
+}
+
+/// One package the teardown could not take off the machine, and why.
+#[derive(Clone, Debug, Serialize)]
+pub struct BlockedPackageRemoval {
+    pub package: String,
+    pub reason: String,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -329,6 +349,10 @@ pub struct AddPluginReport {
     /// does not own. The package is installed and everything else was
     /// delivered; these are what a person has to settle.
     pub blocked: Vec<BlockedCapability>,
+    /// Whether a project declared the package. A project add outside any
+    /// project, or from the marketplace built into UZE, installs on the
+    /// machine alone — and the scope it reports has to say so.
+    pub declared: bool,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -784,6 +808,14 @@ pub struct StatusReport {
     /// `agent context inspect` — this is the "does anything need my
     /// attention" view.
     pub issues: Vec<String>,
+}
+
+/// The machine read model `uze status` answers with when there is no
+/// project here: every package installed, from where, and its freshness.
+/// The absence of a project is an answer, never a fault.
+#[derive(Clone, Debug, Serialize)]
+pub struct MachineStatusReport {
+    pub packages: Vec<PluginSummary>,
 }
 
 /// Drift along the chain a project's environment passes through:

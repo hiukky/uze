@@ -470,7 +470,7 @@ impl WorktreePolicy {
         }
         format!(
             "- Name the work as your first action, before reading a file, planning or editing: \
-             `uze agent task name <type>/<subject>`. Types this project accepts: `{types}`. The \
+             `uze agent work name <type>/<subject>`. Types this project accepts: `{types}`. The \
              subject is one or two words naming the intention, not a description of the task — \
              `fix/branch-naming`, not `fix/correct-the-problem-with-agent-branch-names`. The \
              request you were given is where the intention comes from, so nothing you read later \
@@ -478,7 +478,17 @@ impl WorktreePolicy {
              by UZE from that commit's subject, which is a worse name than the one you would \
              have chosen. Either way your branch is renamed, so ask Git for its name rather than \
              remembering it. Name it again with the same command whenever the work turns out to \
-             be something else — the last name given is the one that stands.\n",
+             be something else — the last name given is the one that stands.\n\
+             - Creating a plugin is agent work, driven with these deterministic verbs: \
+             `uze agent market create <name> --at <dir> [--description <text>]` scaffolds a \
+             marketplace as a Git repository, registers and links it in one step (or skip to \
+             the next verb when a marketplace already exists — ask `uze market list` for the \
+             names); `uze agent plugin create <name> --market <market> [--hook] [--mcp] \
+             [--instructions]` scaffolds a plugin into it; `uze agent plugin check <path>` and \
+             `uze agent market check <path>` validate offline — run the check before any \
+             install, then `uze install -m <plugin>@<market>` and iterate on the files, which \
+             the linked marketplace already reads. The guided script for the whole loop is \
+             the `uze:author` skill.\n",
             types = self.branch.spelled()
         )
     }
@@ -869,7 +879,7 @@ mod naming_tests {
     #[test]
     fn a_project_that_names_nothing_projects_no_naming_clause() {
         let text = WorktreePolicy::default().instructions();
-        assert!(!text.contains("uze agent task name"), "{text}");
+        assert!(!text.contains("uze agent work name"), "{text}");
     }
 
     /// The instruction an agent reads has to be the one its project will
@@ -883,7 +893,7 @@ mod naming_tests {
             ..WorktreePolicy::default()
         };
         let text = policy.instructions();
-        assert!(text.contains("uze agent task name"), "{text}");
+        assert!(text.contains("uze agent work name"), "{text}");
         assert!(text.contains("ui|fix"), "{text}");
     }
 
@@ -904,7 +914,7 @@ mod naming_tests {
             .find(|line| line.starts_with("- "))
             .expect("the region is a list");
         assert!(
-            first_bullet.contains("uze agent task name"),
+            first_bullet.contains("uze agent work name"),
             "naming must be the first bullet: {first_bullet}"
         );
         assert!(

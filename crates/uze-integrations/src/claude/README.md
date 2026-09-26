@@ -57,7 +57,8 @@ Store plugin (no explicit envelope, but skills/ dir and/or mcp.json present)  [G
         ▼
 $UZE_HOME/runtime/attachments/claude/generated/<id>/.claude-plugin/plugin.json
    (UZE-synthesized: name/version/description from canonical plugin.json,
-    skills symlinked from the Store, mcp.json's mcpServers copied verbatim)
+    skills symlinked from the Store, mcp.json's mcpServers inline with
+    `${PLUGIN_ROOT}` resolved to the Store path)
         │
         ▼
 $UZE_HOME/.../generated/.claude-plugin/marketplace.json   ("uze-store")

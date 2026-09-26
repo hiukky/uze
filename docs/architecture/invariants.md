@@ -454,9 +454,9 @@ a rejected package and a refused consent all mutate nothing.
 
 ### A blocked mutation says so in the exit status
 
-`Blocked` means nothing was removed or updated, so `uze plugin remove` and
-`uze plugin update` render the report and then exit non-zero — in both text
-and JSON. A caller chaining `uze plugin remove x && uze plugin install y`
+`Blocked` means nothing was removed or updated, so `uze remove <plugin> -m` and
+`uze update -m` render the report and then exit non-zero — in both text
+and JSON. A caller chaining `uze remove x -m && uze install y -m`
 must not run the second half after the first did nothing.
 
 > `tests/cli/machine.rs::a_blocked_removal_reports_and_fails`
@@ -2024,7 +2024,7 @@ delivered (the projected region) is compared from the manifest down, and the
 comparison is two file reads and a set difference — no acquisition, no
 network. Converging a removal edits the lock and nothing on the machine:
 the Store keeps the package and every harness keeps reading it, because
-other projects share both and machine scope is `uze plugin remove`'s.
+other projects share both and machine scope is `uze remove <plugin> -m`'s.
 
 > `tests/workspace/consumer.rs::drift::install_converges_the_lock_and_leaves_the_machine_alone`
 > `tests/workspace/consumer.rs::drift::a_policy_change_reads_as_a_stale_projection_until_install_clears_it`

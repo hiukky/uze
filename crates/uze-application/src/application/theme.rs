@@ -14,7 +14,7 @@ use super::services::Themes;
 /// A theme the operator can select.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct ThemeSummary {
-    /// What `uze theme set` takes. A file's own stem, or a built-in's name.
+    /// What `uze config theme set` takes. A file's own stem, or a built-in's name.
     pub id: String,
     pub active: bool,
     /// `None` for a theme UZE carries rather than one someone wrote.

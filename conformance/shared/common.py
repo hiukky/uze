@@ -302,7 +302,8 @@ def materialize_marketplace(cfg):
     )
     return f"""
 cp -r {cfg.marketplace} /work/market
-sed -i 's|__UZE_MCP_FIXTURE_BINARY__|{cfg.mcp_fixture_bin}|g; s|__UZE_MCP_CONFORMANCE_PROOF__|{cfg.mcp_proof}|g' /work/market/plugins/mcp-plugin/mcp.json
+sed -i 's|__UZE_MCP_FIXTURE_BINARY__|{cfg.mcp_fixture_bin}|g' /work/market/plugins/mcp-plugin/scripts/server
+sed -i 's|__UZE_MCP_CONFORMANCE_PROOF__|{cfg.mcp_proof}|g' /work/market/plugins/mcp-plugin/mcp.json
 {git} init -q
 {git} add -A
 {git} commit -q -m 'lab marketplace'
@@ -333,6 +334,7 @@ def validate_marketplace(cfg):
         "plugins/flow/skills/analyze/SKILL.md",
         "plugins/flow/agents/reviewer.md",
         "plugins/mcp-plugin/mcp.json",
+        "plugins/mcp-plugin/scripts/server",
         "plugins/hook-plugin/hooks.json",
         "plugins/hook-plugin/scripts/guard",
         "plugins/hook-plugin/scripts/mark",
@@ -354,7 +356,9 @@ def validate_marketplace(cfg):
     with open(os.path.join(cfg.marketplace_source, "plugins/mcp-plugin/mcp.json")) as f:
         mcp = json.load(f)
     server = mcp.get("mcpServers", {}).get("uze-conformance", {})
-    if server.get("command") != "__UZE_MCP_FIXTURE_BINARY__" or server.get("args") != [
+    if server.get("command") != "${PLUGIN_ROOT}/scripts/server" or server.get(
+        "args"
+    ) != [
         "--proof",
         "__UZE_MCP_CONFORMANCE_PROOF__",
     ]:
@@ -1062,6 +1066,7 @@ def render_screen(text, columns=240, rows=200):
     """
     grid = [[" "] * columns for _ in range(rows)]
     row = col = 0
+    primary = None
 
     def clamp():
         nonlocal row, col
@@ -1109,6 +1114,16 @@ def render_screen(text, columns=240, rows=200):
             elif final == "X":
                 width = max(1, first)
                 grid[row][col : col + width] = [" "] * min(width, columns - col)
+            elif final in "hl" and params == "?1049":
+                # The alternate screen: a TUI that steps out of it to print
+                # on the primary one (codex 0.157 announcing its daemon
+                # install) and comes back has not written over its own frame.
+                if final == "h" and primary is None:
+                    primary = (grid, row, col)
+                    grid = [[" "] * columns for _ in range(rows)]
+                elif final == "l" and primary is not None:
+                    grid, row, col = primary
+                    primary = None
             clamp()
             i = j + 1
             continue

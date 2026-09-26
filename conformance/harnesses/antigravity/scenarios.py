@@ -92,7 +92,7 @@ cp /app/fixtures/installation_id /work/home/.gemini/antigravity-cli/installation
 {auth_fragment(prov_ip, auth)}
 {materialize_marketplace(cfg)}
 uze market add /work/market >/dev/null 2>&1
-for p in {plugins}; do uze plugin install $p@uze-lab >/dev/null 2>&1; done
+for p in {plugins}; do uze install $p@uze-lab -m >/dev/null 2>&1; done
 {prelude}
 {final_cmd}
 """
@@ -813,8 +813,9 @@ cat /work/home/.gemini/config/plugins/uze-mcp-conformance/mcp_config.json 2>&1
         "mcp-server-configured",
         "uze-conformance" in out
         and cfg.mcp_proof in out
-        and cfg.mcp_fixture_bin in out,
-        "S2: staged mcp_config.json declares the server + proof arg",
+        and "/scripts/server" in out
+        and "${PLUGIN_ROOT}" not in out,
+        "S2: staged mcp_config.json declares the server, its package root resolved, + proof arg",
     )
 
 
