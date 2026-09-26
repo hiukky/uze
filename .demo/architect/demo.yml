@@ -6,7 +6,7 @@
 #   tui-record probe  .demo/architect   # the app in its sandbox, to try a selector out
 #   tui-record run    .demo/architect   # record → cut → leak-check → render → poster
 #
-# `tui-record` ships with the `tui` plugin: uze plugin install tui@ai
+# `tui-record` ships with the `tui` plugin: uze install -m tui@ai
 #
 # It records in the **same sandbox as .demo/demo.yml** — one {root}, one
 # {fixtures}, one remembered HEAD — so the `demo-app` fixture below is that
@@ -44,6 +44,10 @@ video:
   # fallback is named so a machine without the patched build still renders
   # readable text instead of nothing.
   font_family: FiraCode Nerd Font Mono,DejaVu Sans Mono
+  # Where that font is read from when the system never installed it: the
+  # Nerd Fonts v3.5.1 FiraCode release, unpacked. Without it the renderer
+  # silently draws the text in the fallback above.
+  font_dir: ~/.cache/nerd-fonts/v3.5.1/FiraCode
   wait_collapse: 1.0
   # The frame the board opens on, before anything is selected: selecting a
   # box pans the board to bring it into view, which pushes the top row of
@@ -79,7 +83,7 @@ sandbox:
   # the product is drawn for. It needs a patched font in the *renderer*
   # too — see `font_family` in `video`.
   provision:
-    - '{project}/target/release/uze theme glyphs nerd'
+    - '{project}/target/release/uze config icons nerd'
   author: Ada Lovelace
   author_email: ada@demo.dev
   reset:
@@ -94,6 +98,21 @@ sandbox:
     # is excluded: the rewind removes those itself, and pulling the directory
     # out from under Git first leaves metadata to prune.
     - git -C {fixtures}/demo-app clean -qfd -e .worktrees 2>/dev/null || true
+    # A home with no layout is a first run: the first-steps list opens and
+    # pushes the timeline off the sidebar. The video is of a project already
+    # in use, so the list starts folded and the timeline open — written here
+    # rather than left to whatever an earlier take folded or ticked, before
+    # every attempt, since a take ticks steps and moves the manage route.
+    - |
+      cat > {home}/.uze/state/layout.json <<'LAYOUT'
+      {
+        "sidebar": { "width": null },
+        "workspace": { "timeline_collapsed": false, "timeline_rows": null, "collapsed_space_roots": [] },
+        "management": { "route": "overview", "marketplace_drawer_width": null, "extension_drawer_width": null,
+                        "harness_drawer_width": null, "profile_columns_width": null, "collapsed_marketplaces": [] },
+        "first_steps": { "collapsed": true, "closed": false, "taken": [] }
+      }
+      LAYOUT
   clear:
     # The rewind removes the checkouts but leaves the directory that held
     # them, and the `clean` above deliberately spares it — so an empty
@@ -263,9 +282,8 @@ fixtures:
             }
 # What the video shows, in order. Edit this list first.
 #
-# Alt chords arrive through tmux as Esc-then-letter, which the workspace reads
-# as two events — so this drives the `architect` button in the strip rather
-# than Alt+A. Shift+arrow does arrive intact, and is what moves the selection
+# This drives the `architect` button in the strip rather than Alt+A: it is
+# the control a viewer can see being pressed. Shift+arrow does arrive intact, and is what moves the selection
 # from box to box; a click on a box's label does not select it.
 #
 # Every `expect` is the status bar, which names the file being drawn and, when
@@ -301,13 +319,13 @@ beats:
     pause: 1.8
   - say: the diagrams are grouped by what they are
     click: C4
-    in: sidebar
+    in: pane
     expect: Flowchart
     expect_timeout: 6
     pause: 1.4
   - say: a lifecycle, not a structure
     click: Flowchart
-    in: sidebar
+    in: pane
     expect: request-lifecycle\.mmd
     expect_timeout: 8
     pause: 3.0

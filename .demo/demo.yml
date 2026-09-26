@@ -7,7 +7,7 @@
 #   tui-record run    .demo   # record → cut → leak-check → render → poster
 #   tui-record recut  .demo   # re-cut the last take, without recording
 #
-# `tui-record` ships with the `tui` plugin: uze plugin install tui@ai
+# `tui-record` ships with the `tui` plugin: uze install -m tui@ai
 
 video:
   title: uze
@@ -46,15 +46,6 @@ video:
     # description of Claude's own `/passes` command, which the command
     # palette beat is *meant* to show — the phrase does not say whose
     # account it is, and the line above does.
-  # What is meant to be on camera and happens to look like a leak. The scan
-  # searches for the operator's login name, and here that is also the GitHub
-  # organisation this project is published under, so the Plugins screen
-  # showing the project's own URL trips both `username` and `hostname`. The
-  # span is allowed, not the name: a home path, a token or this login
-  # anywhere else still stops the run, and the count excused is printed
-  # every time so this cannot quietly widen.
-  allow:
-    - https://github\.com/hiukky/uze
   cast: '{root}/uze-hero.cast'
   cols: 152                 # wide enough for the Integrations cards, narrow
   rows: 36                  # enough that GitHub's ~900px column stays readable
@@ -67,6 +58,10 @@ video:
   # blank cell. The fallback is named so a machine without the patched
   # build still renders readable text instead of nothing.
   font_family: FiraCode Nerd Font Mono,DejaVu Sans Mono
+  # Where that font is read from when the system never installed it: the
+  # Nerd Fonts v3.5.1 FiraCode release, unpacked. Without it the renderer
+  # silently draws the text in the fallback above.
+  font_dir: ~/.cache/nerd-fonts/v3.5.1/FiraCode
   wait_collapse: 1.5        # what an agent's thinking time collapses to
   # The still the site shows first: named by what must be on screen, so a
   # re-cut cannot silently move it to a half-drawn frame.
@@ -120,8 +115,17 @@ sandbox:
 
   provision:
     - test -x {home}/.local/bin/codex || curl -fsSL https://chatgpt.com/codex/install.sh | sh
-    - '{project}/target/release/uze setup'
-    - '{project}/target/release/uze theme glyphs nerd'
+    # UZE's own state starts from nothing on every seed. A home carried
+    # across builds carries their records too: the official plugin installed
+    # from an older binary's embedded bytes reads as an update waiting on
+    # the Plugins screen.
+    - rm -rf {home}/.uze
+    # OpenCode v2 runs a background service on one fixed port per machine,
+    # not per HOME: with the operator's own OpenCode running, the sandbox's
+    # cannot bind it and the pane sits on "Starting background server...".
+    - opencode service set port 49375
+    - '{project}/target/release/uze setup claude codex opencode antigravity'
+    - '{project}/target/release/uze config icons nerd'
   # The sandbox's own terminal server, by pid, verified through /proc — never
   # a pattern kill, which would match the shell running it.
   reset:
@@ -136,6 +140,21 @@ sandbox:
     # is excluded: the rewind removes those itself, and pulling the directory
     # out from under Git first leaves metadata to prune.
     - git -C {fixtures}/demo-app clean -qfd -e .worktrees 2>/dev/null || true
+    # A home with no layout is a first run: the first-steps list opens and
+    # pushes the timeline off the sidebar. The video is of a project already
+    # in use, so the list starts folded and the timeline open — written here
+    # rather than left to whatever an earlier take folded or ticked, before
+    # every attempt, since a take ticks steps and moves the manage route.
+    - |
+      cat > {home}/.uze/state/layout.json <<'LAYOUT'
+      {
+        "sidebar": { "width": null },
+        "workspace": { "timeline_collapsed": false, "timeline_rows": null, "collapsed_space_roots": [] },
+        "management": { "route": "overview", "marketplace_drawer_width": null, "extension_drawer_width": null,
+                        "harness_drawer_width": null, "profile_columns_width": null, "collapsed_marketplaces": [] },
+        "first_steps": { "collapsed": true, "closed": false, "taken": [] }
+      }
+      LAYOUT
   clear:
     # The rewind removes the checkouts but leaves the directory that held
     # them, and the `clean` above deliberately spares it — so an empty
@@ -144,6 +163,9 @@ sandbox:
     # place this can be deleted without dangling Git's metadata.
     - '{fixtures}/demo-app/.worktrees'
     - '{home}/.uze/state/terminal'
+    # The project's records — its agents and its prompt history — or the
+    # Overview counts every take ever recorded as recent work.
+    - '{home}/.uze/state/projects'
     - '{runtime}/uze-runtime'
   write:
     - path: '{home}/demoshell'
@@ -373,23 +395,27 @@ beats:
   - type: api
     clear: 8
     pause: 0.9
-  # The mark is aimed at by glyph, not by character, and both spellings are
-  # named: `mark.sparkle` is `✦` in the default set and a private-use
-  # codepoint in the nerd one, so a spec that hard-codes either stops aiming
-  # the day the other is chosen — which is exactly what three takes died on.
+  # The new-agent control sits on the selected space's own sidebar row, and
+  # its menu opens over the sidebar's edge — so the harness is aimed at
+  # across the whole screen, not in one band.
   - say: an agent is placed, in a checkout of its own
-    click: ''
-    glyph: '✦'
-    in: strip
+    click: new
+    in: sidebar
     expect: new agent
     expect_timeout: 6
     pause: 0.9
   - click: Claude Code
-    in: pane
-    offset: 4
+    in: screen
+    offset: 2
     expect: Claude Code v
     expect_timeout: 25
     pause: 1.6
+  # The tabs carry the agent mark, aimed at by glyph rather than by
+  # character, with both spellings named: `mark.sparkle` is `✦` in the
+  # default set and a private-use codepoint in the nerd one, so a spec that
+  # hard-codes either stops aiming the day the other is chosen. The strip
+  # holds the selected agent's tabs only, so its first mark is always the
+  # agent just placed.
   - say: and named after the work it is doing
     dclick: ''
     glyph: '✦'
@@ -412,16 +438,14 @@ beats:
     expect_timeout: 60
     pause: 1.8
   - say: a second agent, on a different harness
-    click: ''
-    glyph: '✦'
-    in: strip
-    occurrence: 2
+    click: new
+    in: sidebar
     expect: new agent
     expect_timeout: 6
     pause: 0.9
   - click: OpenCode
-    in: pane
-    offset: 4
+    in: screen
+    offset: 2
     expect: ctrl\+p commands
     expect_timeout: 25
     pause: 1.8
@@ -472,7 +496,7 @@ beats:
     refuse: no changes
     pause: 3.0
   - say: the same checkout as the tree it sits in, and then as a map of it
-    key: C-e
+    key: M-e
     expect: config\.toml
     expect_timeout: 8
     pause: 2.2
@@ -480,22 +504,8 @@ beats:
     expect: Ranking
     expect_timeout: 8
     pause: 2.8
-  # Closed by its own mark, not by Escape. Escape steps *back* — a level, a
-  # selection, a mode — so how many it takes to leave depends on how deep the
-  # scene went, and the beat after it then clicks at a screen that is still
-  # there. The mark is one gesture at any depth, and the strip coming back is
-  # the proof it worked: while a surface is open, the strip is under it.
-  # Both spellings again, for the same reason as the mark above: `mark.close`
-  # is `✕` in the default set and a private-use codepoint in the nerd one.
-  # Every literal glyph in this file is a pair now — aiming at one spelling
-  # is aiming at one glyph set, and the set is a thing the sandbox chooses.
-  - click: ''
-    glyph: '✕'
-    in: strip
-    expect: architect
-    expect_in: strip
-    expect_timeout: 6
-    pause: 0.8
+  # Straight across, not closed first: a surface's button switches to it
+  # from the other one, and the code surface was never the destination.
   # The surface remembers where it was left — but a take opens it exactly
   # once, so on camera that memory is always empty and the first level is
   # what it draws. (Driving it by hand first is what makes this assertion
@@ -519,12 +529,15 @@ beats:
     expect: containers\.mmd
     expect_timeout: 8
     pause: 3.0
-  - click: ''
-    glyph: '✕'
+  # Closed by its own button, not by Escape. Escape steps *back* — a level,
+  # a selection, a mode — so how many it takes to leave depends on how deep
+  # the scene went. The lit button closes it from any depth, and the proof
+  # is the agent under it drawing again: OpenCode's own footer.
+  - click: architect
     in: strip
-    expect: architect
-    expect_in: strip
+    expect: ctrl\+p commands
     expect_timeout: 6
+    refuse: containers\.mmd
     pause: 0.8
   # By its chord, not by a label: management is reached through a mark in
   # the sidebar now, and a glyph is a worse target than the key the product
@@ -568,6 +581,9 @@ beats:
     expect: architect
     expect_in: strip
     expect_timeout: 6
+    # The strip is drawn under the modal too, so it is the modal's own
+    # footer going that proves it closed.
+    refuse: ctrl\+o manage
     pause: 1.8
   - say: and out — the cut stops here, before the screen blanks
     end: C-q
