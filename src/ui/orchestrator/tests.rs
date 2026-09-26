@@ -628,7 +628,7 @@ mod workspace_tests {
         );
 
         model.session.as_mut().expect("session").select_tab(first);
-        open_code(&mut model, code::ContentMode::Contents);
+        open_code(&mut model, uze_extensions::code::ContentMode::Contents);
         answer_listing(&mut model, "/repo/.worktrees/a");
         // Walked away from the row the tree opened on, which is the part
         // that must survive the round trip.
@@ -644,7 +644,7 @@ mod workspace_tests {
 
         // Another agent's checkout is a different place, not this one.
         model.session.as_mut().expect("session").select_tab(second);
-        open_code(&mut model, code::ContentMode::Contents);
+        open_code(&mut model, uze_extensions::code::ContentMode::Contents);
         answer_listing(&mut model, "/repo/.worktrees/b");
         assert_ne!(
             model.code.as_ref().expect("open").place(),
@@ -654,7 +654,7 @@ mod workspace_tests {
         model.close_code();
 
         model.session.as_mut().expect("session").select_tab(first);
-        open_code(&mut model, code::ContentMode::Contents);
+        open_code(&mut model, uze_extensions::code::ContentMode::Contents);
         assert_eq!(
             model.code.as_ref().expect("open").place(),
             walked_to,
@@ -745,7 +745,7 @@ mod workspace_tests {
             root.clone(),
             code::CodePlace::at(&root, &root.join("src/ui/widget/row.rs"), false),
         );
-        open_code(&mut model, code::ContentMode::Contents);
+        open_code(&mut model, uze_extensions::code::ContentMode::Contents);
 
         let (sender, _receiver) = mpsc::channel();
         model.schedule_file_request(&sender);
@@ -781,7 +781,7 @@ mod workspace_tests {
         let root = PathBuf::from("/repo/.worktrees/a");
         let (mut model, first, _second) = two_agents_with_shells();
         model.session.as_mut().expect("session").select_tab(first);
-        open_code(&mut model, code::ContentMode::Contents);
+        open_code(&mut model, uze_extensions::code::ContentMode::Contents);
 
         let measured = code::Measure {
             root: root.clone(),
@@ -799,7 +799,7 @@ mod workspace_tests {
         assert!(model.code.as_ref().expect("open").has_map());
 
         model.close_code();
-        open_code(&mut model, code::ContentMode::Contents);
+        open_code(&mut model, uze_extensions::code::ContentMode::Contents);
         assert!(
             model.code.as_ref().expect("open").has_map(),
             "the map is there the moment the surface is"
@@ -813,14 +813,11 @@ mod workspace_tests {
         );
     }
 
-    /// The header row is the first row inside the frame, and the control
-    /// that says which half you are in stands where the heading did.
-    ///
-    /// A blank row between the frame's own edge and a row of controls
-    /// left those controls belonging to neither, and the list's heading
-    /// named the half it was already the only thing showing.
+    /// The header row is the pane's first row, and the control that says
+    /// which half you are in stands where the heading did — the list's
+    /// heading named the half it was already the only thing showing.
     #[test]
-    fn the_code_header_is_one_row_in_and_carries_the_control() {
+    fn the_code_header_is_the_panes_first_row_and_carries_the_control() {
         use uze_extensions::{DirEntry, ExtensionHit, code, view::ViewHit};
 
         let root = PathBuf::from("/repo");
@@ -853,18 +850,19 @@ mod workspace_tests {
         model.code = Some(view);
 
         let rows = frame_rows(&mut model);
+        let layout = full_frame(&mut model);
+        let header = layout.pane.y as usize;
         assert!(
-            rows[1].contains("Files") && rows[1].contains("Map"),
-            "the control is on the row under the frame's edge: {:?}",
-            rows[1]
+            rows[header].contains("Files") && rows[header].contains("Map"),
+            "the control is on the pane's first row: {:?}",
+            rows[header]
         );
         assert!(
-            !rows[1].contains("FILES"),
+            !rows[header].contains("FILES"),
             "and the heading it replaced is gone: {:?}",
-            rows[1]
+            rows[header]
         );
 
-        full_frame(&mut model);
         let control = model.hits.iter().find(|(_, hit)| {
             matches!(
                 hit,
@@ -872,7 +870,115 @@ mod workspace_tests {
             )
         });
         let (rect, _) = control.expect("the control can be pointed at");
-        assert_eq!(rect.y, 1, "on that same row");
+        assert_eq!(rect.y as usize, header, "on that same row");
+    }
+
+    /// An open surface stands where the pane is: the sidebar and the
+    /// strip are still drawn and still answer, and nothing the surface
+    /// draws reaches outside the pane's own rectangle.
+    #[test]
+    fn an_open_surface_is_drawn_where_the_pane_is() {
+        let (mut model, first, _second) = two_agents_with_shells();
+        model.session.as_mut().expect("session").select_tab(first);
+        open_code(&mut model, uze_extensions::code::ContentMode::Contents);
+
+        let layout = full_frame(&mut model);
+        let extension_hits: Vec<Rect> = model
+            .hits
+            .iter()
+            .filter(|(_, hit)| matches!(hit, WorkspaceHit::Extension(ExtensionHit::Code(_))))
+            .map(|(rect, _)| *rect)
+            .collect();
+        assert!(!extension_hits.is_empty(), "the surface is drawn");
+        assert!(
+            extension_hits
+                .iter()
+                .all(|rect| layout.pane.intersection(*rect) == *rect),
+            "inside the pane: {extension_hits:?} vs {:?}",
+            layout.pane
+        );
+        assert!(
+            model
+                .hits
+                .iter()
+                .any(|(_, hit)| *hit == WorkspaceHit::SelectTab(first)),
+            "the strip and the sidebar are still there to be clicked"
+        );
+    }
+
+    /// The strip lights one thing, the one in the pane: the selected tab,
+    /// or — while a surface stands over it — that surface's button.
+    #[test]
+    fn the_strip_lights_one_thing_the_one_in_the_pane() {
+        let (mut model, first, _second) = two_agents_with_shells();
+        model.session.as_mut().expect("session").select_tab(first);
+        let raised = crate::ui::theme::color(Token::SurfaceRaised);
+        let lit = crate::ui::theme::color(Token::TextBright);
+        let ink = crate::ui::theme::color(Token::SurfaceBackground);
+        let resting = crate::ui::theme::color(Token::TextSecondary);
+
+        let tab = hit_rect(&model, WorkspaceHit::SelectTab(first));
+        let button = hit_rect(&model, WorkspaceHit::OpenFiles);
+        assert_eq!(chip_colors(&model, tab).1, raised, "the tab, at first");
+        assert_eq!(chip_colors(&model, button), (resting, raised));
+
+        open_code(&mut model, uze_extensions::code::ContentMode::Contents);
+        let tab = hit_rect(&model, WorkspaceHit::SelectTab(first));
+        let button = hit_rect(&model, WorkspaceHit::OpenFiles);
+        assert_ne!(chip_colors(&model, tab).1, raised, "the tab gives it up");
+        assert_eq!(
+            chip_colors(&model, button),
+            (ink, lit),
+            "to the surface, filled"
+        );
+    }
+
+    /// Choosing a tab is choosing to see it — the one already in front
+    /// included, which is how the pane is had back from a surface.
+    #[test]
+    fn choosing_a_tab_puts_the_open_surface_away() {
+        let home = UzeHome::at(uze_testkit::temp::scratch("orchestrator-surface-tab"));
+        let (mut model, first, _second) = two_agents_with_shells();
+        model.session.as_mut().expect("session").select_tab(first);
+        open_code(&mut model, uze_extensions::code::ContentMode::Contents);
+        let mut driven = driven(model, &home);
+        driven.frame();
+
+        let tab = driven
+            .attach
+            .model
+            .hits
+            .iter()
+            .find(|(_, hit)| *hit == WorkspaceHit::SelectTab(first))
+            .map(|(rect, _)| *rect)
+            .expect("the agent's own row");
+        driven.press(tab.x, tab.y);
+        assert!(driven.attach.model.code.is_none());
+    }
+
+    /// A surface is about the tab it was opened on. Another tab coming to
+    /// the front — by whatever way it got there — takes the pane back.
+    #[test]
+    fn another_tab_in_front_puts_the_open_surface_away() {
+        let (mut model, first, second) = two_agents_with_shells();
+        model.session.as_mut().expect("session").select_tab(first);
+        open_architect(&mut model);
+
+        let mut session = model.session.clone().expect("session");
+        session.rename_tab(first, "renamed".to_owned());
+        model.apply(
+            ClientEvent::SessionUpdated { session },
+            &identities_fixture(),
+        );
+        assert!(model.architect.is_some(), "the same tab in front keeps it");
+
+        let mut session = model.session.clone().expect("session");
+        session.select_tab(second);
+        model.apply(
+            ClientEvent::SessionUpdated { session },
+            &identities_fixture(),
+        );
+        assert!(model.architect.is_none());
     }
 
     /// A click on the map lands on the column the pointer is over.
@@ -889,7 +995,7 @@ mod workspace_tests {
         let root = PathBuf::from("/repo/.worktrees/a");
         let (mut model, first, _second) = two_agents_with_shells();
         model.session.as_mut().expect("session").select_tab(first);
-        open_code(&mut model, code::ContentMode::Contents);
+        open_code(&mut model, uze_extensions::code::ContentMode::Contents);
         let view = model.code.as_mut().expect("the surface is open");
         view.absorb_measure(code::Measure {
             root,
@@ -7814,9 +7920,11 @@ mod workspace_tests {
         });
         let mut model = model_of(session("/repo"));
         model.architect = Some(view);
-        let mut driven = driven(model, &home);
+        // Roomy, because the board is drawn beside the sidebar: at the
+        // default width the menu has no room to name what it chooses.
+        let mut driven = driven(model, &home).on_a_roomy_terminal();
 
-        let space = crate::ui::extension_view::board_space(Rect::new(0, 0, 80, 24));
+        let space = crate::ui::extension_view::board_space(compute_layout(driven.area, None).pane);
         let highlighted = |driven: &Driven<'_>| {
             architect::view(driven.attach.model.architect.as_ref().unwrap(), space)
                 .navigator

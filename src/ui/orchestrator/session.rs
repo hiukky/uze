@@ -1108,7 +1108,7 @@ impl Attach<'_> {
     /// chosen when the press lands — see [`EdgeDrag`] — and once chosen
     /// it holds until release, so a hand that wanders does not switch
     /// gestures mid-drag.
-    fn drag_code_edge(&mut self, column: u16, row: u16, size: ratatui::layout::Size) {
+    fn drag_code_edge(&mut self, column: u16, row: u16, area: Rect) {
         let Some(mut drag) = self.model.code_edge_drag else {
             return;
         };
@@ -1116,12 +1116,8 @@ impl Attach<'_> {
         self.model.code_edge_drag = Some(drag);
         match intent {
             Some(EdgeIntent::Resize) => {
-                let frame_area = Rect::new(0, 0, size.width, size.height);
                 let (tree_column, content_column, _footer) =
-                    crate::ui::extension_view::content_columns(
-                        frame_area,
-                        self.model.code_tree_width,
-                    );
+                    crate::ui::extension_view::content_columns(area, self.model.code_tree_width);
                 let width = crate::ui::extension_view::clamp_navigator_width(
                     column.saturating_sub(tree_column.x),
                     tree_column.width + content_column.width,
@@ -1531,6 +1527,11 @@ impl Attach<'_> {
         if self.model.selection.take().is_some() {
             self.model.dirty = true;
         }
+        // An open extension answers only for the place it is drawn in: the
+        // sidebar and the strip around it are still the chrome's.
+        let in_pane = layout
+            .pane
+            .contains(ratatui::layout::Position::new(mouse.column, mouse.row));
         match mouse {
             _ if self.model.release_notes.is_some() && self.model.action_index.is_none() => {
                 if !matches!(
@@ -1675,10 +1676,10 @@ impl Attach<'_> {
                 }
                 self.model.dirty = true;
             }
-            _ if self.model.architect.is_some() => {
+            _ if self.model.architect.is_some() && in_pane => {
                 self.architect_press(mouse.column, mouse.row);
             }
-            _ if self.model.code.is_some() => {
+            _ if self.model.code.is_some() && in_pane => {
                 let hit = self
                     .model
                     .hits
@@ -1747,6 +1748,9 @@ impl Attach<'_> {
             _ => {
                 let Some((hit_rect, hit)) = self.model.hit_rect_at(mouse.column, mouse.row) else {
                     self.model.last_click = None;
+                    if !self.model.no_modal_open() {
+                        return Flow::Continue;
+                    }
                     if self.selects_in_pane(mouse, layout.pane) {
                         self.model.selection = Some(selection::PaneSelection::pressed(
                             self.model.focused_pane(),
@@ -1803,7 +1807,7 @@ impl Attach<'_> {
                 self.scroll_code_content_to(mouse.row);
             }
             _ if self.model.code_edge_drag.is_some() => {
-                self.drag_code_edge(mouse.column, mouse.row, size);
+                self.drag_code_edge(mouse.column, mouse.row, layout.pane);
             }
             _ if self.model.dragging_timeline => {
                 // The divider follows the pointer; what is remembered
@@ -2239,6 +2243,9 @@ impl Attach<'_> {
         let Viewport {
             size, ref layout, ..
         } = *viewport;
+        let in_pane = layout
+            .pane
+            .contains(ratatui::layout::Position::new(mouse.column, mouse.row));
         match mouse {
             _ if self.model.release_notes.is_some() && self.model.action_index.is_none() => {
                 if let Some(modal) = &mut self.model.release_notes {
@@ -2257,7 +2264,7 @@ impl Attach<'_> {
                 };
                 return self.action_index_action(action, viewport);
             }
-            _ if self.model.architect.is_some() => {
+            _ if self.model.architect.is_some() && in_pane => {
                 let direction = if mouse.kind == MouseEventKind::ScrollUp {
                     ScrollDirection::Up
                 } else {
@@ -2269,14 +2276,14 @@ impl Attach<'_> {
                 }
                 self.model.dirty = true;
             }
-            _ if self.model.code.is_some() => {
+            _ if self.model.code.is_some() && in_pane => {
                 let direction = if mouse.kind == MouseEventKind::ScrollUp {
                     ScrollDirection::Up
                 } else {
                     ScrollDirection::Down
                 };
                 match crate::ui::extension_view::scroll_target(
-                    Rect::new(0, 0, size.width, size.height),
+                    layout.pane,
                     self.model.code_tree_width,
                     mouse.column,
                     mouse.row,
@@ -2326,7 +2333,7 @@ impl Attach<'_> {
                     self.model.dirty = true;
                 }
             }
-            _ if self.model.no_modal_open()
+            _ if self.model.chrome_answers()
                 && self.model.over_timeline(mouse.column, mouse.row) =>
             {
                 scroll_timeline(
@@ -2341,7 +2348,7 @@ impl Attach<'_> {
             // Anywhere else in the sidebar scrolls the space tree — the
             // timeline section took the wheel over itself in the branch
             // above, and the tree is the rest of that column.
-            _ if self.model.no_modal_open() && mouse.column < layout.sidebar.right() => {
+            _ if self.model.chrome_answers() && mouse.column < layout.sidebar.right() => {
                 scroll_tree(
                     &mut self.model,
                     if mouse.kind == MouseEventKind::ScrollUp {
@@ -2458,6 +2465,10 @@ impl Attach<'_> {
             | WorkspaceHit::ReleaseNotesBody
             | WorkspaceHit::ReleaseNotesClose => {}
             WorkspaceHit::SelectTab(tab) => {
+                // Choosing a tab is choosing to see it, the one already in
+                // front included: that is how the pane is had back from a
+                // surface standing in it.
+                self.model.close_extension();
                 // Whether this click landed on the tab already
                 // holding its space's selection — read before
                 // `SelectTab` is sent below, since the model
@@ -2558,6 +2569,7 @@ impl Attach<'_> {
                 // no-op.
             }
             WorkspaceHit::SelectSpace(space) => {
+                self.model.close_extension();
                 // A space's own row is its own context: it
                 // lands on a shell belonging to no agent, the
                 // way each agent row lands on that agent. That
@@ -2594,13 +2606,12 @@ impl Attach<'_> {
                 // which the guarded arm above already handles —
                 // same as `PickAgent` for the agent picker.
             }
-            WorkspaceHit::OpenChanges => {
-                open_code(&mut self.model, code::ContentMode::Diff);
-            }
-            WorkspaceHit::OpenFiles => {
-                open_code(&mut self.model, code::ContentMode::Contents);
-            }
-            WorkspaceHit::OpenArchitect => open_architect(&mut self.model),
+            // The buttons are the keys' doors, so pressed on the surface
+            // they opened they put it away, and on the other one they
+            // switch — the pane is one place and shows one thing.
+            WorkspaceHit::OpenChanges => return self.act(Action::ToggleChanges, viewport),
+            WorkspaceHit::OpenFiles => return self.act(Action::ToggleFiles, viewport),
+            WorkspaceHit::OpenArchitect => return self.act(Action::ToggleArchitect, viewport),
             WorkspaceHit::Deliver(_) => {
                 deliver_selected_tab(&mut self.model, self.home, &self.channels.deliveries.sender);
             }

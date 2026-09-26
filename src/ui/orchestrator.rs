@@ -2554,16 +2554,22 @@ struct WorkspaceModel {
     /// Open state of the right-click close-confirmation popup; `None` when
     /// closed. Same "click outside discards" rule as `renaming`.
     context_menu: Option<ContextMenu>,
-    /// Open state of the code surface; `None` when closed. Unlike
-    /// `renaming`/`agent_picker`/`context_menu` there is no "click outside
-    /// discards" rule — it covers the full frame, so there is no outside;
-    /// `Esc` (or either shortcut that opens it) is the only dismissal.
+    /// Open state of the code surface; `None` when closed. Drawn where the
+    /// pane is, with the sidebar and the strip live around it — so unlike
+    /// `renaming`/`agent_picker`/`context_menu` a click outside it is not a
+    /// dismissal but a click on whatever it landed on. `Esc`, either
+    /// shortcut that opens it, or putting another tab in front closes it.
     code: Option<code::CodeView>,
     /// Open state of the architect surface. It borrows the code surface's
     /// frame — the navigator width, its scroll, the scrollbars — because
     /// the two are never open together and the frame is the host's, not
     /// either extension's.
     architect: Option<architect::ArchitectView>,
+    /// The tab the open surface stands in for. It is drawn where that
+    /// tab's pane is, about that tab's checkout, so a different tab coming
+    /// to the front — however it got there — puts it away rather than
+    /// leaving it answering for a checkout nobody is looking at.
+    extension_tab: Option<TabId>,
     /// The diagram held by the pointer. A press on it is not yet a click
     /// or a drag — the first movement says which, as it does for
     /// [`EdgeDrag`] — so the click it might turn out to be is kept here
@@ -2844,11 +2850,13 @@ impl WorkspaceModel {
                 self.session = Some(session);
                 self.panes.clear();
                 self.note_strip_selection(identities);
+                self.close_extension_left_behind();
                 self.occupancy_stale = true;
             }
             ClientEvent::SessionUpdated { session } => {
                 self.session = Some(session);
                 self.note_strip_selection(identities);
+                self.close_extension_left_behind();
                 self.prune_dragging_tab();
                 self.prune_dragging_space();
                 self.occupancy_stale = true;
@@ -3002,6 +3010,13 @@ impl WorkspaceModel {
     /// that isn't already claimed by one of them straight into the focused
     /// pane's PTY instead of dropping it.
     fn no_modal_open(&self) -> bool {
+        self.chrome_answers() && self.code.is_none() && self.architect.is_none()
+    }
+
+    /// Whether the sidebar and the strip answer the pointer: nothing is
+    /// drawn over them. An open extension is not — it stands where the
+    /// pane is, and only the pane is covered.
+    fn chrome_answers(&self) -> bool {
         self.renaming.is_none()
             && self.root_picker.is_none()
             && self.agent_picker.is_none()
@@ -3009,8 +3024,6 @@ impl WorkspaceModel {
             && self.status_catalog.is_none()
             && self.preserved.is_none()
             && self.context_menu.is_none()
-            && self.code.is_none()
-            && self.architect.is_none()
             && self.action_index.is_none()
             && self.release_notes.is_none()
             && self.manage.is_none()
@@ -5065,6 +5078,32 @@ impl WorkspaceModel {
         };
         self.remembered.architect_places.insert(root, view.place());
     }
+
+    /// Closes whichever surface is standing in the pane.
+    fn close_extension(&mut self) {
+        self.close_code();
+        self.close_architect();
+    }
+
+    /// Closes the open surface once its tab is no longer the one in front.
+    fn close_extension_left_behind(&mut self) {
+        let in_front = self
+            .session
+            .as_ref()
+            .map(|session| session.selected_tab().id);
+        if in_front != self.extension_tab {
+            self.close_extension();
+        }
+    }
+
+    /// Notes the tab in front as the one a surface opening now stands in
+    /// for.
+    fn stand_extension_in_front(&mut self) {
+        self.extension_tab = self
+            .session
+            .as_ref()
+            .map(|session| session.selected_tab().id);
+    }
 }
 
 fn open_architect(model: &mut WorkspaceModel) {
@@ -5075,6 +5114,7 @@ fn open_architect(model: &mut WorkspaceModel) {
     model.close_code();
     let place = model.remembered.architect_places.get(&root).cloned();
     let display_root = crate::ui::display_project_path(&root);
+    model.stand_extension_in_front();
     model.architect_root = Some(root);
     model.architect_asked = false;
     let view = architect::ArchitectView::opening(display_root);
@@ -5101,6 +5141,7 @@ fn open_code_at(model: &mut WorkspaceModel, project: &Path, target: &Path) {
         code::ContentMode::Contents,
     );
     model.close_architect();
+    model.stand_extension_in_front();
     model.code = Some(view.resuming(place));
     model.code_tree_scroll = extension_view::NavigatorScroll::default();
     model.code_measure_asked = None;
@@ -5118,6 +5159,7 @@ fn open_code(model: &mut WorkspaceModel, mode: code::ContentMode) {
     let place = model.remembered.code_places.get(&cwd).cloned();
     let view = code::CodeView::opening(cwd, display_root, mode);
     model.close_architect();
+    model.stand_extension_in_front();
     model.code = Some(match place {
         Some(place) => view.resuming(place),
         None => view,
