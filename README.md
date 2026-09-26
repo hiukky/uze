@@ -53,6 +53,6 @@ the terms each comes under, are credited in [CREDITS.md](CREDITS.md).
 Author: [Romullo Sousa (hiukky)](https://github.com/hiukky) · [Apache License 2.0](LICENSE)
 
 <p align="center">
-  <sub>Built with 🖤 by <a href="https://hiukky.com">Hiukky</a>
+  <sub>Built with 🖤 by <a href="https://hiukky.com">hiukky</a>
   <br/>
 </p>
